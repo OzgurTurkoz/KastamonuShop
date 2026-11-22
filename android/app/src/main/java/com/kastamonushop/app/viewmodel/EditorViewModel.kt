@@ -18,6 +18,7 @@ import uniffi.kastamonushop_ffi.LayerSummary
 import uniffi.kastamonushop_ffi.StrokeSample
 import uniffi.kastamonushop_ffi.createKastamonuEngine
 import uniffi.kastamonushop_ffi.engineVersionInfo
+import uniffi.kastamonushop_ffi.getLastGpuError
 
 enum class ActiveTool {
     BRUSH,
@@ -59,6 +60,7 @@ class EditorViewModel : ViewModel() {
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
                 NativeSurfaceBridge.nativeRenderFrame()
+                getLastGpuError()?.let { gpuErr -> _uiState.update { it.copy(statusMessage = gpuErr) } }
             }.onFailure { err ->
                 _uiState.update { it.copy(statusMessage = err.message) }
             }
@@ -107,6 +109,7 @@ class EditorViewModel : ViewModel() {
                 val info = engine.getDocumentInfo()
                 _uiState.update { it.copy(docInfo = info) }
                 NativeSurfaceBridge.nativeRenderFrame()
+                getLastGpuError()?.let { gpuErr -> _uiState.update { it.copy(statusMessage = gpuErr) } }
             }.onFailure { err ->
                 _uiState.update { it.copy(statusMessage = "Stroke error: ${err.message}") }
             }
@@ -194,6 +197,7 @@ class EditorViewModel : ViewModel() {
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
+                getLastGpuError()?.let { gpuErr -> _uiState.update { it.copy(statusMessage = gpuErr) } }
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false, statusMessage = err.message) }
             }
@@ -218,6 +222,7 @@ class EditorViewModel : ViewModel() {
                     )
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
+                getLastGpuError()?.let { gpuErr -> _uiState.update { it.copy(statusMessage = gpuErr) } }
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false, statusMessage = "Açma hatası: ${err.message}") }
             }

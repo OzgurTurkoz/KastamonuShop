@@ -94,19 +94,21 @@ impl VulkanRenderer {
             .iter()
             .copied()
             .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+            .or_else(|| caps.formats.first().copied())
+            .ok_or_else(|| "Surface reported zero supported formats".to_string())?;
 
         let mut config = surface
             .get_default_config(&adapter, width.max(1), height.max(1))
             .ok_or_else(|| "Surface not supported by adapter".to_string())?;
         config.format = format;
         config.present_mode = wgpu::PresentMode::Fifo;
-        config.alpha_mode = caps.alpha_modes[0];
+        config.alpha_mode = caps.alpha_modes.first().copied().unwrap_or(wgpu::CompositeAlphaMode::Auto);
         config.desired_maximum_frame_latency = 2;
         surface.configure(&device, &config);
 
         let acc_format = Compositor::preferred_acc_format(&adapter);
-        let compositor = Compositor::new_with_format(&device, acc_format);
+        let compositor = Compositor::try_new_with_format(&device, acc_format)
+            .map_err(|e| format!("Compositor init failed ({acc_format:?}): {e:?}"))?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("kastamonushop_blit_wgsl"),
@@ -131,7 +133,7 @@ impl VulkanRenderer {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -140,7 +142,7 @@ impl VulkanRenderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                         count: None,
                     },
                 ],
@@ -181,7 +183,7 @@ impl VulkanRenderer {
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("doc_linear_sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 

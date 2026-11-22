@@ -1,9 +1,4 @@
 //! KastamonuShop — Native Android FFI & Vulkan GPU Bridge for PhotoCraft.
-//!
-//! Architecture:
-//! - `uniffi` exports high-level document, layer, brush, filter, and SAF byte-stream APIs to Kotlin.
-//! - `surface_jni` binds Android's `SurfaceView` (`ANativeWindow*`) directly to `wgpu` (Vulkan,
-//!   with GLES fallback) so `photocraft_gpu::Compositor` renders zero-copy on the GPU.
 
 #![allow(unsafe_code)]
 
@@ -22,12 +17,11 @@ pub use renderer::{ViewportCamera, VulkanRenderer};
 
 uniffi::setup_scaffolding!();
 
-/// Shared global engine state so the JNI SurfaceView render callback and UniFFI Kotlin calls
-/// access the exact same `photocraft_engine::Session` without copying documents across FFI.
 pub(crate) struct SharedRuntime {
     pub engine: Arc<Mutex<engine::EngineCore>>,
     pub renderer: Mutex<Option<VulkanRenderer>>,
     pub camera: Mutex<ViewportCamera>,
+    pub last_gpu_error: Mutex<Option<String>>,
 }
 
 static RUNTIME: OnceLock<SharedRuntime> = OnceLock::new();
@@ -45,22 +39,32 @@ pub(crate) fn runtime() -> &'static SharedRuntime {
             engine: Arc::new(Mutex::new(engine::EngineCore::new())),
             renderer: Mutex::new(None),
             camera: Mutex::new(ViewportCamera::default()),
+            last_gpu_error: Mutex::new(None),
         }
     })
 }
 
-/// Initializes the global KastamonuShop engine and returns its UniFFI handle.
+pub(crate) fn set_gpu_error(msg: impl Into<String>) {
+    let s = msg.into();
+    log::error!("KastamonuShop GPU Error: {s}");
+    *runtime().last_gpu_error.lock() = Some(s);
+}
+
 #[uniffi::export]
 pub fn create_kastamonu_engine() -> Arc<KastamonuEngine> {
     let rt = runtime();
     Arc::new(KastamonuEngine::from_shared(Arc::clone(&rt.engine)))
 }
 
-/// Returns build & backend metadata for diagnostics.
 #[uniffi::export]
 pub fn engine_version_info() -> String {
     format!(
         "KastamonuShop {} (PhotoCraft Core + wgpu 30 Vulkan/GLES)",
         env!("CARGO_PKG_VERSION")
     )
+}
+
+#[uniffi::export]
+pub fn get_last_gpu_error() -> Option<String> {
+    runtime().last_gpu_error.lock().clone()
 }
