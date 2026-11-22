@@ -14,13 +14,13 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * Hardware-accelerated Vulkan/GLES canvas with instant real-time painting & erasing.
- * - Single-finger / Stylus: paints or erases live as you move (60/120Hz).
- * - Two-finger gesture: pan, pinch-zoom, and rotate anytime without switching tools.
+ * Hardware-accelerated Vulkan/GLES canvas with distance-decimated stroke sampling
+ * so even giant 250px brushes paint at silky-smooth 60fps.
  */
 class VulkanCanvasView(
     context: Context,
     private val getDocSize: () -> Pair<Int, Int>,
+    private val getBrushSize: () -> Float,
     private val onStrokeBegin: (StrokeSample) -> Unit,
     private val onStrokeMove: (List<StrokeSample>) -> Unit,
     private val onStrokeEnd: () -> Unit,
@@ -38,6 +38,9 @@ class VulkanCanvasView(
     private var prevMidY = 0f
     private var prevDist = 1f
     private var prevAngle = 0f
+
+    private var lastSampleDocX = 0f
+    private var lastSampleDocY = 0f
 
     init {
         holder.addCallback(this)
@@ -102,6 +105,17 @@ class VulkanCanvasView(
         )
     }
 
+    private fun acceptSampleIfMoved(sample: StrokeSample): Boolean {
+        val minStep = (getBrushSize() * 0.12f).coerceIn(2.0f, 28.0f)
+        val dist = hypot((sample.x - lastSampleDocX).toDouble(), (sample.y - lastSampleDocY).toDouble()).toFloat()
+        if (dist >= minStep) {
+            lastSampleDocX = sample.x
+            lastSampleDocY = sample.y
+            return true
+        }
+        return false
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.pointerCount >= 2) {
@@ -163,32 +177,34 @@ class VulkanCanvasView(
                     event.getAxisValue(MotionEvent.AXIS_TILT),
                     event.orientation
                 )
+                lastSampleDocX = sample.x
+                lastSampleDocY = sample.y
                 onStrokeBegin(sample)
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!strokeActive) return true
-                val batch = ArrayList<StrokeSample>(event.historySize + 1)
+                val batch = ArrayList<StrokeSample>(4)
                 for (h in 0 until event.historySize) {
-                    batch.add(
-                        makeSample(
-                            event.getHistoricalX(h),
-                            event.getHistoricalY(h),
-                            event.getHistoricalPressure(h),
-                            event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, h),
-                            event.getHistoricalOrientation(h)
-                        )
+                    val s = makeSample(
+                        event.getHistoricalX(h),
+                        event.getHistoricalY(h),
+                        event.getHistoricalPressure(h),
+                        event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, h),
+                        event.getHistoricalOrientation(h)
                     )
+                    if (acceptSampleIfMoved(s)) batch.add(s)
                 }
-                batch.add(
-                    makeSample(
-                        event.x,
-                        event.y,
-                        event.pressure,
-                        event.getAxisValue(MotionEvent.AXIS_TILT),
-                        event.orientation
-                    )
+                val cur = makeSample(
+                    event.x,
+                    event.y,
+                    event.pressure,
+                    event.getAxisValue(MotionEvent.AXIS_TILT),
+                    event.orientation
                 )
-                onStrokeMove(batch)
+                if (acceptSampleIfMoved(cur)) batch.add(cur)
+                if (batch.isNotEmpty()) {
+                    onStrokeMove(batch)
+                }
             }
             MotionEvent.ACTION_UP -> {
                 if (strokeActive) {

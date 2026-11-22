@@ -150,6 +150,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                         val d = vm.uiState.value.docInfo
                         (d?.width?.toInt() ?: 2048) to (d?.height?.toInt() ?: 2048)
                     },
+                    getBrushSize = { vm.uiState.value.brushSize },
                     onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
                     onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
                     onStrokeEnd = { vm.finishLiveStroke() },

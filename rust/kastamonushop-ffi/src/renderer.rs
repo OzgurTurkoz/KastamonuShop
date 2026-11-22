@@ -1,5 +1,6 @@
 //! Zero-copy Vulkan (GLES fallback) GPU Renderer binding `photocraft_gpu::Compositor`
-//! directly to an Android `SurfaceView` (`ANativeWindow`) with incremental dirty-rect updates.
+//! directly to an Android `SurfaceView` (`ANativeWindow`) with incremental dirty-rect updates
+//! and zero per-frame BindGroup allocations.
 
 use bytemuck::{Pod, Zeroable};
 use photocraft_doc::Document;
@@ -45,6 +46,7 @@ pub struct VulkanRenderer {
     sampler: wgpu::Sampler,
     uniform_buf: wgpu::Buffer,
     doc_texture: Option<wgpu::Texture>,
+    cached_blit_bg: Option<wgpu::BindGroup>,
     doc_tex_size: (u32, u32),
     last_rendered_gen: u64,
 }
@@ -75,7 +77,7 @@ impl VulkanRenderer {
         .map_err(|e| format!("No compatible Vulkan/GLES GPU adapter: {e}"))?;
 
         log::info!(
-            "KastamonuShop GPU Adapter: {} ({:?})",
+            "StonbridgeCraft GPU Adapter: {} ({:?})",
             adapter.get_info().name,
             adapter.get_info().backend
         );
@@ -97,11 +99,18 @@ impl VulkanRenderer {
             .or_else(|| caps.formats.first().copied())
             .ok_or_else(|| "Surface reported zero supported formats".to_string())?;
 
+        // Prefer low-latency Mailbox if supported by mobile driver, else Fifo
+        let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+
         let mut config = surface
             .get_default_config(&adapter, width.max(1), height.max(1))
             .ok_or_else(|| "Surface not supported by adapter".to_string())?;
         config.format = format;
-        config.present_mode = wgpu::PresentMode::Fifo;
+        config.present_mode = present_mode;
         config.alpha_mode = caps
             .alpha_modes
             .first()
@@ -216,6 +225,7 @@ impl VulkanRenderer {
             sampler,
             uniform_buf,
             doc_texture: None,
+            cached_blit_bg: None,
             doc_tex_size: (0, 0),
             last_rendered_gen: 0,
         })
@@ -230,7 +240,6 @@ impl VulkanRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Composites only the dirty region (or full bounds on doc change) on the GPU and presents.
     pub fn render_frame(
         &mut self,
         doc: &Document,
@@ -261,7 +270,27 @@ impl VulkanRenderer {
                 usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
+            let doc_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cached_blit_bg"),
+                layout: &self.blit_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&doc_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
             self.doc_texture = Some(tex);
+            self.cached_blit_bg = Some(bg);
             self.doc_tex_size = (tex_w, tex_h);
             self.last_rendered_gen = 0;
             need_full = true;
@@ -325,7 +354,7 @@ impl VulkanRenderer {
             }
         }
 
-        let Some(doc_tex) = &self.doc_texture else {
+        let Some(bind_group) = &self.cached_blit_bg else {
             return Ok(());
         };
 
@@ -354,26 +383,6 @@ impl VulkanRenderer {
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-
-        let doc_view = doc_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit_bg"),
-            layout: &self.blit_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&doc_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
 
         let swap_view = frame
             .texture
@@ -406,7 +415,7 @@ impl VulkanRenderer {
                 multiview_mask: None,
             });
             rpass.set_pipeline(&self.blit_pipeline);
-            rpass.set_bind_group(0, &bind_group, &[]);
+            rpass.set_bind_group(0, bind_group, &[]);
             rpass.draw(0..3, 0..1);
         }
 

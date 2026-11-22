@@ -380,10 +380,12 @@ impl KastamonuEngine {
         _color_hex: String,
     ) -> Result<(), EngineError> {
         let clamped_size = size.clamp(1.0, 1000.0);
-        let adaptive_spacing = if clamped_size > 140.0 {
+        let adaptive_spacing = if clamped_size > 180.0 {
+            0.28
+        } else if clamped_size > 100.0 {
             0.22
-        } else if clamped_size > 70.0 {
-            0.16
+        } else if clamped_size > 50.0 {
+            0.15
         } else {
             0.10
         };
