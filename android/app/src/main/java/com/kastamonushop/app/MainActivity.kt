@@ -12,8 +12,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -34,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kastamonushop.app.ui.canvas.VulkanCanvasView
 import com.kastamonushop.app.viewmodel.ActiveTool
 import com.kastamonushop.app.viewmodel.EditorViewModel
+import kotlin.math.roundToInt
 
 private val StudioDarkScheme = darkColorScheme(
     primary = Color(0xFF4F9CFF),
@@ -66,7 +69,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MaterialTheme(colorScheme = StudioDarkScheme) {
-                KastamonuStudioScreen()
+                StonbridgeStudioScreen()
             }
         }
     }
@@ -101,18 +104,28 @@ private fun LabeledToolButton(
 }
 
 @Composable
-fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
+fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
     val state by vm.uiState.collectAsState()
     val context = LocalContext.current
 
     var showLayers by remember { mutableStateOf(false) }
     var showBrushSheet by remember { mutableStateOf(false) }
+    var showEffectsSheet by remember { mutableStateOf(false) }
     var showOpenMenu by remember { mutableStateOf(false) }
     var showExportMenu by remember { mutableStateOf(false) }
     var showBlendMenu by remember { mutableStateOf(false) }
     var pendingExportFormat by remember { mutableStateOf("png") }
     var openAsLayer by remember { mutableStateOf(false) }
     var canvasViewRef by remember { mutableStateOf<VulkanCanvasView?>(null) }
+
+    // Effects Studio local slider states
+    var effectTab by remember { mutableIntStateOf(0) } // 0 = Işık/Renk, 1 = Filtreler, 2 = Hızlı Efekt
+    var brightnessVal by remember { mutableFloatStateOf(0f) }
+    var contrastVal by remember { mutableFloatStateOf(0f) }
+    var hueVal by remember { mutableFloatStateOf(0f) }
+    var saturationVal by remember { mutableFloatStateOf(0f) }
+    var blurRadiusVal by remember { mutableFloatStateOf(6f) }
+    var sharpenAmountVal by remember { mutableFloatStateOf(80f) }
 
     LaunchedEffect(state.fitCameraSignal) {
         if (state.fitCameraSignal > 0) {
@@ -220,7 +233,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                             "png" to "PNG Resim (.png)",
                             "jpg" to "JPEG Resim (.jpg)",
                             "psd" to "Photoshop Katmanlı (.psd)",
-                            "pcraft" to "KastamonuShop Proje (.pcraft)",
+                            "pcraft" to "StonbridgeCraft Proje (.pcraft)",
                             "webp" to "WebP (.webp)"
                         ).forEach { (ext, label) ->
                             DropdownMenuItem(
@@ -228,7 +241,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                                 onClick = {
                                     showExportMenu = false
                                     pendingExportFormat = ext
-                                    exportDocLauncher.launch("kastamonushop.$ext")
+                                    exportDocLauncher.launch("stonbridgecraft.$ext")
                                 }
                             )
                         }
@@ -264,7 +277,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // Left Tool Rail
+        // Left Tool Rail: Brush, Eraser, Effects, Color/Size
         Surface(
             modifier = Modifier
                 .align(Alignment.CenterStart)
@@ -290,6 +303,15 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                     selected = state.activeTool == ActiveTool.ERASER,
                     onClick = { vm.setTool(ActiveTool.ERASER) }
                 )
+                LabeledToolButton(
+                    icon = Icons.Default.Tune,
+                    label = "Efekt",
+                    selected = showEffectsSheet,
+                    onClick = {
+                        showEffectsSheet = !showEffectsSheet
+                        if (showEffectsSheet) showBrushSheet = false
+                    }
+                )
 
                 val parsedColor = remember(state.colorHex) {
                     runCatching { Color(android.graphics.Color.parseColor(state.colorHex)) }
@@ -298,7 +320,10 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                 Column(
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { showBrushSheet = !showBrushSheet }
+                        .clickable {
+                            showBrushSheet = !showBrushSheet
+                            if (showBrushSheet) showEffectsSheet = false
+                        }
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -319,7 +344,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // Right Floating Layers Drawer (v0.3: Photo Lock + Opacity + Beginner Blend Modes)
+        // Right Floating Layers Drawer
         if (showLayers) {
             val activeLayer = state.layers.firstOrNull { it.isActive }
             Surface(
@@ -349,7 +374,6 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                         }
                     }
 
-                    // Active layer Opacity & Blend Mode controls
                     if (activeLayer != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
@@ -441,7 +465,6 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                                         color = Color(0xFFB8BCC8)
                                     )
                                 }
-                                // Lock toggle shown ONLY on the original photo / Background layer
                                 if (layer.isBackground) {
                                     IconButton(
                                         onClick = { vm.toggleLayerLocked(layer.id, !layer.locked) },
@@ -455,6 +478,181 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bottom Effects & Adjustments Studio (v0.4)
+        if (showEffectsSheet) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(12.dp)
+                    .widthIn(max = 440.dp)
+                    .fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
+                tonalElevation = 10.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(14.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Ayarlar & Efektler", fontWeight = FontWeight.SemiBold, color = Color.White)
+                        IconButton(onClick = { showEffectsSheet = false }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color.White)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("Işık & Renk", "Filtreler", "Hızlı Efekt").forEachIndexed { idx, title ->
+                            FilterChip(
+                                selected = effectTab == idx,
+                                onClick = { effectTab = idx },
+                                label = { Text(title, fontSize = 11.sp) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    when (effectTab) {
+                        0 -> {
+                            Text("Parlaklık & Kontrast", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White)
+                            Text(
+                                "Fotoğrafın genel ışığını ve açık-koyu farkını bozmadan ayarlar (yeni ayar katmanı ekler).",
+                                fontSize = 11.sp,
+                                color = Color(0xFFB8BCC8)
+                            )
+                            Text("Parlaklık: ${brightnessVal.roundToInt()}", fontSize = 11.sp, color = Color.White)
+                            Slider(value = brightnessVal, onValueChange = { brightnessVal = it }, valueRange = -100f..100f)
+                            Text("Kontrast: ${contrastVal.roundToInt()}", fontSize = 11.sp, color = Color.White)
+                            Slider(value = contrastVal, onValueChange = { contrastVal = it }, valueRange = -50f..100f)
+                            Button(
+                                onClick = {
+                                    vm.applyEffectCommand(
+                                        "layer.newAdjustmentLayer.brightnessContrast",
+                                        """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""",
+                                        "Parlaklık & Kontrast"
+                                    )
+                                    brightnessVal = 0f
+                                    contrastVal = 0f
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Parlaklık / Kontrast Uygula")
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                            Text("Renk Tonu & Doygunluk", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White)
+                            Text(
+                                "Renkleri canlandırır, soluklaştırır veya renk tonunu değiştirir.",
+                                fontSize = 11.sp,
+                                color = Color(0xFFB8BCC8)
+                            )
+                            Text("Doygunluk: ${saturationVal.roundToInt()}", fontSize = 11.sp, color = Color.White)
+                            Slider(value = saturationVal, onValueChange = { saturationVal = it }, valueRange = -100f..100f)
+                            Text("Renk Tonu: ${hueVal.roundToInt()}°", fontSize = 11.sp, color = Color.White)
+                            Slider(value = hueVal, onValueChange = { hueVal = it }, valueRange = -180f..180f)
+                            Button(
+                                onClick = {
+                                    vm.applyEffectCommand(
+                                        "layer.newAdjustmentLayer.hueSaturation",
+                                        """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""",
+                                        "Renk Tonu & Doygunluk"
+                                    )
+                                    hueVal = 0f
+                                    saturationVal = 0f
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Renk Tonu / Doygunluk Uygula")
+                            }
+                        }
+
+                        1 -> {
+                            Text("Bulanıklaştırma (Gaussian Blur)", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White)
+                            Text(
+                                "Seçili katmanı yumuşatır; arka planı bulanıklaştırmak için idealdir.",
+                                fontSize = 11.sp,
+                                color = Color(0xFFB8BCC8)
+                            )
+                            Text("Yarıçap: ${blurRadiusVal.roundToInt()} px", fontSize = 11.sp, color = Color.White)
+                            Slider(value = blurRadiusVal, onValueChange = { blurRadiusVal = it }, valueRange = 1f..60f)
+                            Button(
+                                onClick = {
+                                    vm.applyEffectCommand(
+                                        "filter.blur.gaussianBlur",
+                                        """{"radius":${blurRadiusVal}}""",
+                                        "Bulanıklaştırma",
+                                        needsUnlockedLayer = true
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Bulanıklaştır")
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                            Text("Keskinleştirme (Sharpen)", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White)
+                            Text(
+                                "Fotoğraftaki detayları ve kenar çizgilerini belirginleştirir.",
+                                fontSize = 11.sp,
+                                color = Color(0xFFB8BCC8)
+                            )
+                            Text("Güç: %${sharpenAmountVal.roundToInt()}", fontSize = 11.sp, color = Color.White)
+                            Slider(value = sharpenAmountVal, onValueChange = { sharpenAmountVal = it }, valueRange = 20f..250f)
+                            Button(
+                                onClick = {
+                                    vm.applyEffectCommand(
+                                        "filter.sharpen.unsharpMask",
+                                        """{"amount":${sharpenAmountVal},"radius":1.2,"threshold":0.0}""",
+                                        "Keskinleştirme",
+                                        needsUnlockedLayer = true
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Keskinleştir")
+                            }
+                        }
+
+                        2 -> {
+                            Text(
+                                "Tek dokunuşlu efektler orijinal fotoğrafı bozmadan üstüne yeni ayar katmanı ekler; beğenmezsen Katmanlar'dan gizleyebilir veya silebilirsin.",
+                                fontSize = 11.sp,
+                                color = Color(0xFFB8BCC8)
+                            )
+                            Button(
+                                onClick = {
+                                    vm.applyEffectCommand("layer.newAdjustmentLayer.blackWhite", "{}", "Siyah-Beyaz")
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Siyah-Beyaz Yap")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    vm.applyEffectCommand("layer.newAdjustmentLayer.invert", "{}", "Renkleri Ters Çevir")
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Renkleri Ters Çevir (Negatif)", color = Color.White)
                             }
                         }
                     }

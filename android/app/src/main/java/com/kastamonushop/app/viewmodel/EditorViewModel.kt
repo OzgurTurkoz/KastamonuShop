@@ -48,7 +48,6 @@ class EditorViewModel : ViewModel() {
     private val engine: KastamonuEngine = createKastamonuEngine()
     private var statusAutoHideJob: Job? = null
 
-    // Dedicated single-threaded paint/render worker so 250px brushes NEVER stall Android's UI thread
     private val paintExecutor = Executors.newSingleThreadExecutor()
     private val pendingLock = Any()
     private val pendingSamples = ArrayList<StrokeSample>(64)
@@ -126,7 +125,6 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    // Asynchronous coalescing stroke pipeline: UI thread stays 100% responsive even at 250px
     fun beginLiveStroke(sample: StrokeSample) {
         val s = _uiState.value
         val activeLayer = s.layers.firstOrNull { it.isActive }
@@ -195,6 +193,29 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 engine.cancelLiveStroke()
                 NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun applyEffectCommand(commandId: String, paramsJson: String, labelTr: String, needsUnlockedLayer: Boolean = false) {
+        val activeLayer = _uiState.value.layers.firstOrNull { it.isActive }
+        if (needsUnlockedLayer && activeLayer?.locked == true) {
+            showStatus("Fotoğraf kilitli — filtre uygulamak için Katman panelinden kilidi açabilirsin", 3500L)
+            return
+        }
+        _uiState.update { it.copy(isBusy = true) }
+        showStatus("$labelTr uygulanıyor...", 0L)
+        paintExecutor.execute {
+            runCatching {
+                engine.executeCommand(commandId, paramsJson)
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("$labelTr uygulandı", 2500L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("$labelTr hatası: ${err.message}", 4500L)
             }
         }
     }
