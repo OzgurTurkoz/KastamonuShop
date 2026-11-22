@@ -11,11 +11,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -42,12 +41,22 @@ private val StudioDarkScheme = darkColorScheme(
     primary = Color(0xFF4F9CFF),
     secondary = Color(0xFF2ED573),
     background = Color(0xFF19191E),
-    surface = Color(0xFF23232C),
-    surfaceVariant = Color(0xFF30303D),
+    surface = Color(0xFF202128),
+    surfaceVariant = Color(0xFF2C2E38),
     onBackground = Color(0xFFFFFFFF),
     onSurface = Color(0xFFFFFFFF),
-    onSurfaceVariant = Color(0xFFE0E2EC)
+    onSurfaceVariant = Color(0xFFD8DCE8)
 )
+
+private enum class BottomPanel {
+    DOCK,
+    BRUSH_EDIT,
+    ERASER_EDIT,
+    LIGHT_EDIT,
+    COLOR_EDIT,
+    BLUR_EDIT,
+    SHARPEN_EDIT
+}
 
 private data class BlendModeOption(
     val engineName: String,
@@ -76,30 +85,150 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun LabeledToolButton(
+private fun TopBarButton(
     icon: ImageVector,
     label: String,
     selected: Boolean = false,
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color.Transparent
+    val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color.Transparent
     val tint = when {
-        !enabled -> Color(0xFF666A78)
+        !enabled -> Color(0xFF5D6170)
         selected -> MaterialTheme.colorScheme.primary
         else -> Color.White
     }
     Column(
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(19.dp))
         Spacer(modifier = Modifier.height(2.dp))
         Text(text = label, color = tint, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun CircularDockButton(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean = false,
+    accentDot: Color? = null,
+    onClick: () -> Unit
+) {
+    val circleBg = if (selected) MaterialTheme.colorScheme.primary else Color(0xFF2D2F3A)
+    val iconTint = if (selected) Color(0xFF0E1117) else Color.White
+    val textTint = if (selected) MaterialTheme.colorScheme.primary else Color(0xFFDCE0EC)
+
+    Column(
+        modifier = Modifier
+            .width(62.dp)
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .clip(CircleShape)
+                .background(circleBg)
+                .border(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) Color.White else Color(0xFF3E4150),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = label, tint = iconTint, modifier = Modifier.size(22.dp))
+            if (accentDot != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(4.dp)
+                        .size(11.dp)
+                        .clip(CircleShape)
+                        .background(accentDot)
+                        .border(1.5.dp, Color.White, CircleShape)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(text = label, color = textTint, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
+@Composable
+private fun CompactSliderRow(
+    label: String,
+    valueText: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = Color(0xFFDCE0EC),
+            fontSize = 12.sp,
+            modifier = Modifier.width(74.dp)
+        )
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            valueRange = range,
+            modifier = Modifier
+                .weight(1f)
+                .height(30.dp)
+        )
+        Text(
+            text = valueText,
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.width(42.dp)
+        )
+    }
+}
+
+@Composable
+private fun BottomEditorHeader(
+    title: String,
+    subtitle: String,
+    applyLabel: String? = null,
+    onClose: () -> Unit,
+    onApply: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(18.dp))
+            }
+            Column(modifier = Modifier.padding(start = 4.dp)) {
+                Text(title, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text(subtitle, color = Color(0xFF9EA4B8), fontSize = 10.sp, maxLines = 1)
+            }
+        }
+        if (applyLabel != null && onApply != null) {
+            Button(
+                onClick = onApply,
+                shape = RoundedCornerShape(20.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                modifier = Modifier.height(32.dp)
+            ) {
+                Text(applyLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }
 
@@ -109,8 +238,7 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
     val context = LocalContext.current
 
     var showLayers by remember { mutableStateOf(false) }
-    var showBrushSheet by remember { mutableStateOf(false) }
-    var showEffectsSheet by remember { mutableStateOf(false) }
+    var activePanel by remember { mutableStateOf(BottomPanel.DOCK) }
     var showOpenMenu by remember { mutableStateOf(false) }
     var showExportMenu by remember { mutableStateOf(false) }
     var showBlendMenu by remember { mutableStateOf(false) }
@@ -118,13 +246,12 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
     var openAsLayer by remember { mutableStateOf(false) }
     var canvasViewRef by remember { mutableStateOf<VulkanCanvasView?>(null) }
 
-    // Effects Studio local slider states
-    var effectTab by remember { mutableIntStateOf(0) } // 0 = Işık/Renk, 1 = Filtreler, 2 = Hızlı Efekt
+    // Inline bottom-strip adjustment values
     var brightnessVal by remember { mutableFloatStateOf(0f) }
     var contrastVal by remember { mutableFloatStateOf(0f) }
     var hueVal by remember { mutableFloatStateOf(0f) }
     var saturationVal by remember { mutableFloatStateOf(0f) }
-    var blurRadiusVal by remember { mutableFloatStateOf(6f) }
+    var blurRadiusVal by remember { mutableFloatStateOf(8f) }
     var sharpenAmountVal by remember { mutableFloatStateOf(80f) }
 
     LaunchedEffect(state.fitCameraSignal) {
@@ -154,6 +281,7 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
+        // Unobstructed full-screen Vulkan canvas
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -172,7 +300,7 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         )
 
-        // Top Bar
+        // Slim Top Bar
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -191,7 +319,7 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 Box {
-                    LabeledToolButton(
+                    TopBarButton(
                         icon = Icons.Default.AddPhotoAlternate,
                         label = "Aç / Ekle",
                         onClick = { showOpenMenu = true }
@@ -220,7 +348,7 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                 }
 
                 Box {
-                    LabeledToolButton(
+                    TopBarButton(
                         icon = Icons.Default.Save,
                         label = "Kaydet",
                         onClick = { showExportMenu = true }
@@ -248,27 +376,27 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                     }
                 }
 
-                LabeledToolButton(
+                TopBarButton(
                     icon = Icons.AutoMirrored.Filled.Undo,
                     label = "Geri",
                     enabled = state.docInfo?.canUndo == true,
                     onClick = { vm.undo() }
                 )
 
-                LabeledToolButton(
+                TopBarButton(
                     icon = Icons.AutoMirrored.Filled.Redo,
                     label = "İleri",
                     enabled = state.docInfo?.canRedo == true,
                     onClick = { vm.redo() }
                 )
 
-                LabeledToolButton(
+                TopBarButton(
                     icon = Icons.Default.CenterFocusStrong,
                     label = "Ortala",
                     onClick = { canvasViewRef?.fitToDocument() }
                 )
 
-                LabeledToolButton(
+                TopBarButton(
                     icon = Icons.Default.Layers,
                     label = "Katman",
                     selected = showLayers,
@@ -277,82 +405,16 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // Left Tool Rail: Brush, Eraser, Effects, Color/Size
-        Surface(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 10.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-            tonalElevation = 6.dp
-        ) {
-            Column(
-                modifier = Modifier.padding(6.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                LabeledToolButton(
-                    icon = Icons.Default.Brush,
-                    label = "Fırça",
-                    selected = state.activeTool == ActiveTool.BRUSH,
-                    onClick = { vm.setTool(ActiveTool.BRUSH) }
-                )
-                LabeledToolButton(
-                    icon = Icons.Default.AutoFixNormal,
-                    label = "Silgi",
-                    selected = state.activeTool == ActiveTool.ERASER,
-                    onClick = { vm.setTool(ActiveTool.ERASER) }
-                )
-                LabeledToolButton(
-                    icon = Icons.Default.Tune,
-                    label = "Efekt",
-                    selected = showEffectsSheet,
-                    onClick = {
-                        showEffectsSheet = !showEffectsSheet
-                        if (showEffectsSheet) showBrushSheet = false
-                    }
-                )
-
-                val parsedColor = remember(state.colorHex) {
-                    runCatching { Color(android.graphics.Color.parseColor(state.colorHex)) }
-                        .getOrDefault(Color.Red)
-                }
-                Column(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable {
-                            showBrushSheet = !showBrushSheet
-                            if (showBrushSheet) showEffectsSheet = false
-                        }
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(30.dp)
-                            .clip(CircleShape)
-                            .background(parsedColor)
-                            .border(2.dp, Color.White, CircleShape)
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Text(
-                        text = "${state.brushSize.toInt()}px",
-                        fontSize = 10.sp,
-                        color = Color.White
-                    )
-                }
-            }
-        }
-
         // Right Floating Layers Drawer
         if (showLayers) {
             val activeLayer = state.layers.firstOrNull { it.isActive }
             Surface(
                 modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 10.dp, top = 84.dp, bottom = 76.dp)
-                    .width(275.dp)
-                    .fillMaxHeight(0.74f),
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(end = 10.dp, top = 74.dp, bottom = 130.dp)
+                    .width(268.dp)
+                    .fillMaxHeight(0.62f),
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                 tonalElevation = 8.dp
@@ -485,279 +547,309 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // Bottom Effects & Adjustments Studio (v0.4)
-        if (showEffectsSheet) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(12.dp)
-                    .widthIn(max = 440.dp)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
-                tonalElevation = 10.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(14.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Ayarlar & Efektler", fontWeight = FontWeight.SemiBold, color = Color.White)
-                        IconButton(onClick = { showEffectsSheet = false }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color.White)
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        listOf("Işık & Renk", "Filtreler", "Hızlı Efekt").forEachIndexed { idx, title ->
-                            FilterChip(
-                                selected = effectTab == idx,
-                                onClick = { effectTab = idx },
-                                label = { Text(title, fontSize = 11.sp) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-
-                    when (effectTab) {
-                        0 -> {
-                            Text("Parlaklık & Kontrast", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White)
-                            Text(
-                                "Fotoğrafın genel ışığını ve açık-koyu farkını bozmadan ayarlar (yeni ayar katmanı ekler).",
-                                fontSize = 11.sp,
-                                color = Color(0xFFB8BCC8)
-                            )
-                            Text("Parlaklık: ${brightnessVal.roundToInt()}", fontSize = 11.sp, color = Color.White)
-                            Slider(value = brightnessVal, onValueChange = { brightnessVal = it }, valueRange = -100f..100f)
-                            Text("Kontrast: ${contrastVal.roundToInt()}", fontSize = 11.sp, color = Color.White)
-                            Slider(value = contrastVal, onValueChange = { contrastVal = it }, valueRange = -50f..100f)
-                            Button(
-                                onClick = {
-                                    vm.applyEffectCommand(
-                                        "layer.newAdjustmentLayer.brightnessContrast",
-                                        """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""",
-                                        "Parlaklık & Kontrast"
-                                    )
-                                    brightnessVal = 0f
-                                    contrastVal = 0f
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Parlaklık / Kontrast Uygula")
-                            }
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                            Text("Renk Tonu & Doygunluk", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White)
-                            Text(
-                                "Renkleri canlandırır, soluklaştırır veya renk tonunu değiştirir.",
-                                fontSize = 11.sp,
-                                color = Color(0xFFB8BCC8)
-                            )
-                            Text("Doygunluk: ${saturationVal.roundToInt()}", fontSize = 11.sp, color = Color.White)
-                            Slider(value = saturationVal, onValueChange = { saturationVal = it }, valueRange = -100f..100f)
-                            Text("Renk Tonu: ${hueVal.roundToInt()}°", fontSize = 11.sp, color = Color.White)
-                            Slider(value = hueVal, onValueChange = { hueVal = it }, valueRange = -180f..180f)
-                            Button(
-                                onClick = {
-                                    vm.applyEffectCommand(
-                                        "layer.newAdjustmentLayer.hueSaturation",
-                                        """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""",
-                                        "Renk Tonu & Doygunluk"
-                                    )
-                                    hueVal = 0f
-                                    saturationVal = 0f
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Renk Tonu / Doygunluk Uygula")
-                            }
-                        }
-
-                        1 -> {
-                            Text("Bulanıklaştırma (Gaussian Blur)", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White)
-                            Text(
-                                "Seçili katmanı yumuşatır; arka planı bulanıklaştırmak için idealdir.",
-                                fontSize = 11.sp,
-                                color = Color(0xFFB8BCC8)
-                            )
-                            Text("Yarıçap: ${blurRadiusVal.roundToInt()} px", fontSize = 11.sp, color = Color.White)
-                            Slider(value = blurRadiusVal, onValueChange = { blurRadiusVal = it }, valueRange = 1f..60f)
-                            Button(
-                                onClick = {
-                                    vm.applyEffectCommand(
-                                        "filter.blur.gaussianBlur",
-                                        """{"radius":${blurRadiusVal}}""",
-                                        "Bulanıklaştırma",
-                                        needsUnlockedLayer = true
-                                    )
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Bulanıklaştır")
-                            }
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                            Text("Keskinleştirme (Sharpen)", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White)
-                            Text(
-                                "Fotoğraftaki detayları ve kenar çizgilerini belirginleştirir.",
-                                fontSize = 11.sp,
-                                color = Color(0xFFB8BCC8)
-                            )
-                            Text("Güç: %${sharpenAmountVal.roundToInt()}", fontSize = 11.sp, color = Color.White)
-                            Slider(value = sharpenAmountVal, onValueChange = { sharpenAmountVal = it }, valueRange = 20f..250f)
-                            Button(
-                                onClick = {
-                                    vm.applyEffectCommand(
-                                        "filter.sharpen.unsharpMask",
-                                        """{"amount":${sharpenAmountVal},"radius":1.2,"threshold":0.0}""",
-                                        "Keskinleştirme",
-                                        needsUnlockedLayer = true
-                                    )
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Keskinleştir")
-                            }
-                        }
-
-                        2 -> {
-                            Text(
-                                "Tek dokunuşlu efektler orijinal fotoğrafı bozmadan üstüne yeni ayar katmanı ekler; beğenmezsen Katmanlar'dan gizleyebilir veya silebilirsin.",
-                                fontSize = 11.sp,
-                                color = Color(0xFFB8BCC8)
-                            )
-                            Button(
-                                onClick = {
-                                    vm.applyEffectCommand("layer.newAdjustmentLayer.blackWhite", "{}", "Siyah-Beyaz")
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Siyah-Beyaz Yap")
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    vm.applyEffectCommand("layer.newAdjustmentLayer.invert", "{}", "Renkleri Ters Çevir")
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Renkleri Ters Çevir (Negatif)", color = Color.White)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Bottom Brush & Color Studio Card
-        if (showBrushSheet) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(12.dp)
-                    .widthIn(max = 420.dp)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                tonalElevation = 8.dp
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Fırça & Renk Ayarları", fontWeight = FontWeight.SemiBold, color = Color.White)
-                        IconButton(onClick = { showBrushSheet = false }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color.White)
-                        }
-                    }
-
-                    val palette = listOf(
-                        "#FF4D4F", "#FFA940", "#FFEC3D", "#52C41A",
-                        "#13C2C2", "#1677FF", "#722ED1", "#FFFFFF", "#000000"
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        palette.forEach { hex ->
-                            val c = Color(android.graphics.Color.parseColor(hex))
-                            Box(
-                                modifier = Modifier
-                                    .size(30.dp)
-                                    .clip(CircleShape)
-                                    .background(c)
-                                    .border(
-                                        width = if (state.colorHex == hex) 3.dp else 1.dp,
-                                        color = if (state.colorHex == hex) MaterialTheme.colorScheme.primary else Color.Gray,
-                                        shape = CircleShape
-                                    )
-                                    .clickable { vm.updateBrush(colorHex = hex) }
-                            )
-                        }
-                    }
-
-                    Text("Boyut: ${state.brushSize.toInt()} px", fontSize = 12.sp, color = Color.White)
-                    Slider(
-                        value = state.brushSize,
-                        onValueChange = { vm.updateBrush(size = it) },
-                        valueRange = 2f..250f
-                    )
-
-                    Text("Opaklık (Saydamlık): ${(state.brushOpacity * 100).toInt()}%", fontSize = 12.sp, color = Color.White)
-                    Slider(
-                        value = state.brushOpacity,
-                        onValueChange = { vm.updateBrush(opacity = it) },
-                        valueRange = 0.05f..1.0f
-                    )
-
-                    Text("Sertlik (Kenar Yumuşaklığı): ${(state.brushHardness * 100).toInt()}%", fontSize = 12.sp, color = Color.White)
-                    Slider(
-                        value = state.brushHardness,
-                        onValueChange = { vm.updateBrush(hardness = it) },
-                        valueRange = 0.0f..1.0f
-                    )
-                }
-            }
-        }
-
-        // High-contrast auto-dismissing status pill
+        // Status pill positioned cleanly above the bottom dock
         state.statusMessage?.let { msg ->
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .padding(bottom = if (activePanel == BottomPanel.DOCK) 108.dp else 188.dp)
                     .clickable { vm.clearStatus() },
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(20.dp),
                 color = Color(0xEE111217),
                 tonalElevation = 8.dp
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (state.isBusy) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
                     }
                     Text(msg, fontSize = 12.sp, color = Color.White)
+                }
+            }
+        }
+
+        // COMPACT BOTTOM DOCK & INLINE TOOL STRIP (Never covers the photo!)
+        Surface(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+            tonalElevation = 10.dp
+        ) {
+            val activeColor = remember(state.colorHex) {
+                runCatching { Color(android.graphics.Color.parseColor(state.colorHex)) }
+                    .getOrDefault(Color.Red)
+            }
+
+            when (activePanel) {
+                BottomPanel.DOCK -> {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        item {
+                            CircularDockButton(
+                                icon = Icons.Default.Brush,
+                                label = "Fırça",
+                                selected = state.activeTool == ActiveTool.BRUSH,
+                                accentDot = activeColor,
+                                onClick = {
+                                    if (state.activeTool == ActiveTool.BRUSH) {
+                                        activePanel = BottomPanel.BRUSH_EDIT
+                                    } else {
+                                        vm.setTool(ActiveTool.BRUSH)
+                                    }
+                                }
+                            )
+                        }
+                        item {
+                            CircularDockButton(
+                                icon = Icons.Default.AutoFixNormal,
+                                label = "Silgi",
+                                selected = state.activeTool == ActiveTool.ERASER,
+                                onClick = {
+                                    if (state.activeTool == ActiveTool.ERASER) {
+                                        activePanel = BottomPanel.ERASER_EDIT
+                                    } else {
+                                        vm.setTool(ActiveTool.ERASER)
+                                    }
+                                }
+                            )
+                        }
+                        item {
+                            CircularDockButton(
+                                icon = Icons.Default.Brightness6,
+                                label = "Işık",
+                                onClick = { activePanel = BottomPanel.LIGHT_EDIT }
+                            )
+                        }
+                        item {
+                            CircularDockButton(
+                                icon = Icons.Default.Palette,
+                                label = "Renk",
+                                onClick = { activePanel = BottomPanel.COLOR_EDIT }
+                            )
+                        }
+                        item {
+                            CircularDockButton(
+                                icon = Icons.Default.BlurOn,
+                                label = "Bulanık",
+                                onClick = { activePanel = BottomPanel.BLUR_EDIT }
+                            )
+                        }
+                        item {
+                            CircularDockButton(
+                                icon = Icons.Default.Details,
+                                label = "Keskin",
+                                onClick = { activePanel = BottomPanel.SHARPEN_EDIT }
+                            )
+                        }
+                        item {
+                            CircularDockButton(
+                                icon = Icons.Default.FilterBAndW,
+                                label = "S&B",
+                                onClick = {
+                                    vm.applyEffectCommand("layer.newAdjustmentLayer.blackWhite", "{}", "Siyah-Beyaz")
+                                }
+                            )
+                        }
+                        item {
+                            CircularDockButton(
+                                icon = Icons.Default.InvertColors,
+                                label = "Negatif",
+                                onClick = {
+                                    vm.applyEffectCommand("layer.newAdjustmentLayer.invert", "{}", "Ters Çevir")
+                                }
+                            )
+                        }
+                    }
+                }
+
+                BottomPanel.BRUSH_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Fırça Ayarları",
+                            subtitle = "Renk, boyut ve yumuşaklık",
+                            onClose = { activePanel = BottomPanel.DOCK }
+                        )
+                        val palette = listOf(
+                            "#FF4D4F", "#FFA940", "#FFEC3D", "#52C41A",
+                            "#13C2C2", "#1677FF", "#722ED1", "#FFFFFF", "#000000"
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            palette.forEach { hex ->
+                                val c = Color(android.graphics.Color.parseColor(hex))
+                                Box(
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .clip(CircleShape)
+                                        .background(c)
+                                        .border(
+                                            width = if (state.colorHex == hex) 2.5.dp else 1.dp,
+                                            color = if (state.colorHex == hex) MaterialTheme.colorScheme.primary else Color.Gray,
+                                            shape = CircleShape
+                                        )
+                                        .clickable { vm.updateBrush(colorHex = hex) }
+                                )
+                            }
+                        }
+                        CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 2f..250f) {
+                            vm.updateBrush(size = it)
+                        }
+                        CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f) {
+                            vm.updateBrush(opacity = it)
+                        }
+                        CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f) {
+                            vm.updateBrush(hardness = it)
+                        }
+                    }
+                }
+
+                BottomPanel.ERASER_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Silgi Ayarları",
+                            subtitle = "Silgi boyutu ve kenar yumuşaklığı",
+                            onClose = { activePanel = BottomPanel.DOCK }
+                        )
+                        CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 4f..250f) {
+                            vm.updateBrush(size = it)
+                        }
+                        CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f) {
+                            vm.updateBrush(hardness = it)
+                        }
+                    }
+                }
+
+                BottomPanel.LIGHT_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Işık & Kontrast",
+                            subtitle = "Fotoğrafı bozmadan ayar katmanı ekler",
+                            applyLabel = "Uygula",
+                            onClose = { activePanel = BottomPanel.DOCK },
+                            onApply = {
+                                vm.applyEffectCommand(
+                                    "layer.newAdjustmentLayer.brightnessContrast",
+                                    """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""",
+                                    "Işık & Kontrast"
+                                )
+                                brightnessVal = 0f
+                                contrastVal = 0f
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Parlaklık", "${brightnessVal.roundToInt()}", brightnessVal, -100f..100f) {
+                            brightnessVal = it
+                        }
+                        CompactSliderRow("Kontrast", "${contrastVal.roundToInt()}", contrastVal, -50f..100f) {
+                            contrastVal = it
+                        }
+                    }
+                }
+
+                BottomPanel.COLOR_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Renk & Canlılık",
+                            subtitle = "Renk tonu ve doygunluğu ayarlar",
+                            applyLabel = "Uygula",
+                            onClose = { activePanel = BottomPanel.DOCK },
+                            onApply = {
+                                vm.applyEffectCommand(
+                                    "layer.newAdjustmentLayer.hueSaturation",
+                                    """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""",
+                                    "Renk & Canlılık"
+                                )
+                                hueVal = 0f
+                                saturationVal = 0f
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Canlılık", "${saturationVal.roundToInt()}", saturationVal, -100f..100f) {
+                            saturationVal = it
+                        }
+                        CompactSliderRow("Renk Tonu", "${hueVal.roundToInt()}°", hueVal, -180f..180f) {
+                            hueVal = it
+                        }
+                    }
+                }
+
+                BottomPanel.BLUR_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Bulanıklaştır",
+                            subtitle = "Seçili katmanı yumuşatır (Gaussian Blur)",
+                            applyLabel = "Uygula",
+                            onClose = { activePanel = BottomPanel.DOCK },
+                            onApply = {
+                                vm.applyEffectCommand(
+                                    "filter.blur.gaussianBlur",
+                                    """{"radius":${blurRadiusVal}}""",
+                                    "Bulanıklaştırma",
+                                    needsUnlockedLayer = true
+                                )
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Yarıçap", "${blurRadiusVal.roundToInt()}px", blurRadiusVal, 1f..60f) {
+                            blurRadiusVal = it
+                        }
+                    }
+                }
+
+                BottomPanel.SHARPEN_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Keskinleştir",
+                            subtitle = "Detay ve kenarları belirginleştirir",
+                            applyLabel = "Uygula",
+                            onClose = { activePanel = BottomPanel.DOCK },
+                            onApply = {
+                                vm.applyEffectCommand(
+                                    "filter.sharpen.unsharpMask",
+                                    """{"amount":${sharpenAmountVal},"radius":1.2,"threshold":0.0}""",
+                                    "Keskinleştirme",
+                                    needsUnlockedLayer = true
+                                )
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Güç", "%${sharpenAmountVal.roundToInt()}", sharpenAmountVal, 20f..250f) {
+                            sharpenAmountVal = it
+                        }
+                    }
                 }
             }
         }
