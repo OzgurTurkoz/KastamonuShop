@@ -29,6 +29,11 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/kastamonushop-ffi
+
       - name: Install Android NDK r27
         uses: nttld/setup-ndk@v1
         id: setup-ndk

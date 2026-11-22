@@ -58,6 +58,10 @@ if font_env.exists():
             1,
         )
         txt = txt.replace(
+            "        Os::None => return None,",
+            "        Os::Android | Os::None => return None,",
+        )
+        txt = txt.replace(
             "        Os::None => {}\n",
             '        Os::Android => {\n            dirs.extend(["/system/fonts", "/product/fonts", "/system/product/fonts", "/data/fonts/files"].map(|d| env.rooted(d)));\n        }\n        Os::None => {}\n',
             1,
