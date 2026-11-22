@@ -392,7 +392,7 @@ impl VulkanRenderer {
         }
 
         self.queue.submit([encoder.finish()]);
-        frame.present();
+        self.queue.present(frame);
         Ok(())
     }
 }

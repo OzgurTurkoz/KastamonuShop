@@ -99,7 +99,7 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
     _class: JClass,
 ) -> jboolean {
     let rt = runtime();
-    let (doc, gen) = {
+    let (doc, render_gen) = {
         let guard = rt.engine.lock();
         let Some(doc) = guard.active_document() else {
             return JNI_FALSE;
@@ -112,7 +112,7 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
         return JNI_FALSE;
     };
 
-    match renderer.render_frame(&doc, gen, camera) {
+    match renderer.render_frame(&doc, render_gen, camera) {
         Ok(()) => JNI_TRUE,
         Err(e) => {
             log::error!("KastamonuShop: render_frame error: {e}");

@@ -33,6 +33,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust/kastamonushop-ffi
+          cache-on-failure: true
 
       - name: Install Android NDK r27
         uses: nttld/setup-ndk@v1
