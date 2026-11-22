@@ -278,7 +278,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        items(state.layers, key = { it.id }) { layer ->
+                        items(state.layers, key = { it.id.toLong() }) { layer ->
                             val bg = if (layer.isActive) {
                                 MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
                             } else {
