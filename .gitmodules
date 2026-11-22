@@ -1,0 +1,9 @@
+[submodule "third_party/photocraft"]
+	path = third_party/photocraft
+	url = https://github.com/storytold/photocraft.git
+[submodule "third_party/craft-libs"]
+	path = third_party/craft-libs
+	url = https://github.com/storytold/craft-libs.git
+[submodule "third_party/craft-i18n"]
+	path = third_party/craft-i18n
+	url = https://github.com/storytold/craft-i18n.git

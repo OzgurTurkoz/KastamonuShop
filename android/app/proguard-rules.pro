@@ -1,0 +1,4 @@
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-keep class uniffi.kastamonushop_ffi.** { *; }
+-keep class com.kastamonushop.app.bridge.NativeSurfaceBridge { *; }

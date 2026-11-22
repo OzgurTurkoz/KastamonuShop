@@ -1,0 +1,53 @@
+[package]
+name = "kastamonushop-ffi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "KastamonuShop — Native Android FFI & Vulkan wgpu bridge for the PhotoCraft engine"
+
+[lib]
+name = "kastamonushop_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+# Core PhotoCraft engine & GPU compositor (headless — zero ui-egui dependency)
+photocraft-engine = { path = "../../third_party/photocraft/crates/engine" }
+photocraft-gpu = { path = "../../third_party/photocraft/crates/gpu", features = ["vulkan", "gles"] }
+photocraft-doc = { path = "../../third_party/photocraft/crates/doc" }
+photocraft-geom = { path = "../../third_party/photocraft/crates/geom" }
+photocraft-io = { path = "../../third_party/photocraft/crates/io", features = ["pdf-editable"] }
+photocraft-color = { path = "../../third_party/photocraft/crates/color" }
+photocraft-raster = { path = "../../third_party/photocraft/crates/raster" }
+photocraft-paint = { path = "../../third_party/photocraft/crates/paint" }
+
+# Hardware-accelerated Vulkan / GLES rendering (matches photocraft-gpu's wgpu 30)
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan", "gles"] }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+raw-window-handle = "0.6"
+
+# UniFFI Kotlin/Rust FFI bridge
+uniffi = { version = "0.29", features = ["cli"] }
+
+# Serialization, concurrency & logging
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+parking_lot = "0.12"
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk = "0.9"
+android_logger = "0.14"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = "debuginfo"
