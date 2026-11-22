@@ -4,7 +4,6 @@
 use bytemuck::{Pod, Zeroable};
 use photocraft_doc::Document;
 use photocraft_gpu::Compositor;
-use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ViewportCamera {
@@ -56,9 +55,9 @@ impl VulkanRenderer {
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         let surface = unsafe {
@@ -177,7 +176,7 @@ impl VulkanRenderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -185,7 +184,6 @@ impl VulkanRenderer {
             label: Some("doc_linear_sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -194,11 +192,13 @@ impl VulkanRenderer {
             camera: [0.0, 0.0, 1.0, 0.0],
             style: [16.0, 0.11, 0.11, 0.13],
         };
-        let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport_uniforms"),
-            contents: bytemuck::bytes_of(&initial_uniforms),
+            size: std::mem::size_of::<ViewportUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&initial_uniforms));
 
         Ok(Self {
             _instance: instance,
@@ -368,6 +368,7 @@ impl VulkanRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &swap_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.10,
@@ -381,6 +382,7 @@ impl VulkanRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rpass.set_pipeline(&self.blit_pipeline);
             rpass.set_bind_group(0, &bind_group, &[]);

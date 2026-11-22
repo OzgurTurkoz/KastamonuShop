@@ -204,7 +204,7 @@ impl KastamonuEngine {
                 name: layer.name.clone(),
                 visible: layer.visible,
                 opacity: layer.opacity,
-                blend_mode: format!("{:?}", layer.blend_mode),
+                blend_mode: format!("{:?}", layer.blend),
                 is_group: matches!(layer.content, photocraft_doc::LayerContent::Group(_)),
                 is_active: active_id == Some(layer.id),
             });

@@ -25,8 +25,8 @@ if eng_cargo.exists():
 print_rs = root / "third_party/photocraft/crates/engine/src/cmd/print_cmds.rs"
 if print_rs.exists():
     txt = print_rs.read_text(encoding="utf-8")
-    old1 = 'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'
-    new1 = 'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows"), not(target_os = "android")))'
+    old1 = 'all(not(target_arch = "wasm32"), not(target_os = "windows"))'
+    new1 = 'all(not(target_arch = "wasm32"), not(target_os = "windows"), not(target_os = "android"))'
     old2 = 'cfg(any(target_arch = "wasm32", target_os = "windows"))'
     new2 = 'cfg(any(target_arch = "wasm32", target_os = "windows", target_os = "android"))'
     changed = False
