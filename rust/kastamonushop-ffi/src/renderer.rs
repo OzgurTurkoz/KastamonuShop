@@ -1,8 +1,9 @@
 //! Zero-copy Vulkan (GLES fallback) GPU Renderer binding `photocraft_gpu::Compositor`
-//! directly to an Android `SurfaceView` (`ANativeWindow`).
+//! directly to an Android `SurfaceView` (`ANativeWindow`) with incremental dirty-rect updates.
 
 use bytemuck::{Pod, Zeroable};
 use photocraft_doc::Document;
+use photocraft_geom::Rect;
 use photocraft_gpu::Compositor;
 
 #[derive(Clone, Copy, Debug)]
@@ -49,7 +50,6 @@ pub struct VulkanRenderer {
 }
 
 impl VulkanRenderer {
-    /// Creates a `wgpu` 30 Vulkan (or GLES fallback) renderer bound to a native surface target.
     pub fn new(
         target: wgpu::SurfaceTargetUnsafe,
         width: u32,
@@ -102,7 +102,11 @@ impl VulkanRenderer {
             .ok_or_else(|| "Surface not supported by adapter".to_string())?;
         config.format = format;
         config.present_mode = wgpu::PresentMode::Fifo;
-        config.alpha_mode = caps.alpha_modes.first().copied().unwrap_or(wgpu::CompositeAlphaMode::Auto);
+        config.alpha_mode = caps
+            .alpha_modes
+            .first()
+            .copied()
+            .unwrap_or(wgpu::CompositeAlphaMode::Auto);
         config.desired_maximum_frame_latency = 2;
         surface.configure(&device, &config);
 
@@ -181,7 +185,7 @@ impl VulkanRenderer {
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("doc_linear_sampler"),
+            label: Some("doc_nearest_sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
@@ -226,18 +230,19 @@ impl VulkanRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Composites the active `Document` on the GPU (only when `generation` changed) and presents
-    /// the frame onto Android's Vulkan swapchain with zero CPU pixel copy.
+    /// Composites only the dirty region (or full bounds on doc change) on the GPU and presents.
     pub fn render_frame(
         &mut self,
         doc: &Document,
         generation: u64,
+        force_full: bool,
+        dirty_rect: Option<Rect>,
         camera: ViewportCamera,
     ) -> Result<(), String> {
         let doc_w = doc.size.width.max(1);
         let doc_h = doc.size.height.max(1);
+        let mut need_full = force_full || self.doc_texture.is_none();
 
-        // Allocate or resize GPU document composite target
         if self.doc_tex_size != (doc_w, doc_h) || self.doc_texture.is_none() {
             let max_dim = self.device.limits().max_texture_dimension_2d;
             let tex_w = doc_w.min(max_dim);
@@ -259,51 +264,63 @@ impl VulkanRenderer {
             self.doc_texture = Some(tex);
             self.doc_tex_size = (tex_w, tex_h);
             self.last_rendered_gen = 0;
+            need_full = true;
         }
 
-        // Re-composite on the GPU only when document state actually mutated
-        if self.last_rendered_gen != generation {
+        if self.last_rendered_gen != generation || need_full {
             if let Some(target_tex) = &self.doc_texture {
                 let bounds = doc.bounds();
-                let (tex_w, tex_h) = self.doc_tex_size;
-                let _ = self.compositor.render(
-                    &self.device,
-                    &self.queue,
-                    doc,
-                    bounds,
-                    |encoder, chunk| {
-                        let copy_w = (chunk.rect.width() as u32)
-                            .min(tex_w.saturating_sub(chunk.rect.x0.max(0) as u32));
-                        let copy_h = (chunk.rect.height() as u32)
-                            .min(tex_h.saturating_sub(chunk.rect.y0.max(0) as u32));
-                        if copy_w == 0 || copy_h == 0 {
-                            return;
-                        }
-                        encoder.copy_texture_to_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: chunk.texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::TexelCopyTextureInfo {
-                                texture: target_tex,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d {
-                                    x: chunk.rect.x0.max(0) as u32,
-                                    y: chunk.rect.y0.max(0) as u32,
-                                    z: 0,
+                let region = if need_full {
+                    bounds
+                } else {
+                    match dirty_rect {
+                        Some(r) if !r.is_empty() => r.intersect(&bounds),
+                        _ => bounds,
+                    }
+                };
+                if !region.is_empty() {
+                    let (tex_w, tex_h) = self.doc_tex_size;
+                    let _ = self.compositor.render(
+                        &self.device,
+                        &self.queue,
+                        doc,
+                        region,
+                        |encoder, chunk| {
+                            let dst_x = chunk.rect.x0.max(0) as u32;
+                            let dst_y = chunk.rect.y0.max(0) as u32;
+                            let copy_w = (chunk.rect.width() as u32)
+                                .min(tex_w.saturating_sub(dst_x));
+                            let copy_h = (chunk.rect.height() as u32)
+                                .min(tex_h.saturating_sub(dst_y));
+                            if copy_w == 0 || copy_h == 0 {
+                                return;
+                            }
+                            encoder.copy_texture_to_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: chunk.texture,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
                                 },
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::Extent3d {
-                                width: copy_w,
-                                height: copy_h,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                    },
-                );
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: target_tex,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d {
+                                        x: dst_x,
+                                        y: dst_y,
+                                        z: 0,
+                                    },
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::Extent3d {
+                                    width: copy_w,
+                                    height: copy_h,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                        },
+                    );
+                }
                 self.last_rendered_gen = generation;
             }
         }
