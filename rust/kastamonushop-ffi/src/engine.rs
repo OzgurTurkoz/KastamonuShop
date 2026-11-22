@@ -14,12 +14,12 @@ use serde_json::{Value, json};
 pub enum EngineError {
     #[error("No active document")]
     NoActiveDocument,
-    #[error("Invalid JSON parameters: {message}")]
-    InvalidParams { message: String },
-    #[error("PhotoCraft engine error: {message}")]
-    CommandFailed { message: String },
-    #[error("Import/Export I/O error: {message}")]
-    IoFailed { message: String },
+    #[error("Invalid JSON parameters: {detail}")]
+    InvalidParams { detail: String },
+    #[error("PhotoCraft engine error: {detail}")]
+    CommandFailed { detail: String },
+    #[error("Import/Export I/O error: {detail}")]
+    IoFailed { detail: String },
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -119,7 +119,7 @@ impl KastamonuEngine {
                     "background": "white"
                 }),
             )
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         self.info_from_locked(&guard)
     }
@@ -129,7 +129,7 @@ impl KastamonuEngine {
     pub fn open_document_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         photocraft_engine::file_cmds::open_bytes_as(&mut guard.session, &file_name, &bytes, None, None)
-            .map_err(|e| EngineError::IoFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
         guard.bump_generation();
         self.info_from_locked(&guard)
     }
@@ -143,7 +143,7 @@ impl KastamonuEngine {
         };
         let export_name = format!("export.{}", format_ext.trim_start_matches('.'));
         let result = photocraft_io::export(&doc, &export_name, &photocraft_io::ExportOptions::default())
-            .map_err(|e| EngineError::IoFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
         Ok(result.bytes)
     }
 
@@ -154,13 +154,13 @@ impl KastamonuEngine {
             json!({})
         } else {
             serde_json::from_str(&params_json)
-                .map_err(|e| EngineError::InvalidParams { message: e.to_string() })?
+                .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?
         };
         let mut guard = self.core.lock();
         let out = guard
             .session
             .execute(&command_id, params)
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         Ok(out.to_string())
     }
@@ -170,7 +170,7 @@ impl KastamonuEngine {
         guard
             .session
             .execute("edit.undo", json!({}))
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         self.info_from_locked(&guard)
     }
@@ -180,7 +180,7 @@ impl KastamonuEngine {
         guard
             .session
             .execute("edit.redo", json!({}))
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         self.info_from_locked(&guard)
     }
@@ -217,7 +217,7 @@ impl KastamonuEngine {
         guard
             .session
             .execute("layer.new", json!({ "name": name }))
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         drop(guard);
         self.get_layers()
@@ -228,7 +228,7 @@ impl KastamonuEngine {
         guard
             .session
             .execute("layer.delete", json!({}))
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         drop(guard);
         self.get_layers()
@@ -248,7 +248,7 @@ impl KastamonuEngine {
                 "layer.setVisibility",
                 json!({ "layer": layer_id, "visible": visible }),
             )
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         Ok(())
     }
@@ -262,7 +262,7 @@ impl KastamonuEngine {
                 "layer.setOpacity",
                 json!({ "layer": layer_id, "opacity": pct }),
             )
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         Ok(())
     }
@@ -291,7 +291,7 @@ impl KastamonuEngine {
                     "color": color_hex
                 }),
             )
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         Ok(())
     }
 
@@ -330,7 +330,7 @@ impl KastamonuEngine {
         guard
             .session
             .execute("paint.stroke", params)
-            .map_err(|e| EngineError::CommandFailed { message: e.to_string() })?;
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         Ok(())
     }
