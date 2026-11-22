@@ -21,6 +21,8 @@ import uniffi.kastamonushop_ffi.StrokeSample
 import uniffi.kastamonushop_ffi.createKastamonuEngine
 import uniffi.kastamonushop_ffi.engineVersionInfo
 import uniffi.kastamonushop_ffi.getLastGpuError
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class ActiveTool {
     BRUSH,
@@ -46,6 +48,12 @@ class EditorViewModel : ViewModel() {
     private val engine: KastamonuEngine = createKastamonuEngine()
     private var statusAutoHideJob: Job? = null
 
+    // Dedicated single-threaded paint/render worker so 250px brushes NEVER stall Android's UI thread
+    private val paintExecutor = Executors.newSingleThreadExecutor()
+    private val pendingLock = Any()
+    private val pendingSamples = ArrayList<StrokeSample>(64)
+    private val drainScheduled = AtomicBoolean(false)
+
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
     )
@@ -54,6 +62,11 @@ class EditorViewModel : ViewModel() {
     init {
         refreshState()
         syncBrushToEngine()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        paintExecutor.shutdown()
     }
 
     private fun showStatus(msg: String, autoHideMs: Long = 3500L) {
@@ -106,34 +119,66 @@ class EditorViewModel : ViewModel() {
 
     private fun syncBrushToEngine() {
         val s = _uiState.value
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
             runCatching {
                 engine.setBrush(s.brushSize, s.brushHardness, s.brushOpacity, s.brushFlow, s.colorHex)
             }
         }
     }
 
+    // Asynchronous coalescing stroke pipeline: UI thread stays 100% responsive even at 250px
     fun beginLiveStroke(sample: StrokeSample) {
         val s = _uiState.value
+        val activeLayer = s.layers.firstOrNull { it.isActive }
+        if (activeLayer?.locked == true) {
+            showStatus("Orijinal fotoğraf kilitli — düzenlemek için Katman panelinden kilidi açabilirsin", 3200L)
+            return
+        }
         val isEraser = s.activeTool == ActiveTool.ERASER
-        runCatching {
-            engine.beginLiveStroke(sample, s.colorHex, isEraser)
-            NativeSurfaceBridge.nativeRenderFrame()
-        }.onFailure { err ->
-            showStatus("Çizim hatası: ${err.message}")
+        synchronized(pendingLock) { pendingSamples.clear() }
+        paintExecutor.execute {
+            runCatching {
+                engine.beginLiveStroke(sample, s.colorHex, isEraser)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Çizim hatası: ${err.message}")
+            }
         }
     }
 
     fun pushLiveStroke(samples: List<StrokeSample>) {
         if (samples.isEmpty()) return
-        runCatching {
-            engine.pushLiveStroke(samples)
-            NativeSurfaceBridge.nativeRenderFrame()
+        synchronized(pendingLock) {
+            pendingSamples.addAll(samples)
+        }
+        if (drainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute {
+                drainPendingSamples()
+            }
+        }
+    }
+
+    private fun drainPendingSamples() {
+        while (true) {
+            val batch: List<StrokeSample>
+            synchronized(pendingLock) {
+                if (pendingSamples.isEmpty()) {
+                    drainScheduled.set(false)
+                    return
+                }
+                batch = ArrayList(pendingSamples)
+                pendingSamples.clear()
+            }
+            runCatching {
+                engine.pushLiveStroke(batch)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
         }
     }
 
     fun finishLiveStroke() {
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
+            drainPendingSamples()
             runCatching {
                 val info = engine.finishLiveStroke()
                 _uiState.update { it.copy(docInfo = info) }
@@ -145,14 +190,17 @@ class EditorViewModel : ViewModel() {
     }
 
     fun cancelLiveStroke() {
-        runCatching {
-            engine.cancelLiveStroke()
-            NativeSurfaceBridge.nativeRenderFrame()
+        synchronized(pendingLock) { pendingSamples.clear() }
+        paintExecutor.execute {
+            runCatching {
+                engine.cancelLiveStroke()
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
         }
     }
 
     fun undo() {
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
             runCatching {
                 val info = engine.undo()
                 val layers = engine.getLayers()
@@ -163,7 +211,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun redo() {
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
             runCatching {
                 val info = engine.redo()
                 val layers = engine.getLayers()
@@ -174,7 +222,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun addLayer() {
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
             runCatching {
                 val nextIndex = _uiState.value.layers.size + 1
                 val layers = engine.addLayer("Katman $nextIndex")
@@ -187,30 +235,76 @@ class EditorViewModel : ViewModel() {
     }
 
     fun deleteActiveLayer() {
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
             runCatching {
                 val layers = engine.deleteActiveLayer()
                 val info = engine.getDocumentInfo()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
                 NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Katman silinemedi: ${err.message}")
             }
         }
     }
 
     fun selectLayer(layerId: ULong) {
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
             runCatching {
                 engine.selectLayer(layerId)
-                refreshState()
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
             }
         }
     }
 
     fun toggleLayerVisibility(layerId: ULong, visible: Boolean) {
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
             runCatching {
                 engine.setLayerVisibility(layerId, visible)
-                refreshState()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun setLayerOpacity(layerId: ULong, opacity: Float) {
+        _uiState.update { st ->
+            st.copy(layers = st.layers.map { if (it.id == layerId) it.copy(opacity = opacity) else it })
+        }
+        paintExecutor.execute {
+            runCatching {
+                engine.setLayerOpacity(layerId, opacity)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun setLayerBlendMode(layerId: ULong, blendMode: String) {
+        paintExecutor.execute {
+            runCatching {
+                engine.setLayerBlendMode(layerId, blendMode)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Karışım modu hatası: ${err.message}")
+            }
+        }
+    }
+
+    fun toggleLayerLocked(layerId: ULong, locked: Boolean) {
+        paintExecutor.execute {
+            runCatching {
+                engine.setLayerLocked(layerId, locked)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(layers = layers) }
+                showStatus(
+                    if (locked) "Orijinal fotoğraf kilitlendi (koruma açık)"
+                    else "Fotoğraf kilidi açıldı — artık düzenleyebilirsin",
+                    2500L
+                )
             }
         }
     }

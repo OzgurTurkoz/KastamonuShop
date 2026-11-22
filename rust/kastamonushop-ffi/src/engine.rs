@@ -1,7 +1,8 @@
-//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI.
-//! - Real-time `LiveStroke` with dirty-rect tracking for 60fps painting even on 12MP+ photos
+//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.3).
+//! - Real-time `LiveStroke` with dirty-rect tracking + smart spacing for giant brushes
 //! - Verified PhotoCraft command IDs (`layer.new.layer`, `layer.setProps`, `layer.delete`, `tools.setBrush`)
-//! - Auto-creates a transparent "Çizim Katmanı" above opened photos so erasing never destroys the photo
+//! - Photo-safe workflow: opened photos auto-lock Background pixels + add a transparent "Çizim Katmanı"
+//! - Supports layer lock toggle, opacity, and blend modes
 
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -45,6 +46,8 @@ pub struct LayerSummary {
     pub blend_mode: String,
     pub is_group: bool,
     pub is_active: bool,
+    pub locked: bool,
+    pub is_background: bool,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -66,7 +69,6 @@ struct ActiveLiveStroke {
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
-    /// Pending dirty region for fast incremental GPU compositing (`None` = full document redraw).
     pub pending_dirty: Option<Rect>,
     pub force_full_redraw: bool,
     live_stroke: Option<ActiveLiveStroke>,
@@ -85,7 +87,6 @@ impl EngineCore {
                 "background": "white"
             }),
         );
-        // Add a transparent drawing layer on top of white Background so erasing reveals white cleanly
         let _ = session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
         Self {
             session,
@@ -182,8 +183,8 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Directly imports any supported image/document format and auto-adds a transparent
-    /// drawing layer on top of single-layer photos so erasing never destroys the original photo.
+    /// Imports a photo/PSD; for single-layer photos, locks the original photo pixels by default
+    /// and adds a transparent "Çizim Katmanı" above it so beginners cannot accidentally erase the photo.
     pub fn open_document_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
         let imported = photocraft_io::import(&file_name, &bytes)
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
@@ -191,19 +192,26 @@ impl KastamonuEngine {
         if doc.name.is_empty() {
             doc.name = file_name;
         }
-        let is_single_layer = doc.layers.len() == 1;
+        let single_layer_id = if doc.layers.len() == 1 {
+            doc.layers.first().map(|l| l.id.0)
+        } else {
+            None
+        };
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
-        if is_single_layer {
+        if let Some(bg_id) = single_layer_id {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": bg_id, "locks": { "pixels": true } }),
+            );
             let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
         }
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
 
-    /// Places an image from Android SAF bytes as a new layer on top of the active document.
     pub fn place_image_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -273,9 +281,11 @@ impl KastamonuEngine {
         let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
         let active_id = ds.active_layer();
         let doc = ds.doc();
+        let bottom_id = doc.layers.first().map(|l| l.id);
 
         let mut layers = Vec::new();
         for layer in doc.layers.iter().rev() {
+            let is_bg = bottom_id == Some(layer.id) || layer.name.eq_ignore_ascii_case("Background");
             layers.push(LayerSummary {
                 id: layer.id.0,
                 name: layer.name.clone(),
@@ -284,12 +294,13 @@ impl KastamonuEngine {
                 blend_mode: format!("{:?}", layer.blend),
                 is_group: matches!(layer.content, photocraft_doc::LayerContent::Group(_)),
                 is_active: active_id == Some(layer.id),
+                locked: layer.locks.pixels || layer.locks.all,
+                is_background: is_bg,
             });
         }
         Ok(layers)
     }
 
-    /// Creates a new transparent layer using the verified `layer.new.layer` command.
     pub fn add_layer(&self, name: String) -> Result<Vec<LayerSummary>, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -320,7 +331,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Updates layer visibility using the verified `layer.setProps` command.
     pub fn set_layer_visibility(&self, layer_id: u64, visible: bool) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         guard
@@ -331,7 +341,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Updates layer opacity (0.0..=1.0) using the verified `layer.setProps` command.
     pub fn set_layer_opacity(&self, layer_id: u64, opacity: f32) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         guard
@@ -342,7 +351,26 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Configures the active session brush (strictly matching `BrushSettings` camelCase schema).
+    pub fn set_layer_blend_mode(&self, layer_id: u64, blend_mode: String) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard
+            .session
+            .execute("layer.setProps", json!({ "layer": layer_id, "blend": blend_mode }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn set_layer_locked(&self, layer_id: u64, locked: bool) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard
+            .session
+            .execute("layer.setProps", json!({ "layer": layer_id, "locks": { "pixels": locked } }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        Ok(())
+    }
+
+    /// Configures the active session brush with adaptive spacing for large brushes to keep 60fps.
     pub fn set_brush(
         &self,
         size: f32,
@@ -351,6 +379,14 @@ impl KastamonuEngine {
         flow: f32,
         _color_hex: String,
     ) -> Result<(), EngineError> {
+        let clamped_size = size.clamp(1.0, 1000.0);
+        let adaptive_spacing = if clamped_size > 140.0 {
+            0.22
+        } else if clamped_size > 70.0 {
+            0.16
+        } else {
+            0.10
+        };
         let mut guard = self.core.lock();
         guard
             .session
@@ -358,10 +394,12 @@ impl KastamonuEngine {
                 "tools.setBrush",
                 json!({
                     "brush": {
-                        "size": size.clamp(1.0, 1000.0),
+                        "size": clamped_size,
                         "hardness": hardness.clamp(0.0, 1.0),
                         "opacity": opacity.clamp(0.01, 1.0),
-                        "flow": flow.clamp(0.01, 1.0)
+                        "flow": flow.clamp(0.01, 1.0),
+                        "spacing": adaptive_spacing,
+                        "spacingEnabled": true
                     }
                 }),
             )
@@ -369,7 +407,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Starts a real-time live brush/eraser stroke on ACTION_DOWN.
     pub fn begin_live_stroke(
         &self,
         sample: StrokeSample,
@@ -398,8 +435,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Streams incremental finger/stylus points on ACTION_MOVE and records ONLY the dirty rect
-    /// for ultra-fast incremental GPU compositing (60fps even on 12MP+ photos).
     pub fn push_live_stroke(&self, samples: Vec<StrokeSample>) -> Result<(), EngineError> {
         if samples.is_empty() {
             return Ok(());
@@ -420,7 +455,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Commits the live stroke into Undo/Redo history on ACTION_UP with zero re-rendering.
     pub fn finish_live_stroke(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         let Some(active) = guard.live_stroke.take() else {
@@ -451,32 +485,6 @@ impl KastamonuEngine {
             let bounds = active.live.bounds();
             guard.mark_region_dirty(bounds);
         }
-    }
-
-    pub fn commit_stroke(
-        &self,
-        points: Vec<StrokeSample>,
-        color_hex: String,
-        is_eraser: bool,
-    ) -> Result<(), EngineError> {
-        if points.is_empty() {
-            return Ok(());
-        }
-        let json_pts: Vec<Value> = points.iter().map(sample_to_json).collect();
-        let mut params = json!({
-            "points": json_pts,
-            "color": color_hex
-        });
-        if is_eraser {
-            params["mode"] = json!("clear");
-        }
-        let mut guard = self.core.lock();
-        guard
-            .session
-            .execute("paint.stroke", params)
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
-        Ok(())
     }
 
     pub fn render_generation(&self) -> u64 {

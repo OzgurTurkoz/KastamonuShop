@@ -46,6 +46,20 @@ private val StudioDarkScheme = darkColorScheme(
     onSurfaceVariant = Color(0xFFE0E2EC)
 )
 
+private data class BlendModeOption(
+    val engineName: String,
+    val labelTr: String,
+    val hintTr: String
+)
+
+private val BEGINNER_BLEND_MODES = listOf(
+    BlendModeOption("Normal", "Normal", "Standart görünüm, üstteki alttakini örter"),
+    BlendModeOption("Multiply", "Çoğalt (Multiply)", "Koyu tonları korur, gölge için ideal"),
+    BlendModeOption("Screen", "Ekran (Screen)", "Parlak tonları korur, ışık ve parlama için ideal"),
+    BlendModeOption("Overlay", "Kaplama (Overlay)", "Kontrastı artırır, renkleri canlandırır"),
+    BlendModeOption("SoftLight", "Yumuşak Işık", "Fotoğrafa doğal ve yumuşak renk tonu verir")
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,6 +109,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
     var showBrushSheet by remember { mutableStateOf(false) }
     var showOpenMenu by remember { mutableStateOf(false) }
     var showExportMenu by remember { mutableStateOf(false) }
+    var showBlendMenu by remember { mutableStateOf(false) }
     var pendingExportFormat by remember { mutableStateOf("png") }
     var openAsLayer by remember { mutableStateOf(false) }
     var canvasViewRef by remember { mutableStateOf<VulkanCanvasView?>(null) }
@@ -143,7 +158,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         )
 
-        // Top Bar: Compact, High-Contrast, Labeled for Beginners (never clipped on phones)
+        // Top Bar
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -248,7 +263,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // Left Tool Rail: Brush, Eraser & Color/Size (two-finger zoom/pan always works!)
+        // Left Tool Rail
         Surface(
             modifier = Modifier
                 .align(Alignment.CenterStart)
@@ -303,14 +318,15 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // Right Floating Layers Drawer
+        // Right Floating Layers Drawer (v0.3: Photo Lock + Opacity + Beginner Blend Modes)
         if (showLayers) {
+            val activeLayer = state.layers.firstOrNull { it.isActive }
             Surface(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 10.dp, top = 84.dp, bottom = 76.dp)
-                    .width(250.dp)
-                    .fillMaxHeight(0.68f),
+                    .width(275.dp)
+                    .fillMaxHeight(0.74f),
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                 tonalElevation = 8.dp
@@ -331,7 +347,61 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                             }
                         }
                     }
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                    // Active layer Opacity & Blend Mode controls
+                    if (activeLayer != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Seçili: ${activeLayer.name} · Opaklık ${(activeLayer.opacity * 100).toInt()}%",
+                            fontSize = 11.sp,
+                            color = Color(0xFFD0D4E0)
+                        )
+                        Slider(
+                            value = activeLayer.opacity,
+                            onValueChange = { vm.setLayerOpacity(activeLayer.id, it) },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.height(28.dp)
+                        )
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            val currentOpt = BEGINNER_BLEND_MODES.firstOrNull {
+                                it.engineName.equals(activeLayer.blendMode, ignoreCase = true)
+                            }
+                            OutlinedButton(
+                                onClick = { showBlendMenu = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "Karışım: ${currentOpt?.labelTr ?: activeLayer.blendMode}",
+                                    fontSize = 11.sp,
+                                    color = Color.White
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showBlendMenu,
+                                onDismissRequest = { showBlendMenu = false }
+                            ) {
+                                BEGINNER_BLEND_MODES.forEach { opt ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(opt.labelTr, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                                Text(opt.hintTr, fontSize = 10.sp, color = Color.Gray)
+                                            }
+                                        },
+                                        onClick = {
+                                            showBlendMenu = false
+                                            vm.setLayerBlendMode(activeLayer.id, opt.engineName)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.weight(1f)
@@ -348,7 +418,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(bg)
                                     .clickable { vm.selectLayer(layer.id) }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    .padding(horizontal = 6.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 IconButton(
@@ -362,13 +432,27 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
-                                Column(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                                Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
                                     Text(layer.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
                                     Text(
                                         "${layer.blendMode} · ${(layer.opacity * 100).toInt()}%",
-                                        fontSize = 11.sp,
+                                        fontSize = 10.sp,
                                         color = Color(0xFFB8BCC8)
                                     )
+                                }
+                                // Lock toggle shown ONLY on the original photo / Background layer
+                                if (layer.isBackground) {
+                                    IconButton(
+                                        onClick = { vm.toggleLayerLocked(layer.id, !layer.locked) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            if (layer.locked) Icons.Default.Lock else Icons.Default.LockOpen,
+                                            contentDescription = if (layer.locked) "Fotoğraf Kilitli" else "Fotoğraf Kilidi Açık",
+                                            tint = if (layer.locked) Color(0xFFFFB74D) else Color(0xFF8E93A6),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
