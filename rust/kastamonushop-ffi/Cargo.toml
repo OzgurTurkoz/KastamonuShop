@@ -51,3 +51,18 @@ lto = "thin"
 codegen-units = 1
 opt-level = 3
 strip = "debuginfo"
+
+[patch.crates-io]
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+hayro-cmap = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+hayro-postscript = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+vello_common = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+vello_cpu = { git = "https://github.com/storytold/craft-libs", rev = "e953d47a378776dea207899b10baf969fc8cbe53" }
+
+[patch."https://github.com/storytold/craft-libs"]
+craft-font-catalog = { path = "../../third_party/craft-libs/crates/font-catalog" }
