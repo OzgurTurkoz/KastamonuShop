@@ -70,6 +70,7 @@ impl VulkanRenderer {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            ..Default::default()
         }))
         .map_err(|e| format!("No compatible Vulkan/GLES GPU adapter: {e}"))?;
 
@@ -95,16 +96,13 @@ impl VulkanRenderer {
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
 
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: width.max(1),
-            height: height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
+        let mut config = surface
+            .get_default_config(&adapter, width.max(1), height.max(1))
+            .ok_or_else(|| "Surface not supported by adapter".to_string())?;
+        config.format = format;
+        config.present_mode = wgpu::PresentMode::Fifo;
+        config.alpha_mode = caps.alpha_modes[0];
+        config.desired_maximum_frame_latency = 2;
         surface.configure(&device, &config);
 
         let acc_format = Compositor::preferred_acc_format(&adapter);
@@ -150,8 +148,8 @@ impl VulkanRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("blit_pipeline_layout"),
-            bind_group_layouts: &[&blit_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&blit_bind_group_layout)],
+            immediate_size: 0,
         });
 
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -273,9 +271,9 @@ impl VulkanRenderer {
                     bounds,
                     |encoder, chunk| {
                         let copy_w = (chunk.rect.width() as u32)
-                            .min(tex_w.saturating_sub(chunk.rect.x.max(0) as u32));
+                            .min(tex_w.saturating_sub(chunk.rect.x0.max(0) as u32));
                         let copy_h = (chunk.rect.height() as u32)
-                            .min(tex_h.saturating_sub(chunk.rect.y.max(0) as u32));
+                            .min(tex_h.saturating_sub(chunk.rect.y0.max(0) as u32));
                         if copy_w == 0 || copy_h == 0 {
                             return;
                         }
@@ -290,8 +288,8 @@ impl VulkanRenderer {
                                 texture: target_tex,
                                 mip_level: 0,
                                 origin: wgpu::Origin3d {
-                                    x: chunk.rect.x.max(0) as u32,
-                                    y: chunk.rect.y.max(0) as u32,
+                                    x: chunk.rect.x0.max(0) as u32,
+                                    y: chunk.rect.y0.max(0) as u32,
                                     z: 0,
                                 },
                                 aspect: wgpu::TextureAspect::All,
@@ -313,12 +311,16 @@ impl VulkanRenderer {
         };
 
         let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
                 return Ok(());
             }
-            Err(e) => return Err(format!("Swapchain error: {e}")),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            other => return Err(format!("Swapchain error: {other:?}")),
         };
 
         let uniforms = ViewportUniforms {

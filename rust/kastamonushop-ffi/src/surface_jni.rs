@@ -35,7 +35,7 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
     let raw_display = RawDisplayHandle::Android(AndroidDisplayHandle::new());
 
     let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-        raw_display_handle: raw_display,
+        raw_display_handle: Some(raw_display),
         raw_window_handle: raw_window,
     };
 
