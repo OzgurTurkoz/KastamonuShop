@@ -6,23 +6,25 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.kastamonushop.app.bridge.NativeSurfaceBridge
-import com.kastamonushop.app.viewmodel.ActiveTool
 import uniffi.kastamonushop_ffi.StrokeSample
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * Hardware-accelerated Vulkan/GLES canvas view.
- * - Single-finger / Stylus (with historical pressure & tilt): paints in document coordinates.
- * - Two-finger gesture (or PAN_ZOOM tool): smooth pan, pinch-zoom, and rotation at 60/120Hz.
+ * Hardware-accelerated Vulkan/GLES canvas with instant real-time painting & erasing.
+ * - Single-finger / Stylus: paints or erases live as you move (60/120Hz).
+ * - Two-finger gesture: pan, pinch-zoom, and rotate anytime without switching tools.
  */
 class VulkanCanvasView(
     context: Context,
-    private val getActiveTool: () -> ActiveTool,
     private val getDocSize: () -> Pair<Int, Int>,
-    private val onStrokeComplete: (List<StrokeSample>) -> Unit
+    private val onStrokeBegin: (StrokeSample) -> Unit,
+    private val onStrokeMove: (List<StrokeSample>) -> Unit,
+    private val onStrokeEnd: () -> Unit,
+    private val onStrokeCancel: () -> Unit
 ) : SurfaceView(context), SurfaceHolder.Callback {
 
     private var panX = 0f
@@ -31,12 +33,11 @@ class VulkanCanvasView(
     private var rotationRad = 0f
 
     private var isMultiTouch = false
+    private var strokeActive = false
     private var prevMidX = 0f
     private var prevMidY = 0f
     private var prevDist = 1f
     private var prevAngle = 0f
-
-    private val currentStroke = mutableListOf<StrokeSample>()
 
     init {
         holder.addCallback(this)
@@ -46,8 +47,7 @@ class VulkanCanvasView(
         val w = width.coerceAtLeast(1)
         val h = height.coerceAtLeast(1)
         if (NativeSurfaceBridge.nativeAttachSurface(holder.surface, w, h)) {
-            NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
-            NativeSurfaceBridge.nativeRenderFrame()
+            fitToDocument()
         }
     }
 
@@ -61,10 +61,14 @@ class VulkanCanvasView(
         NativeSurfaceBridge.nativeDetachSurface()
     }
 
-    fun resetCamera() {
+    fun fitToDocument() {
+        val (docW, docH) = getDocSize()
+        val viewW = width.coerceAtLeast(1).toFloat()
+        val viewH = height.coerceAtLeast(1).toFloat()
+        val fitZoom = min(viewW / docW.coerceAtLeast(1), viewH / docH.coerceAtLeast(1)) * 0.88f
         panX = 0f
         panY = 0f
-        zoom = 0.45f
+        zoom = fitZoom.coerceIn(0.05f, 16f)
         rotationRad = 0f
         NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
         NativeSurfaceBridge.nativeRenderFrame()
@@ -85,25 +89,21 @@ class VulkanCanvasView(
         return dx to dy
     }
 
-    private fun appendSample(sx: Float, sy: Float, pressure: Float, tilt: Float, orientation: Float) {
+    private fun makeSample(sx: Float, sy: Float, pressure: Float, tilt: Float, orientation: Float): StrokeSample {
         val (dx, dy) = screenToDoc(sx, sy)
         val tiltX = (sin(tilt.toDouble()) * cos(orientation.toDouble())).toFloat()
         val tiltY = (sin(tilt.toDouble()) * sin(orientation.toDouble())).toFloat()
-        currentStroke.add(
-            StrokeSample(
-                x = dx,
-                y = dy,
-                pressure = pressure.coerceIn(0.05f, 1.0f),
-                tiltX = tiltX,
-                tiltY = tiltY
-            )
+        return StrokeSample(
+            x = dx,
+            y = dy,
+            pressure = pressure.coerceIn(0.05f, 1.0f),
+            tiltX = tiltX,
+            tiltY = tiltY
         )
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        val tool = getActiveTool()
-
         if (event.pointerCount >= 2) {
             val x0 = event.getX(0)
             val y0 = event.getY(0)
@@ -117,7 +117,10 @@ class VulkanCanvasView(
             when (event.actionMasked) {
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     isMultiTouch = true
-                    currentStroke.clear()
+                    if (strokeActive) {
+                        strokeActive = false
+                        onStrokeCancel()
+                    }
                     prevMidX = midX
                     prevMidY = midY
                     prevDist = dist
@@ -150,62 +153,54 @@ class VulkanCanvasView(
             return true
         }
 
-        if (tool == ActiveTool.PAN_ZOOM) {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    prevMidX = event.x
-                    prevMidY = event.y
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    panX += (event.x - prevMidX)
-                    panY += (event.y - prevMidY)
-                    prevMidX = event.x
-                    prevMidY = event.y
-                    NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
-                    NativeSurfaceBridge.nativeRenderFrame()
-                }
-            }
-            return true
-        }
-
-        // Brush / Eraser stroke capture (including high-frequency historical stylus samples)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                currentStroke.clear()
-                appendSample(
+                strokeActive = true
+                val sample = makeSample(
                     event.x,
                     event.y,
                     event.pressure,
                     event.getAxisValue(MotionEvent.AXIS_TILT),
                     event.orientation
                 )
+                onStrokeBegin(sample)
             }
             MotionEvent.ACTION_MOVE -> {
+                if (!strokeActive) return true
+                val batch = ArrayList<StrokeSample>(event.historySize + 1)
                 for (h in 0 until event.historySize) {
-                    appendSample(
-                        event.getHistoricalX(h),
-                        event.getHistoricalY(h),
-                        event.getHistoricalPressure(h),
-                        event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, h),
-                        event.getHistoricalOrientation(h)
+                    batch.add(
+                        makeSample(
+                            event.getHistoricalX(h),
+                            event.getHistoricalY(h),
+                            event.getHistoricalPressure(h),
+                            event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, h),
+                            event.getHistoricalOrientation(h)
+                        )
                     )
                 }
-                appendSample(
-                    event.x,
-                    event.y,
-                    event.pressure,
-                    event.getAxisValue(MotionEvent.AXIS_TILT),
-                    event.orientation
+                batch.add(
+                    makeSample(
+                        event.x,
+                        event.y,
+                        event.pressure,
+                        event.getAxisValue(MotionEvent.AXIS_TILT),
+                        event.orientation
+                    )
                 )
+                onStrokeMove(batch)
             }
             MotionEvent.ACTION_UP -> {
-                if (currentStroke.isNotEmpty()) {
-                    onStrokeComplete(currentStroke.toList())
-                    currentStroke.clear()
+                if (strokeActive) {
+                    strokeActive = false
+                    onStrokeEnd()
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
-                currentStroke.clear()
+                if (strokeActive) {
+                    strokeActive = false
+                    onStrokeCancel()
+                }
             }
         }
         return true

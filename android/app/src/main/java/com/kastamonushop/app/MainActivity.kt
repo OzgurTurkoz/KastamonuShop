@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,10 +39,11 @@ private val StudioDarkScheme = darkColorScheme(
     primary = Color(0xFF4F9CFF),
     secondary = Color(0xFF2ED573),
     background = Color(0xFF19191E),
-    surface = Color(0xFF23232A),
-    surfaceVariant = Color(0xFF2E2E38),
-    onBackground = Color(0xFFF1F2F6),
-    onSurface = Color(0xFFF1F2F6)
+    surface = Color(0xFF23232C),
+    surfaceVariant = Color(0xFF30303D),
+    onBackground = Color(0xFFFFFFFF),
+    onSurface = Color(0xFFFFFFFF),
+    onSurfaceVariant = Color(0xFFE0E2EC)
 )
 
 class MainActivity : ComponentActivity() {
@@ -57,21 +59,57 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+private fun LabeledToolButton(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color.Transparent
+    val tint = when {
+        !enabled -> Color(0xFF666A78)
+        selected -> MaterialTheme.colorScheme.primary
+        else -> Color.White
+    }
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(text = label, color = tint, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
 fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
     val state by vm.uiState.collectAsState()
     val context = LocalContext.current
 
     var showLayers by remember { mutableStateOf(false) }
     var showBrushSheet by remember { mutableStateOf(false) }
+    var showOpenMenu by remember { mutableStateOf(false) }
     var showExportMenu by remember { mutableStateOf(false) }
     var pendingExportFormat by remember { mutableStateOf("png") }
+    var openAsLayer by remember { mutableStateOf(false) }
     var canvasViewRef by remember { mutableStateOf<VulkanCanvasView?>(null) }
+
+    LaunchedEffect(state.fitCameraSignal) {
+        if (state.fitCameraSignal > 0) {
+            canvasViewRef?.fitToDocument()
+        }
+    }
 
     val openDocLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            vm.openDocumentFromUri(context.contentResolver, uri)
+            vm.openDocumentFromUri(context.contentResolver, uri, asLayer = openAsLayer)
         }
     }
 
@@ -88,160 +126,180 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Full-screen zero-copy Vulkan SurfaceView canvas
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 VulkanCanvasView(
                     context = ctx,
-                    getActiveTool = { vm.uiState.value.activeTool },
                     getDocSize = {
                         val d = vm.uiState.value.docInfo
                         (d?.width?.toInt() ?: 2048) to (d?.height?.toInt() ?: 2048)
                     },
-                    onStrokeComplete = { pts -> vm.commitStroke(pts) }
+                    onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
+                    onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
+                    onStrokeEnd = { vm.finishLiveStroke() },
+                    onStrokeCancel = { vm.cancelLiveStroke() }
                 ).also { canvasViewRef = it }
             }
         )
 
-        // Floating Top Studio Bar
+        // Top Bar: Compact, High-Contrast, Labeled for Beginners (never clipped on phones)
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
             tonalElevation = 6.dp
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                Text(
-                    text = "KastamonuShop",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-
-                IconButton(onClick = { openDocLauncher.launch(arrayOf("*/*")) }) {
-                    Icon(Icons.Default.FolderOpen, contentDescription = "Aç (PSD/RAW/PNG)")
+                Box {
+                    LabeledToolButton(
+                        icon = Icons.Default.AddPhotoAlternate,
+                        label = "Aç / Ekle",
+                        onClick = { showOpenMenu = true }
+                    )
+                    DropdownMenu(
+                        expanded = showOpenMenu,
+                        onDismissRequest = { showOpenMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Fotoğraf / PSD Aç (Yeni Proje)") },
+                            onClick = {
+                                showOpenMenu = false
+                                openAsLayer = false
+                                openDocLauncher.launch(arrayOf("image/*", "application/octet-stream", "*/*"))
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Fotoğrafı Katman Olarak Ekle") },
+                            onClick = {
+                                showOpenMenu = false
+                                openAsLayer = true
+                                openDocLauncher.launch(arrayOf("image/*"))
+                            }
+                        )
+                    }
                 }
 
                 Box {
-                    IconButton(onClick = { showExportMenu = true }) {
-                        Icon(Icons.Default.Save, contentDescription = "Dışa Aktar")
-                    }
+                    LabeledToolButton(
+                        icon = Icons.Default.Save,
+                        label = "Kaydet",
+                        onClick = { showExportMenu = true }
+                    )
                     DropdownMenu(
                         expanded = showExportMenu,
                         onDismissRequest = { showExportMenu = false }
                     ) {
                         listOf(
-                            "psd" to "Photoshop (.psd)",
-                            "pcraft" to "PhotoCraft (.pcraft)",
-                            "png" to "PNG (.png)",
-                            "jpg" to "JPEG (.jpg)",
-                            "webp" to "WebP (.webp)",
-                            "tiff" to "TIFF (.tiff)"
+                            "png" to "PNG Resim (.png)",
+                            "jpg" to "JPEG Resim (.jpg)",
+                            "psd" to "Photoshop Katmanlı (.psd)",
+                            "pcraft" to "KastamonuShop Proje (.pcraft)",
+                            "webp" to "WebP (.webp)"
                         ).forEach { (ext, label) ->
                             DropdownMenuItem(
                                 text = { Text(label) },
                                 onClick = {
                                     showExportMenu = false
                                     pendingExportFormat = ext
-                                    exportDocLauncher.launch("kastamonushop_export.$ext")
+                                    exportDocLauncher.launch("kastamonushop.$ext")
                                 }
                             )
                         }
                     }
                 }
 
-                IconButton(
-                    onClick = { vm.undo() },
-                    enabled = state.docInfo?.canUndo == true
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Geri Al")
-                }
+                LabeledToolButton(
+                    icon = Icons.AutoMirrored.Filled.Undo,
+                    label = "Geri",
+                    enabled = state.docInfo?.canUndo == true,
+                    onClick = { vm.undo() }
+                )
 
-                IconButton(
-                    onClick = { vm.redo() },
-                    enabled = state.docInfo?.canRedo == true
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "İleri Al")
-                }
+                LabeledToolButton(
+                    icon = Icons.AutoMirrored.Filled.Redo,
+                    label = "İleri",
+                    enabled = state.docInfo?.canRedo == true,
+                    onClick = { vm.redo() }
+                )
 
-                IconButton(onClick = { canvasViewRef?.resetCamera() }) {
-                    Icon(Icons.Default.CenterFocusStrong, contentDescription = "Tuvali Ortala")
-                }
+                LabeledToolButton(
+                    icon = Icons.Default.CenterFocusStrong,
+                    label = "Ortala",
+                    onClick = { canvasViewRef?.fitToDocument() }
+                )
 
-                IconButton(onClick = { showLayers = !showLayers }) {
-                    Icon(
-                        Icons.Default.Layers,
-                        contentDescription = "Katmanlar",
-                        tint = if (showLayers) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                    )
-                }
+                LabeledToolButton(
+                    icon = Icons.Default.Layers,
+                    label = "Katman",
+                    selected = showLayers,
+                    onClick = { showLayers = !showLayers }
+                )
             }
         }
 
-        // Left Pro Studio Tool Rail
+        // Left Tool Rail: Brush, Eraser & Color/Size (two-finger zoom/pan always works!)
         Surface(
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = 12.dp),
+                .padding(start = 10.dp),
             shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
             tonalElevation = 6.dp
         ) {
             Column(
                 modifier = Modifier.padding(6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                IconButton(onClick = { vm.setTool(ActiveTool.BRUSH) }) {
-                    Icon(
-                        Icons.Default.Brush,
-                        contentDescription = "Fırça",
-                        tint = if (state.activeTool == ActiveTool.BRUSH) MaterialTheme.colorScheme.primary else Color.LightGray
-                    )
-                }
-                IconButton(onClick = { vm.setTool(ActiveTool.ERASER) }) {
-                    Icon(
-                        Icons.Default.AutoFixNormal,
-                        contentDescription = "Silgi",
-                        tint = if (state.activeTool == ActiveTool.ERASER) MaterialTheme.colorScheme.primary else Color.LightGray
-                    )
-                }
-                IconButton(onClick = { vm.setTool(ActiveTool.PAN_ZOOM) }) {
-                    Icon(
-                        Icons.Default.PanTool,
-                        contentDescription = "Kaydır / Yakınlaştır",
-                        tint = if (state.activeTool == ActiveTool.PAN_ZOOM) MaterialTheme.colorScheme.primary else Color.LightGray
-                    )
-                }
+                LabeledToolButton(
+                    icon = Icons.Default.Brush,
+                    label = "Fırça",
+                    selected = state.activeTool == ActiveTool.BRUSH,
+                    onClick = { vm.setTool(ActiveTool.BRUSH) }
+                )
+                LabeledToolButton(
+                    icon = Icons.Default.AutoFixNormal,
+                    label = "Silgi",
+                    selected = state.activeTool == ActiveTool.ERASER,
+                    onClick = { vm.setTool(ActiveTool.ERASER) }
+                )
 
-                // Active Color Swatch -> Opens Brush & Color Studio
                 val parsedColor = remember(state.colorHex) {
                     runCatching { Color(android.graphics.Color.parseColor(state.colorHex)) }
                         .getOrDefault(Color.Red)
                 }
-                Box(
+                Column(
                     modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(parsedColor)
-                        .border(2.dp, Color.White, CircleShape)
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable { showBrushSheet = !showBrushSheet }
-                )
-
-                Text(
-                    text = "${state.brushSize.toInt()}px",
-                    fontSize = 10.sp,
-                    color = Color.LightGray
-                )
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(parsedColor)
+                            .border(2.dp, Color.White, CircleShape)
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "${state.brushSize.toInt()}px",
+                        fontSize = 10.sp,
+                        color = Color.White
+                    )
+                }
             }
         }
 
@@ -250,11 +308,11 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
             Surface(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 12.dp, top = 76.dp, bottom = 76.dp)
-                    .width(260.dp)
-                    .fillMaxHeight(0.72f),
+                    .padding(end = 10.dp, top = 84.dp, bottom = 76.dp)
+                    .width(250.dp)
+                    .fillMaxHeight(0.68f),
                 shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                 tonalElevation = 8.dp
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
@@ -263,13 +321,13 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Katmanlar", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        Text("Katmanlar", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Color.White)
                         Row {
                             IconButton(onClick = { vm.addLayer() }) {
-                                Icon(Icons.Default.Add, contentDescription = "Yeni Katman")
+                                Icon(Icons.Default.Add, contentDescription = "Yeni Katman", tint = Color.White)
                             }
                             IconButton(onClick = { vm.deleteActiveLayer() }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Katmanı Sil")
+                                Icon(Icons.Default.Delete, contentDescription = "Katmanı Sil", tint = Color(0xFFFF6B6B))
                             }
                         }
                     }
@@ -280,7 +338,7 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                     ) {
                         items(state.layers, key = { it.id.toLong() }) { layer ->
                             val bg = if (layer.isActive) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
                             } else {
                                 MaterialTheme.colorScheme.surfaceVariant
                             }
@@ -300,15 +358,16 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                                     Icon(
                                         if (layer.visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                                         contentDescription = "Görünürlük",
+                                        tint = if (layer.visible) Color.White else Color.Gray,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
                                 Column(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
-                                    Text(layer.name, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                    Text(layer.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
                                     Text(
                                         "${layer.blendMode} · ${(layer.opacity * 100).toInt()}%",
                                         fontSize = 11.sp,
-                                        color = Color.Gray
+                                        color = Color(0xFFB8BCC8)
                                     )
                                 }
                             }
@@ -340,13 +399,12 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Fırça & Renk", fontWeight = FontWeight.SemiBold)
+                        Text("Fırça & Renk Ayarları", fontWeight = FontWeight.SemiBold, color = Color.White)
                         IconButton(onClick = { showBrushSheet = false }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Kapat")
+                            Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color.White)
                         }
                     }
 
-                    // Quick Pro Palette
                     val palette = listOf(
                         "#FF4D4F", "#FFA940", "#FFEC3D", "#52C41A",
                         "#13C2C2", "#1677FF", "#722ED1", "#FFFFFF", "#000000"
@@ -359,12 +417,12 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                             val c = Color(android.graphics.Color.parseColor(hex))
                             Box(
                                 modifier = Modifier
-                                    .size(28.dp)
+                                    .size(30.dp)
                                     .clip(CircleShape)
                                     .background(c)
                                     .border(
-                                        width = if (state.colorHex == hex) 2.5.dp else 1.dp,
-                                        color = if (state.colorHex == hex) MaterialTheme.colorScheme.primary else Color.DarkGray,
+                                        width = if (state.colorHex == hex) 3.dp else 1.dp,
+                                        color = if (state.colorHex == hex) MaterialTheme.colorScheme.primary else Color.Gray,
                                         shape = CircleShape
                                     )
                                     .clickable { vm.updateBrush(colorHex = hex) }
@@ -372,21 +430,21 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
                         }
                     }
 
-                    Text("Boyut: ${state.brushSize.toInt()} px", fontSize = 12.sp)
+                    Text("Boyut: ${state.brushSize.toInt()} px", fontSize = 12.sp, color = Color.White)
                     Slider(
                         value = state.brushSize,
                         onValueChange = { vm.updateBrush(size = it) },
                         valueRange = 2f..250f
                     )
 
-                    Text("Opaklık: ${(state.brushOpacity * 100).toInt()}%", fontSize = 12.sp)
+                    Text("Opaklık (Saydamlık): ${(state.brushOpacity * 100).toInt()}%", fontSize = 12.sp, color = Color.White)
                     Slider(
                         value = state.brushOpacity,
                         onValueChange = { vm.updateBrush(opacity = it) },
                         valueRange = 0.05f..1.0f
                     )
 
-                    Text("Sertlik: ${(state.brushHardness * 100).toInt()}%", fontSize = 12.sp)
+                    Text("Sertlik (Kenar Yumuşaklığı): ${(state.brushHardness * 100).toInt()}%", fontSize = 12.sp, color = Color.White)
                     Slider(
                         value = state.brushHardness,
                         onValueChange = { vm.updateBrush(hardness = it) },
@@ -396,26 +454,27 @@ fun KastamonuStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // Status / Busy indicator
+        // High-contrast auto-dismissing status pill
         state.statusMessage?.let { msg ->
             Surface(
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
+                    .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(16.dp)
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
                     .clickable { vm.clearStatus() },
                 shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f)
+                color = Color(0xEE111217),
+                tonalElevation = 8.dp
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (state.isBusy) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
                     }
-                    Text(msg, fontSize = 12.sp)
+                    Text(msg, fontSize = 12.sp, color = Color.White)
                 }
             }
         }

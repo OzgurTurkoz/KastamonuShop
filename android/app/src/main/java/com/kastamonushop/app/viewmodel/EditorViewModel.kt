@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kastamonushop.app.bridge.NativeSurfaceBridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,8 +24,7 @@ import uniffi.kastamonushop_ffi.getLastGpuError
 
 enum class ActiveTool {
     BRUSH,
-    ERASER,
-    PAN_ZOOM
+    ERASER
 }
 
 data class EditorUiState(
@@ -37,11 +38,13 @@ data class EditorUiState(
     val brushFlow: Float = 1.0f,
     val colorHex: String = "#FF4D4F",
     val statusMessage: String? = null,
-    val isBusy: Boolean = false
+    val isBusy: Boolean = false,
+    val fitCameraSignal: Int = 0
 )
 
 class EditorViewModel : ViewModel() {
     private val engine: KastamonuEngine = createKastamonuEngine()
+    private var statusAutoHideJob: Job? = null
 
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
@@ -53,6 +56,17 @@ class EditorViewModel : ViewModel() {
         syncBrushToEngine()
     }
 
+    private fun showStatus(msg: String, autoHideMs: Long = 3500L) {
+        statusAutoHideJob?.cancel()
+        _uiState.update { it.copy(statusMessage = msg) }
+        if (autoHideMs > 0) {
+            statusAutoHideJob = viewModelScope.launch {
+                delay(autoHideMs)
+                _uiState.update { it.copy(statusMessage = null) }
+            }
+        }
+    }
+
     fun refreshState() {
         viewModelScope.launch(Dispatchers.Default) {
             runCatching {
@@ -60,9 +74,9 @@ class EditorViewModel : ViewModel() {
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
                 NativeSurfaceBridge.nativeRenderFrame()
-                getLastGpuError()?.let { gpuErr -> _uiState.update { it.copy(statusMessage = gpuErr) } }
+                getLastGpuError()?.let { gpuErr -> showStatus(gpuErr, 6000L) }
             }.onFailure { err ->
-                _uiState.update { it.copy(statusMessage = err.message) }
+                showStatus(err.message ?: "Bilinmeyen hata")
             }
         }
     }
@@ -99,20 +113,41 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    fun commitStroke(points: List<StrokeSample>) {
-        if (points.isEmpty()) return
+    fun beginLiveStroke(sample: StrokeSample) {
         val s = _uiState.value
         val isEraser = s.activeTool == ActiveTool.ERASER
+        runCatching {
+            engine.beginLiveStroke(sample, s.colorHex, isEraser)
+            NativeSurfaceBridge.nativeRenderFrame()
+        }.onFailure { err ->
+            showStatus("Çizim hatası: ${err.message}")
+        }
+    }
+
+    fun pushLiveStroke(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        runCatching {
+            engine.pushLiveStroke(samples)
+            NativeSurfaceBridge.nativeRenderFrame()
+        }
+    }
+
+    fun finishLiveStroke() {
         viewModelScope.launch(Dispatchers.Default) {
             runCatching {
-                engine.commitStroke(points, s.colorHex, isEraser)
-                val info = engine.getDocumentInfo()
+                val info = engine.finishLiveStroke()
                 _uiState.update { it.copy(docInfo = info) }
                 NativeSurfaceBridge.nativeRenderFrame()
-                getLastGpuError()?.let { gpuErr -> _uiState.update { it.copy(statusMessage = gpuErr) } }
             }.onFailure { err ->
-                _uiState.update { it.copy(statusMessage = "Stroke error: ${err.message}") }
+                showStatus("Çizim kayıt hatası: ${err.message}")
             }
+        }
+    }
+
+    fun cancelLiveStroke() {
+        runCatching {
+            engine.cancelLiveStroke()
+            NativeSurfaceBridge.nativeRenderFrame()
         }
     }
 
@@ -146,6 +181,7 @@ class EditorViewModel : ViewModel() {
                 val info = engine.getDocumentInfo()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
                 NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman $nextIndex eklendi", 2000L)
             }
         }
     }
@@ -179,76 +215,56 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    fun setLayerOpacity(layerId: ULong, opacity: Float) {
-        viewModelScope.launch(Dispatchers.Default) {
-            runCatching {
-                engine.setLayerOpacity(layerId, opacity)
-                refreshState()
-            }
-        }
-    }
-
-    fun applyQuickCommand(commandId: String, paramsJson: String = "{}") {
-        viewModelScope.launch(Dispatchers.Default) {
-            _uiState.update { it.copy(isBusy = true) }
-            runCatching {
-                engine.executeCommand(commandId, paramsJson)
-                val info = engine.getDocumentInfo()
-                val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
-                NativeSurfaceBridge.nativeRenderFrame()
-                getLastGpuError()?.let { gpuErr -> _uiState.update { it.copy(statusMessage = gpuErr) } }
-            }.onFailure { err ->
-                _uiState.update { it.copy(isBusy = false, statusMessage = err.message) }
-            }
-        }
-    }
-
-    fun openDocumentFromUri(resolver: ContentResolver, uri: Uri) {
+    fun openDocumentFromUri(resolver: ContentResolver, uri: Uri, asLayer: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isBusy = true, statusMessage = "Dosya açılıyor...") }
+            _uiState.update { it.copy(isBusy = true) }
+            showStatus(if (asLayer) "Fotoğraf katman olarak ekleniyor..." else "Dosya açılıyor...", 0L)
             runCatching {
-                val fileName = resolveDisplayName(resolver, uri) ?: "document.psd"
+                val fileName = resolveDisplayName(resolver, uri) ?: "image.png"
                 val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: error("Dosya okunamadı")
-                val info = engine.openDocumentBytes(fileName, bytes)
+                val info = if (asLayer) {
+                    engine.placeImageBytes(fileName, bytes)
+                } else {
+                    engine.openDocumentBytes(fileName, bytes)
+                }
                 val layers = engine.getLayers()
                 _uiState.update {
                     it.copy(
                         docInfo = info,
                         layers = layers,
                         isBusy = false,
-                        statusMessage = "Açıldı: ${info.name} (${info.width}×${info.height})"
+                        fitCameraSignal = if (asLayer) it.fitCameraSignal else it.fitCameraSignal + 1
                     )
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
-                getLastGpuError()?.let { gpuErr -> _uiState.update { it.copy(statusMessage = gpuErr) } }
+                showStatus("Açıldı: ${info.name} (${info.width}×${info.height})")
             }.onFailure { err ->
-                _uiState.update { it.copy(isBusy = false, statusMessage = "Açma hatası: ${err.message}") }
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Açma hatası: ${err.message}", 5000L)
             }
         }
     }
 
     fun exportDocumentToUri(resolver: ContentResolver, uri: Uri, formatExt: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isBusy = true, statusMessage = "Dışa aktarılıyor ($formatExt)...") }
+            _uiState.update { it.copy(isBusy = true) }
+            showStatus("Kaydediliyor ($formatExt)...", 0L)
             runCatching {
                 val bytes = engine.exportDocumentBytes(formatExt)
                 resolver.openOutputStream(uri)?.use { it.write(bytes) }
                     ?: error("Hedef dosyaya yazılamadı")
-                _uiState.update {
-                    it.copy(
-                        isBusy = false,
-                        statusMessage = "Kaydedildi (${bytes.size / 1024} KB)"
-                    )
-                }
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Kaydedildi (${bytes.size / 1024} KB)")
             }.onFailure { err ->
-                _uiState.update { it.copy(isBusy = false, statusMessage = "Kayıt hatası: ${err.message}") }
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Kayıt hatası: ${err.message}", 5000L)
             }
         }
     }
 
     fun clearStatus() {
+        statusAutoHideJob?.cancel()
         _uiState.update { it.copy(statusMessage = null) }
     }
 

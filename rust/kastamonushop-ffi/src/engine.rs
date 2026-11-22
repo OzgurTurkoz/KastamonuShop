@@ -1,13 +1,13 @@
 //! PhotoCraft Session wrapper exposed to Kotlin via UniFFI.
-//!
-//! Every action routes through `photocraft_engine::Session::execute` or the byte-level
-//! `photocraft_io` / `file_cmds::open_bytes_as` APIs so Android Storage Access Framework (SAF)
-//! streams work without requiring raw filesystem paths.
+//! Supports real-time zero-lag `LiveStroke` painting/erasing, direct SAF byte import/export,
+//! layer management, undo/redo, and the full PhotoCraft JSON command bus.
 
 use std::sync::Arc;
 use parking_lot::Mutex;
 use photocraft_doc::{Document, LayerId};
+use photocraft_engine::brush_cmds::LiveStroke;
 use photocraft_engine::Session;
+use photocraft_paint::StrokePoint;
 use serde_json::{Value, json};
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -49,23 +49,27 @@ pub struct LayerSummary {
 pub struct StrokeSample {
     pub x: f32,
     pub y: f32,
-    /// Stylus/touch pressure in 0.0..=1.0
     pub pressure: f32,
-    /// Stylus tilt X in radians (-pi/2..=pi/2)
     pub tilt_x: f32,
-    /// Stylus tilt Y in radians (-pi/2..=pi/2)
     pub tilt_y: f32,
+}
+
+struct ActiveLiveStroke {
+    live: LiveStroke,
+    points_json: Vec<Value>,
+    color_hex: String,
+    is_eraser: bool,
 }
 
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
+    live_stroke: Option<ActiveLiveStroke>,
 }
 
 impl EngineCore {
     pub fn new() -> Self {
         let mut session = Session::new();
-        // Start with a ready-to-paint 2048x2048 RGBA8 studio canvas
         let _ = session.execute(
             "file.new",
             json!({
@@ -79,10 +83,14 @@ impl EngineCore {
         Self {
             session,
             render_generation: 1,
+            live_stroke: None,
         }
     }
 
     pub fn active_document(&self) -> Option<Arc<Document>> {
+        if let Some(active_live) = &self.live_stroke {
+            return Some(Arc::clone(&active_live.live.doc));
+        }
         self.session.active().map(|ds| Arc::clone(ds.doc()))
     }
 
@@ -102,11 +110,32 @@ impl KastamonuEngine {
     }
 }
 
+fn sample_to_json(pt: &StrokeSample) -> Value {
+    json!({
+        "x": pt.x,
+        "y": pt.y,
+        "pressure": pt.pressure.clamp(0.01, 1.0),
+        "tiltX": pt.tilt_x,
+        "tiltY": pt.tilt_y
+    })
+}
+
+fn sample_to_stroke_point(pt: &StrokeSample) -> StrokePoint {
+    StrokePoint {
+        x: pt.x as f64,
+        y: pt.y as f64,
+        pressure: pt.pressure.clamp(0.01, 1.0),
+        tilt_x: pt.tilt_x,
+        tilt_y: pt.tilt_y,
+        ..Default::default()
+    }
+}
+
 #[uniffi::export]
 impl KastamonuEngine {
-    /// Creates a brand new blank document.
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.live_stroke = None;
         guard
             .session
             .execute(
@@ -124,18 +153,33 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Opens any supported document format (PSD, PSB, PCRAFT, RAW, HEIF, TIFF, EXR, PNG, JPEG,
-    /// WebP, SVG, PDF, Affinity, KRA, XCF) directly from Android SAF byte stream.
+    /// Directly imports any supported image/document format (PNG, JPEG, WebP, PSD, PSB, PCRAFT,
+    /// RAW, TIFF, EXR, HEIF, SVG, PDF, Affinity, KRA, XCF) and immediately activates it.
     pub fn open_document_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
+        let imported = photocraft_io::import(&file_name, &bytes)
+            .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
+        let mut doc = imported.document;
+        if doc.name.is_empty() {
+            doc.name = file_name;
+        }
         let mut guard = self.core.lock();
-        photocraft_engine::file_cmds::open_bytes_as(&mut guard.session, &file_name, &bytes, None, None)
+        guard.live_stroke = None;
+        let idx = guard.session.add_document(doc, None);
+        guard.session.set_active(idx);
+        guard.bump_generation();
+        self.info_from_locked(&guard)
+    }
+
+    /// Places an image from Android SAF bytes as a new layer on top of the active document.
+    pub fn place_image_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        photocraft_engine::file_cmds::place_bytes(&mut guard.session, &file_name, bytes, None, &json!({}))
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
         guard.bump_generation();
         self.info_from_locked(&guard)
     }
 
-    /// Exports the active document to raw bytes for writing via Android SAF `ContentResolver`.
-    /// `format_ext` examples: "psd", "pcraft", "png", "jpg", "webp", "tiff", "exr", "pdf".
     pub fn export_document_bytes(&self, format_ext: String) -> Result<Vec<u8>, EngineError> {
         let doc = {
             let guard = self.core.lock();
@@ -147,8 +191,6 @@ impl KastamonuEngine {
         Ok(result.bytes)
     }
 
-    /// Universal PhotoCraft command bus: executes any Photoshop-style command ID with JSON params
-    /// (filters, adjustments, transforms, masks, text, vector shapes, etc.).
     pub fn execute_command(&self, command_id: String, params_json: String) -> Result<String, EngineError> {
         let params: Value = if params_json.trim().is_empty() {
             json!({})
@@ -157,6 +199,7 @@ impl KastamonuEngine {
                 .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?
         };
         let mut guard = self.core.lock();
+        guard.live_stroke = None;
         let out = guard
             .session
             .execute(&command_id, params)
@@ -167,6 +210,7 @@ impl KastamonuEngine {
 
     pub fn undo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.live_stroke = None;
         guard
             .session
             .execute("edit.undo", json!({}))
@@ -177,6 +221,7 @@ impl KastamonuEngine {
 
     pub fn redo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.live_stroke = None;
         guard
             .session
             .execute("edit.redo", json!({}))
@@ -190,7 +235,6 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Returns top-to-bottom layer list for the mobile Layers drawer.
     pub fn get_layers(&self) -> Result<Vec<LayerSummary>, EngineError> {
         let guard = self.core.lock();
         let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
@@ -214,6 +258,7 @@ impl KastamonuEngine {
 
     pub fn add_layer(&self, name: String) -> Result<Vec<LayerSummary>, EngineError> {
         let mut guard = self.core.lock();
+        guard.live_stroke = None;
         guard
             .session
             .execute("layer.new", json!({ "name": name }))
@@ -225,6 +270,7 @@ impl KastamonuEngine {
 
     pub fn delete_active_layer(&self) -> Result<Vec<LayerSummary>, EngineError> {
         let mut guard = self.core.lock();
+        guard.live_stroke = None;
         guard
             .session
             .execute("layer.delete", json!({}))
@@ -244,10 +290,7 @@ impl KastamonuEngine {
         let mut guard = self.core.lock();
         guard
             .session
-            .execute(
-                "layer.setVisibility",
-                json!({ "layer": layer_id, "visible": visible }),
-            )
+            .execute("layer.setVisibility", json!({ "layer": layer_id, "visible": visible }))
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         Ok(())
@@ -258,16 +301,12 @@ impl KastamonuEngine {
         let pct = (opacity.clamp(0.0, 1.0) * 100.0).round();
         guard
             .session
-            .execute(
-                "layer.setOpacity",
-                json!({ "layer": layer_id, "opacity": pct }),
-            )
+            .execute("layer.setOpacity", json!({ "layer": layer_id, "opacity": pct }))
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.bump_generation();
         Ok(())
     }
 
-    /// Configures the active session brush (size in px, hardness 0..1, opacity 0..1, flow 0..1).
     pub fn set_brush(
         &self,
         size: f32,
@@ -295,7 +334,86 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Commits a touch/stylus stroke with pressure & tilt directly into `photocraft-paint`.
+    /// Starts a real-time live brush/eraser stroke on ACTION_DOWN.
+    pub fn begin_live_stroke(
+        &self,
+        sample: StrokeSample,
+        color_hex: String,
+        is_eraser: bool,
+    ) -> Result<(), EngineError> {
+        let pt_json = sample_to_json(&sample);
+        let mut params = json!({
+            "points": [pt_json.clone()],
+            "color": color_hex
+        });
+        if is_eraser {
+            params["mode"] = json!("clear");
+        }
+        let mut guard = self.core.lock();
+        let live = LiveStroke::begin(&guard.session, &params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.live_stroke = Some(ActiveLiveStroke {
+            live,
+            points_json: vec![pt_json],
+            color_hex,
+            is_eraser,
+        });
+        guard.bump_generation();
+        Ok(())
+    }
+
+    /// Streams incremental finger/stylus points on ACTION_MOVE for instant 60fps painting.
+    pub fn push_live_stroke(&self, samples: Vec<StrokeSample>) -> Result<(), EngineError> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let mut guard = self.core.lock();
+        let Some(active) = guard.live_stroke.as_mut() else {
+            return Ok(());
+        };
+        let pts: Vec<StrokePoint> = samples.iter().map(sample_to_stroke_point).collect();
+        active
+            .live
+            .push(&pts)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        for s in &samples {
+            active.points_json.push(sample_to_json(s));
+        }
+        guard.bump_generation();
+        Ok(())
+    }
+
+    /// Commits the live stroke into Undo/Redo history on ACTION_UP with zero re-rendering.
+    pub fn finish_live_stroke(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(active) = guard.live_stroke.take() else {
+            return self.info_from_locked(&guard);
+        };
+        let seed = active.live.seed;
+        let mut params = json!({
+            "points": active.points_json,
+            "color": active.color_hex,
+            "seed": seed
+        });
+        if active.is_eraser {
+            params["mode"] = json!("clear");
+        }
+        let _ = guard.session.offer_live_stroke(active.live);
+        guard
+            .session
+            .execute("paint.stroke", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.bump_generation();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn cancel_live_stroke(&self) {
+        let mut guard = self.core.lock();
+        if guard.live_stroke.take().is_some() {
+            guard.bump_generation();
+        }
+    }
+
     pub fn commit_stroke(
         &self,
         points: Vec<StrokeSample>,
@@ -305,19 +423,7 @@ impl KastamonuEngine {
         if points.is_empty() {
             return Ok(());
         }
-        let json_pts: Vec<Value> = points
-            .iter()
-            .map(|pt| {
-                json!({
-                    "x": pt.x,
-                    "y": pt.y,
-                    "pressure": pt.pressure.clamp(0.01, 1.0),
-                    "tiltX": pt.tilt_x,
-                    "tiltY": pt.tilt_y
-                })
-            })
-            .collect();
-
+        let json_pts: Vec<Value> = points.iter().map(sample_to_json).collect();
         let mut params = json!({
             "points": json_pts,
             "color": color_hex
@@ -325,7 +431,6 @@ impl KastamonuEngine {
         if is_eraser {
             params["mode"] = json!("clear");
         }
-
         let mut guard = self.core.lock();
         guard
             .session
