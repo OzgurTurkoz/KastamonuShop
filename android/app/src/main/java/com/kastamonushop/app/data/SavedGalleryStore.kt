@@ -21,6 +21,7 @@ data class SavedPhotoItem(
 object SavedGalleryStore {
     private const val DIR_NAME = "saved_gallery"
     private const val INDEX_FILE = "index.json"
+    private const val MAX_ITEMS = 48
 
     private fun galleryDir(context: Context): File {
         val dir = File(context.filesDir, DIR_NAME)
@@ -104,8 +105,14 @@ object SavedGalleryStore {
                 savedAtMs = ts
             )
         )
-        // Keep up to 48 most recent saved projects
-        val trimmed = current.take(48)
+        // Clean up orphaned files when exceeding MAX_ITEMS
+        if (current.size > MAX_ITEMS) {
+            current.drop(MAX_ITEMS).forEach { dropped ->
+                runCatching { File(dropped.filePath).delete() }
+                runCatching { File(dropped.thumbPath).delete() }
+            }
+        }
+        val trimmed = current.take(MAX_ITEMS)
         saveIndex(context, trimmed)
         return trimmed
     }

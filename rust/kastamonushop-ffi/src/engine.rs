@@ -1,7 +1,7 @@
-//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.5.0 — StonebridgeCraft).
-//! - Live undo-clean adjustments & pixel filters
+//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.5.1 — StonebridgeCraft).
+//! - Live undo-clean adjustments, pixel filters, and Photo Mirror Effect (Fotoğraf Ayna Efekti)
 //! - Eyedropper color sampling (`sample_color_hex`)
-//! - Painting symmetry (`set_symmetry`: vertical, horizontal, dual, diagonal, off)
+//! - Painting symmetry (`set_symmetry`)
 //! - Canvas crop & rotation/flip (`crop_canvas`, `transform_canvas`)
 
 use std::sync::Arc;
@@ -78,6 +78,11 @@ struct LiveFilterSession {
     has_applied_preview: bool,
 }
 
+struct LiveMirrorSession {
+    target_id: LayerId,
+    has_applied_preview: bool,
+}
+
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
@@ -86,6 +91,7 @@ pub(crate) struct EngineCore {
     live_stroke: Option<ActiveLiveStroke>,
     live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
+    live_mirror: Option<LiveMirrorSession>,
 }
 
 impl EngineCore {
@@ -110,6 +116,7 @@ impl EngineCore {
             live_stroke: None,
             live_adjustment: None,
             live_filter: None,
+            live_mirror: None,
         }
     }
 
@@ -176,6 +183,22 @@ fn sample_to_stroke_point(pt: &StrokeSample) -> StrokePoint {
     }
 }
 
+fn find_primary_photo_raster_layer(doc: &Document, active: Option<LayerId>) -> Option<(LayerId, bool)> {
+    let active_is_photo = active
+        .and_then(|aid| doc.layers.iter().find(|l| l.id == aid))
+        .is_some_and(|l| matches!(l.content, LayerContent::Raster(_)) && !l.name.eq_ignore_ascii_case("Çizim Katmanı"));
+
+    let chosen = if active_is_photo {
+        active.and_then(|aid| doc.layers.iter().find(|l| l.id == aid))
+    } else {
+        doc.layers
+            .iter()
+            .find(|l| matches!(l.content, LayerContent::Raster(_)))
+    };
+
+    chosen.map(|l| (l.id, l.locks.pixels))
+}
+
 #[uniffi::export]
 impl KastamonuEngine {
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
@@ -183,6 +206,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        guard.live_mirror = None;
         guard
             .session
             .execute(
@@ -217,6 +241,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        guard.live_mirror = None;
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
         if let Some(bg_id) = single_layer_id {
@@ -235,6 +260,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        guard.live_mirror = None;
         photocraft_engine::file_cmds::place_bytes(&mut guard.session, &file_name, bytes, None, &json!({}))
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
@@ -269,7 +295,6 @@ impl KastamonuEngine {
         Ok(out.to_string())
     }
 
-    /// Eyedropper: samples the visible composite pixel color at document coordinates `(x, y)` and returns `#RRGGBB`.
     pub fn sample_color_hex(&self, x: f32, y: f32) -> Result<String, EngineError> {
         let mut guard = self.core.lock();
         let out = guard
@@ -289,7 +314,6 @@ impl KastamonuEngine {
         Ok(format!("#{r:02X}{g:02X}{b:02X}"))
     }
 
-    /// Sets or disables painting symmetry (`"off"`, `"vertical"`, `"horizontal"`, `"dual"`, `"diagonal"`).
     pub fn set_symmetry(&self, mode: String) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let m = mode.trim().to_ascii_lowercase();
@@ -304,7 +328,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Rotates or flips the whole canvas (`"90cw"`, `"90ccw"`, `"flip_h"`, `"flip_v"`).
     pub fn transform_canvas(&self, action: String) -> Result<DocumentInfo, EngineError> {
         let cmd = match action.as_str() {
             "90cw" => "image.imageRotation.90cw",
@@ -321,6 +344,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        guard.live_mirror = None;
         guard
             .session
             .execute(cmd, json!({}))
@@ -329,12 +353,12 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Crops the canvas to the given rectangle `(x, y, width, height)` in document pixels.
     pub fn crop_canvas(&self, x: i32, y: i32, width: i32, height: i32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        guard.live_mirror = None;
         guard
             .session
             .execute(
@@ -351,7 +375,151 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Creates a new live adjustment layer (e.g. `brightnessContrast`, `hueSaturation`) and returns its layer ID.
+    /// Starts a live Photo Mirror Effect session (mirrors one half of the photo onto the other across a movable axis).
+    pub fn begin_live_mirror(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        if let Some(old) = guard.live_mirror.take() {
+            if old.has_applied_preview {
+                let _ = guard.session.execute("edit.undo", json!({}));
+            }
+        }
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Ayna efekti uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.live_mirror = Some(LiveMirrorSession {
+            target_id,
+            has_applied_preview: false,
+        });
+        Ok(())
+    }
+
+    /// Updates the live Photo Mirror Effect in real time.
+    /// `mode`: `"left_to_right"`, `"right_to_left"`, `"top_to_bottom"`, `"bottom_to_top"`.
+    /// `axis_ratio`: `0.10..=0.90` (0.50 = center).
+    pub fn update_live_mirror(&self, mode: String, axis_ratio: f32) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let Some(mut lm) = guard.live_mirror.take() else {
+            return Ok(());
+        };
+
+        if lm.has_applied_preview {
+            let _ = guard.session.execute("edit.undo", json!({}));
+            lm.has_applied_preview = false;
+        }
+
+        let target_id = lm.target_id;
+        let ratio = axis_ratio.clamp(0.10, 0.90);
+        let res = guard.session.edit("Ayna Efekti", |doc, _| {
+            let bounds = doc.bounds();
+            let w = doc.size.width as usize;
+            let h = doc.size.height as usize;
+            if w < 2 || h < 2 {
+                return Ok(());
+            }
+            let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+                return Ok(());
+            };
+            let LayerContent::Raster(surf) = &mut layer.content else {
+                return Ok(());
+            };
+            let ch = surf.format().channels();
+            let mut data = surf.read_region(bounds);
+            let row_stride = w * ch;
+            if data.len() < row_stride * h {
+                return Ok(());
+            }
+
+            let ax = ((w as f32) * ratio).round().clamp(1.0, (w - 1) as f32) as isize;
+            let ay = ((h as f32) * ratio).round().clamp(1.0, (h - 1) as f32) as isize;
+
+            match mode.as_str() {
+                "left_to_right" => {
+                    for y in 0..h {
+                        let base = y * row_stride;
+                        for x in (ax as usize)..w {
+                            let sx = (2 * ax - 1 - x as isize).clamp(0, (w - 1) as isize) as usize;
+                            let dst = base + x * ch;
+                            let src = base + sx * ch;
+                            for c in 0..ch {
+                                data[dst + c] = data[src + c];
+                            }
+                        }
+                    }
+                }
+                "right_to_left" => {
+                    for y in 0..h {
+                        let base = y * row_stride;
+                        for x in 0..(ax as usize) {
+                            let sx = (2 * ax - 1 - x as isize).clamp(0, (w - 1) as isize) as usize;
+                            let dst = base + x * ch;
+                            let src = base + sx * ch;
+                            for c in 0..ch {
+                                data[dst + c] = data[src + c];
+                            }
+                        }
+                    }
+                }
+                "top_to_bottom" => {
+                    for y in (ay as usize)..h {
+                        let sy = (2 * ay - 1 - y as isize).clamp(0, (h - 1) as isize) as usize;
+                        let src_start = sy * row_stride;
+                        let dst_start = y * row_stride;
+                        data.copy_within(src_start..(src_start + row_stride), dst_start);
+                    }
+                }
+                "bottom_to_top" => {
+                    for y in 0..(ay as usize) {
+                        let sy = (2 * ay - 1 - y as isize).clamp(0, (h - 1) as isize) as usize;
+                        let src_start = sy * row_stride;
+                        let dst_start = y * row_stride;
+                        data.copy_within(src_start..(src_start + row_stride), dst_start);
+                    }
+                }
+                _ => {}
+            }
+
+            surf.write_region_par(bounds, &data);
+            Ok(())
+        });
+
+        match res {
+            Ok(()) => {
+                lm.has_applied_preview = true;
+                guard.live_mirror = Some(lm);
+                guard.mark_full_dirty();
+                Ok(())
+            }
+            Err(e) => {
+                guard.live_mirror = Some(lm);
+                Err(EngineError::CommandFailed { detail: e.to_string() })
+            }
+        }
+    }
+
+    pub fn commit_live_mirror(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_mirror = None;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn cancel_live_mirror(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        if let Some(lm) = guard.live_mirror.take() {
+            if lm.has_applied_preview {
+                let _ = guard.session.execute("edit.undo", json!({}));
+                guard.mark_full_dirty();
+            }
+        }
+        Ok(())
+    }
+
     pub fn begin_live_adjustment(&self, kind: String, params_json: String) -> Result<u64, EngineError> {
         let params: Value = if params_json.trim().is_empty() {
             json!({})
@@ -389,7 +557,6 @@ impl KastamonuEngine {
         Ok(layer_id)
     }
 
-    /// Updates an active live adjustment layer in real time without bloating the Undo stack.
     pub fn update_live_adjustment(&self, layer_id: u64, params_json: String) -> Result<(), EngineError> {
         let mut params: Value = serde_json::from_str(&params_json)
             .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?;
@@ -466,25 +633,13 @@ impl KastamonuEngine {
 
         let (prev_active, target_id, was_locked) = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
-            let doc = ds.doc();
             let prev = ds.active_layer();
-
-            let active_is_raster = prev
-                .and_then(|aid| doc.layers.iter().find(|l| l.id == aid))
-                .is_some_and(|l| matches!(l.content, LayerContent::Raster(_)) && !l.name.eq_ignore_ascii_case("Çizim Katmanı"));
-
-            let chosen = if active_is_raster {
-                prev.and_then(|aid| doc.layers.iter().find(|l| l.id == aid))
-            } else {
-                doc.layers
-                    .iter()
-                    .find(|l| matches!(l.content, LayerContent::Raster(_)))
-            };
-
-            let target = chosen.ok_or_else(|| EngineError::CommandFailed {
-                detail: "Filtre uygulanacak piksel katmanı bulunamadı".into(),
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Filtre uygulanacak piksel katmanı bulunamadı".into(),
+                }
             })?;
-            (prev, target.id, target.locks.pixels)
+            (prev, id, locked)
         };
 
         guard.session.set_active_layer(Some(target_id));
@@ -591,6 +746,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        guard.live_mirror = None;
         guard
             .session
             .execute("edit.undo", json!({}))
@@ -604,6 +760,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        guard.live_mirror = None;
         guard
             .session
             .execute("edit.redo", json!({}))

@@ -40,6 +40,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -58,6 +59,8 @@ import com.kastamonushop.app.ui.canvas.RulerLinePreview
 import com.kastamonushop.app.ui.canvas.VulkanCanvasView
 import com.kastamonushop.app.viewmodel.ActiveTool
 import com.kastamonushop.app.viewmodel.EditorViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -84,7 +87,8 @@ private enum class BottomPanel {
     FILTER_MENU,
     BLUR_EDIT,
     SHARPEN_EDIT,
-    EFFECT_MENU
+    EFFECT_MENU,
+    MIRROR_EDIT
 }
 
 private data class BlendModeOption(
@@ -95,7 +99,20 @@ private data class BlendModeOption(
 
 private data class CropRatioPreset(
     val label: String,
-    val ratio: Float? // width / height, null = original aspect
+    val ratio: Float?
+)
+
+private data class MirrorModeOption(
+    val id: String,
+    val label: String,
+    val isVerticalAxis: Boolean
+)
+
+private val MIRROR_MODES = listOf(
+    MirrorModeOption("left_to_right", "Sol→Sağ", true),
+    MirrorModeOption("right_to_left", "Sağ→Sol", true),
+    MirrorModeOption("top_to_bottom", "Üst→Alt", false),
+    MirrorModeOption("bottom_to_top", "Alt→Üst", false)
 )
 
 private val CROP_PRESETS = listOf(
@@ -219,7 +236,6 @@ private fun StonebridgeHomeScreen(
             .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 14.dp)
     ) {
-        // Brand Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -236,7 +252,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.5",
+                    text = "v0.5.1",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -245,7 +261,6 @@ private fun StonebridgeHomeScreen(
             }
         }
 
-        // Upper Action Area: Centered "+" Photo Edit Card (matching user's sketch)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -296,7 +311,6 @@ private fun StonebridgeHomeScreen(
             }
         }
 
-        // Divider Line separating action card from Saved Photos gallery
         HorizontalDivider(color = Color(0xFF323544), thickness = 1.dp)
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -370,8 +384,11 @@ private fun SavedPhotoCard(
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val thumbBitmap = remember(item.thumbPath) {
-        runCatching { BitmapFactory.decodeFile(item.thumbPath)?.asImageBitmap() }.getOrNull()
+    // Decode thumbnail asynchronously on Dispatchers.IO for smooth 60fps gallery scrolling
+    val thumbBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = item.thumbPath) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { BitmapFactory.decodeFile(item.thumbPath)?.asImageBitmap() }.getOrNull()
+        }
     }
     Box(
         modifier = Modifier
@@ -381,9 +398,10 @@ private fun SavedPhotoCard(
             .border(1.dp, Color(0xFF3A3D4D), RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
     ) {
-        if (thumbBitmap != null) {
+        val bmp = thumbBitmap
+        if (bmp != null) {
             Image(
-                bitmap = thumbBitmap,
+                bitmap = bmp,
                 contentDescription = item.displayName,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -399,7 +417,6 @@ private fun SavedPhotoCard(
             )
         }
 
-        // Tiny delete chip
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -418,7 +435,6 @@ private fun SavedPhotoCard(
             )
         }
 
-        // Bottom name bar
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -633,6 +649,10 @@ fun StonebridgeStudioScreen(
     var blurRadiusVal by remember { mutableFloatStateOf(0f) }
     var sharpenAmountVal by remember { mutableFloatStateOf(0f) }
 
+    // Live Photo Mirror Effect state
+    var selectedMirrorMode by remember { mutableStateOf(MIRROR_MODES.first()) }
+    var mirrorAxisRatio by remember { mutableFloatStateOf(0.50f) }
+
     // Crop overlay state
     var selectedCropPreset by remember { mutableStateOf(CROP_PRESETS.first()) }
     var cropScale by remember { mutableFloatStateOf(0.90f) }
@@ -653,6 +673,10 @@ fun StonebridgeStudioScreen(
                 vm.cancelLiveFilter()
                 activePanel = BottomPanel.DOCK
             }
+            BottomPanel.MIRROR_EDIT -> {
+                vm.cancelLiveMirror()
+                activePanel = BottomPanel.DOCK
+            }
             else -> Unit
         }
     }
@@ -670,6 +694,10 @@ fun StonebridgeStudioScreen(
                     vm.cancelLiveFilter()
                     activePanel = BottomPanel.FILTER_MENU
                 }
+                BottomPanel.MIRROR_EDIT -> {
+                    vm.cancelLiveMirror()
+                    activePanel = BottomPanel.EFFECT_MENU
+                }
                 BottomPanel.CROP_RATIO_EDIT -> activePanel = BottomPanel.CROP_MENU
                 else -> activePanel = BottomPanel.DOCK
             }
@@ -678,8 +706,9 @@ fun StonebridgeStudioScreen(
         }
     }
 
-    LaunchedEffect(state.fitCameraSignal) {
-        if (state.fitCameraSignal > 0) {
+    // Bulletproof camera auto-fit when opening/rotating/cropping or attaching canvas
+    LaunchedEffect(state.fitCameraSignal, canvasViewRef) {
+        if (state.fitCameraSignal > 0 && canvasViewRef != null) {
             canvasViewRef?.fitToDocument()
         }
     }
@@ -766,6 +795,41 @@ fun StonebridgeStudioScreen(
             }
         }
 
+        // Live Dashed Mirror Axis Overlay when in MIRROR_EDIT
+        if (activePanel == BottomPanel.MIRROR_EDIT) {
+            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+            val viewRef = canvasViewRef
+            val tick = cameraTick
+            if (viewRef != null && tick >= 0) {
+                val (p0, p1) = if (selectedMirrorMode.isVerticalAxis) {
+                    val ax = docW * mirrorAxisRatio
+                    viewRef.docToScreen(ax, 0f) to viewRef.docToScreen(ax, docH)
+                } else {
+                    val ay = docH * mirrorAxisRatio
+                    viewRef.docToScreen(0f, ay) to viewRef.docToScreen(docW, ay)
+                }
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 12f))
+                    // Subtle dark shadow behind white dashed line so it's readable on both light and dark photos
+                    drawLine(
+                        color = Color(0x99000000),
+                        start = Offset(p0.first, p0.second),
+                        end = Offset(p1.first, p1.second),
+                        strokeWidth = 6f,
+                        pathEffect = dash
+                    )
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(p0.first, p0.second),
+                        end = Offset(p1.first, p1.second),
+                        strokeWidth = 3f,
+                        pathEffect = dash
+                    )
+                }
+            }
+        }
+
         // Live Crop Frame Overlay when in CROP_RATIO_EDIT
         if (activePanel == BottomPanel.CROP_RATIO_EDIT) {
             val docW = state.docInfo?.width?.toInt() ?: 2048
@@ -783,13 +847,11 @@ fun StonebridgeStudioScreen(
                 val boxW = abs(sx1 - sx0)
                 val boxH = abs(sy1 - sy0)
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    // Dim outside crop frame
                     val dim = Color(0x88000000)
                     drawRect(dim, topLeft = Offset(0f, 0f), size = Size(size.width, top.coerceAtLeast(0f)))
                     drawRect(dim, topLeft = Offset(0f, top + boxH), size = Size(size.width, (size.height - top - boxH).coerceAtLeast(0f)))
                     drawRect(dim, topLeft = Offset(0f, top), size = Size(left.coerceAtLeast(0f), boxH))
                     drawRect(dim, topLeft = Offset(left + boxW, top), size = Size((size.width - left - boxW).coerceAtLeast(0f), boxH))
-                    // Rule of thirds grid
                     val gridColor = Color(0x66FFFFFF)
                     for (i in 1..2) {
                         val gx = left + boxW * (i / 3f)
@@ -797,7 +859,6 @@ fun StonebridgeStudioScreen(
                         drawLine(gridColor, Offset(gx, top), Offset(gx, top + boxH), strokeWidth = 1.5f)
                         drawLine(gridColor, Offset(left, gy), Offset(left + boxW, gy), strokeWidth = 1.5f)
                     }
-                    // Crisp border
                     drawRect(
                         color = Color.White,
                         topLeft = Offset(left, top),
@@ -1111,7 +1172,6 @@ fun StonebridgeStudioScreen(
             }
 
             when (activePanel) {
-                // Main Dock: 5 clean category buttons
                 BottomPanel.DOCK -> {
                     Row(
                         modifier = Modifier
@@ -1163,7 +1223,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Category 1: Çizim (Fırça, Silgi, Damlalık, Cetvel, Ayna, Bırak + HSV Renk Seçici)
                 BottomPanel.DRAW_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1262,7 +1321,6 @@ fun StonebridgeStudioScreen(
                                             .clickable { vm.updateBrush(colorHex = hex) }
                                     )
                                 }
-                                // Rainbow HSV wheel toggle button
                                 Box(
                                     modifier = Modifier
                                         .size(26.dp)
@@ -1316,7 +1374,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Category 2: Ayarla -> Sub-buttons [Işık] [Renk]
                 BottomPanel.ADJUST_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1355,7 +1412,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Live Preview: Işık & Kontrast
                 BottomPanel.LIGHT_LIVE -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1385,7 +1441,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Live Preview: Renk & Canlılık
                 BottomPanel.COLOR_LIVE -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1415,7 +1470,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Category 3: Kırp & Çevir
                 BottomPanel.CROP_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1463,7 +1517,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Live Crop Ratio Overlay Editor
                 BottomPanel.CROP_RATIO_EDIT -> {
                     val docW = state.docInfo?.width?.toInt() ?: 2048
                     val docH = state.docInfo?.height?.toInt() ?: 2048
@@ -1503,7 +1556,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Category 4: Filtre -> Sub-buttons [Bulanık] [Keskin]
                 BottomPanel.FILTER_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1540,7 +1592,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Live Preview: Bulanıklaştır
                 BottomPanel.BLUR_EDIT -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1570,7 +1621,6 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Live Preview: Keskinleştir
                 BottomPanel.SHARPEN_EDIT -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1600,7 +1650,7 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Category 5: Efekt -> Sub-buttons [Siyah-Beyaz (Aç/Kapat)] [Negatif (Aç/Kapat)]
+                // Category 5: Efekt -> [Siyah-Beyaz] [Negatif] [Ayna (Fotoğraf Yansıtma)]
                 BottomPanel.EFFECT_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1608,7 +1658,7 @@ fun StonebridgeStudioScreen(
                     ) {
                         BottomEditorHeader(
                             title = "Hızlı Efektler",
-                            subtitle = "Tek dokunuşla aç, tekrar basınca geri kapat",
+                            subtitle = "Siyah-Beyaz, Negatif veya Ayna Yansıtma",
                             onClose = { activePanel = BottomPanel.DOCK }
                         )
                         Row(
@@ -1627,6 +1677,66 @@ fun StonebridgeStudioScreen(
                                 selected = state.invertLayerId != null,
                                 onClick = { vm.toggleInvert() }
                             )
+                            CircularDockButton(
+                                icon = Icons.Default.Compare,
+                                label = "Ayna",
+                                onClick = {
+                                    selectedMirrorMode = MIRROR_MODES.first()
+                                    mirrorAxisRatio = 0.50f
+                                    canvasViewRef?.fitToDocument()
+                                    vm.beginLiveMirror(selectedMirrorMode.id, mirrorAxisRatio)
+                                    activePanel = BottomPanel.MIRROR_EDIT
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Live Preview: Photo Mirror Effect (Fotoğraf Ayna Efekti)
+                BottomPanel.MIRROR_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Ayna Efekti",
+                            subtitle = "Yön seç ve kesikli çizgiyi kaydır, beğenirsen Uygula de",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.cancelLiveMirror()
+                                activePanel = BottomPanel.EFFECT_MENU
+                            },
+                            onApply = {
+                                vm.commitLiveMirror()
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            MIRROR_MODES.forEach { mode ->
+                                FilterChip(
+                                    selected = mode == selectedMirrorMode,
+                                    onClick = {
+                                        selectedMirrorMode = mode
+                                        vm.updateLiveMirror(mode.id, mirrorAxisRatio)
+                                    },
+                                    label = { Text(mode.label, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        CompactSliderRow(
+                            label = "Çizgi",
+                            valueText = "%${(mirrorAxisRatio * 100).roundToInt()}",
+                            value = mirrorAxisRatio,
+                            range = 0.15f..0.85f,
+                            defaultValue = 0.50f
+                        ) {
+                            mirrorAxisRatio = it
+                            vm.updateLiveMirror(selectedMirrorMode.id, it)
                         }
                     }
                 }

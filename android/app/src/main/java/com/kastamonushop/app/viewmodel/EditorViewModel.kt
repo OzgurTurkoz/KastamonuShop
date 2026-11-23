@@ -75,6 +75,10 @@ class EditorViewModel : ViewModel() {
     private val pendingFilterUpdate = AtomicReference<Pair<String, String>?>(null)
     private val filterDrainScheduled = AtomicBoolean(false)
 
+    // Coalesced live photo mirror preview state
+    private val pendingMirrorUpdate = AtomicReference<Pair<String, Float>?>(null)
+    private val mirrorDrainScheduled = AtomicBoolean(false)
+
     // Coalesced layer opacity slider state
     private val pendingOpacityUpdate = AtomicReference<Pair<ULong, Float>?>(null)
     private val opacityDrainScheduled = AtomicBoolean(false)
@@ -321,6 +325,74 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 engine.cancelLiveStroke()
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    // Coalesced real-time live Photo Mirror Effect
+    fun beginLiveMirror(initialMode: String, initialRatio: Float) {
+        pendingMirrorUpdate.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.beginLiveMirror()
+                engine.updateLiveMirror(initialMode, initialRatio)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Ayna efekti başlatılamadı: ${err.message}", 3500L)
+            }
+        }
+    }
+
+    fun updateLiveMirror(mode: String, axisRatio: Float) {
+        pendingMirrorUpdate.set(mode to axisRatio)
+        if (mirrorDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingMirrorUpdates() }
+        }
+    }
+
+    private fun drainPendingMirrorUpdates() {
+        while (true) {
+            val next = pendingMirrorUpdate.getAndSet(null)
+            if (next == null) {
+                mirrorDrainScheduled.set(false)
+                if (pendingMirrorUpdate.get() == null) return
+                if (!mirrorDrainScheduled.compareAndSet(false, true)) return
+                continue
+            }
+            runCatching {
+                engine.updateLiveMirror(next.first, next.second)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Ayna önizleme hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun commitLiveMirror() {
+        paintExecutor.execute {
+            drainPendingMirrorUpdates()
+            runCatching {
+                engine.commitLiveMirror()
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Ayna efekti uygulandı", 2000L)
+            }.onFailure { err ->
+                showStatus("Ayna hatası: ${err.message}", 3500L)
+            }
+        }
+    }
+
+    fun cancelLiveMirror() {
+        pendingMirrorUpdate.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.cancelLiveMirror()
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }
@@ -702,6 +774,7 @@ class EditorViewModel : ViewModel() {
                         bwLayerId = null,
                         invertLayerId = null,
                         symmetryMode = "off",
+                        rulerEnabled = false,
                         activeTool = ActiveTool.NONE,
                         fitCameraSignal = it.fitCameraSignal + 1
                     )
@@ -728,6 +801,7 @@ class EditorViewModel : ViewModel() {
                         bwLayerId = null,
                         invertLayerId = null,
                         symmetryMode = "off",
+                        rulerEnabled = false,
                         activeTool = ActiveTool.NONE,
                         fitCameraSignal = it.fitCameraSignal + 1
                     )
@@ -763,6 +837,8 @@ class EditorViewModel : ViewModel() {
                         bwLayerId = if (asLayer) it.bwLayerId else null,
                         invertLayerId = if (asLayer) it.invertLayerId else null,
                         symmetryMode = if (asLayer) it.symmetryMode else "off",
+                        rulerEnabled = if (asLayer) it.rulerEnabled else false,
+                        activeTool = if (asLayer) it.activeTool else ActiveTool.NONE,
                         fitCameraSignal = if (asLayer) it.fitCameraSignal else it.fitCameraSignal + 1
                     )
                 }
