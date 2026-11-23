@@ -283,11 +283,7 @@ impl KastamonuEngine {
         while guard.session.close(0).is_some() {}
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
-        if let Some(bg_id) = single_layer_id {
-            let _ = guard.session.execute(
-                "layer.setProps",
-                json!({ "layer": bg_id, "locks": { "pixels": true } }),
-            );
+        if single_layer_id.is_some() {
             let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
         }
         guard.mark_full_dirty();
@@ -314,8 +310,7 @@ impl KastamonuEngine {
         let rect = Rect::new(0, 0, w as i32, h as i32);
         let surf = Surface::from_interleaved(PixelFormat::RGBA8, rect, &rgba_bytes[..expected]);
         let mut doc = Document::new(file_name, Size::new(w, h), ColorMode::Rgb, SampleType::U8);
-        let mut bg = Layer::new("Background", LayerContent::Raster(surf));
-        bg.locks.pixels = true;
+        let bg = Layer::new("Background", LayerContent::Raster(surf));
         doc.layers.push(bg);
 
         let mut guard = self.core.lock();
@@ -1641,9 +1636,11 @@ impl KastamonuEngine {
         width: u32,
         height: u32,
         ellipse: bool,
+        mode: String,
     ) -> Result<Option<SelectionBounds>, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        let m = if mode.is_empty() { "replace" } else { mode.as_str() };
         guard
             .session
             .execute(
@@ -1654,7 +1651,7 @@ impl KastamonuEngine {
                     "width": width.max(1),
                     "height": height.max(1),
                     "ellipse": ellipse,
-                    "mode": "replace"
+                    "mode": m
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -1673,9 +1670,11 @@ impl KastamonuEngine {
         y: i32,
         tolerance: u32,
         contiguous: bool,
+        mode: String,
     ) -> Result<Option<SelectionBounds>, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        let m = if mode.is_empty() { "replace" } else { mode.as_str() };
         guard
             .session
             .execute(
@@ -1687,7 +1686,7 @@ impl KastamonuEngine {
                     "contiguous": contiguous,
                     "antiAlias": true,
                     "sampleAllLayers": true,
-                    "mode": "replace"
+                    "mode": m
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -1758,10 +1757,36 @@ impl KastamonuEngine {
 
     pub fn fill_selection_pixels(&self, color_hex: String) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
-        guard
+        let (target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let active = ds.active_layer();
+            let chosen = active
+                .and_then(|id| ds.doc().layers.iter().find(|l| l.id == id))
+                .filter(|l| matches!(l.content, LayerContent::Raster(_)));
+            match chosen {
+                Some(l) => (l.id, l.locks.pixels),
+                None => find_primary_photo_raster_layer(ds.doc(), active).ok_or_else(|| {
+                    EngineError::CommandFailed { detail: "Doldurulacak piksel katmanı bulunamadı".into() }
+                })?,
+            }
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let res = guard
             .session
-            .execute("edit.fill", json!({ "contents": "color", "color": color_hex }))
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            .execute("edit.fill", json!({ "contents": "color", "color": color_hex }));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }

@@ -18,6 +18,8 @@ struct ViewportUniforms {
     levels: vec4<f32>,
     // [cyan_red (-1..1), magenta_green (-1..1), yellow_blue (-1..1), enabled (0/1)]
     color_bal: vec4<f32>,
+    // [has_selection (0/1), sel_tex_w, sel_tex_h, 0.0]
+    sel_info: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -28,6 +30,9 @@ var doc_tex: texture_2d<f32>;
 
 @group(0) @binding(2)
 var doc_sampler: sampler;
+
+@group(0) @binding(3)
+var sel_tex: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -193,6 +198,25 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         col = clamp(col + shift * mid_w, vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
-    let rgb = mix(checker, col, sampled.a);
+    var rgb = mix(checker, col, sampled.a);
+
+    // 60 FPS GPU-native pixel-exact Selection Mask Overlay + Organic Contour
+    if (u.sel_info.x > 0.5) {
+        let sel_m = textureSample(sel_tex, doc_sampler, doc_uv).r;
+        let sel_step = vec2<f32>(1.0, 1.0) / max(u.sel_info.yz, vec2<f32>(1.0, 1.0));
+        let m_l = textureSample(sel_tex, doc_sampler, clamp(doc_uv - vec2<f32>(sel_step.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).r;
+        let m_r = textureSample(sel_tex, doc_sampler, clamp(doc_uv + vec2<f32>(sel_step.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).r;
+        let m_u = textureSample(sel_tex, doc_sampler, clamp(doc_uv - vec2<f32>(0.0, sel_step.y), vec2<f32>(0.0), vec2<f32>(1.0))).r;
+        let m_d = textureSample(sel_tex, doc_sampler, clamp(doc_uv + vec2<f32>(0.0, sel_step.y), vec2<f32>(0.0), vec2<f32>(1.0))).r;
+        let is_in = sel_m > 0.35;
+        let is_edge = is_in && (m_l <= 0.35 || m_r <= 0.35 || m_u <= 0.35 || m_d <= 0.35);
+        if (is_edge) {
+            let stripe = (i32(floor(in.screen_px.x + in.screen_px.y)) / 5) & 1;
+            rgb = select(vec3<f32>(0.05, 0.08, 0.14), vec3<f32>(1.0, 1.0, 1.0), stripe == 0);
+        } else if (is_in) {
+            rgb = mix(rgb, vec3<f32>(0.22, 0.62, 1.0), 0.30 * sel_m);
+        }
+    }
+
     return vec4<f32>(rgb, 1.0);
 }

@@ -68,6 +68,8 @@ data class EditorUiState(
     val selectionBounds: SelectionBounds? = null,
     val selectEllipse: Boolean = false,
     val wandTolerance: Float = 32f,
+    val wandContiguous: Boolean = true,
+    val selectAddMode: Boolean = false,
     val cloneSourceDoc: Pair<Float, Float>? = null,
     val pickingCloneSource: Boolean = false,
     val statusMessage: String? = null,
@@ -187,14 +189,35 @@ class EditorViewModel : ViewModel() {
         _uiState.update { it.copy(wandTolerance = tol.coerceIn(0f, 150f)) }
     }
 
+    fun toggleWandContiguous() {
+        val next = !_uiState.value.wandContiguous
+        _uiState.update { it.copy(wandContiguous = next) }
+        showStatus(
+            if (next) "Bitişik açık: sadece dokunduğun bağlantılı bölge seçilir"
+            else "Bitişik kapalı: fotoğraftaki tüm benzer renkler seçilir",
+            2200L
+        )
+    }
+
+    fun toggleSelectAddMode() {
+        val next = !_uiState.value.selectAddMode
+        _uiState.update { it.copy(selectAddMode = next) }
+        showStatus(
+            if (next) "Ekle (+) açık: yeni dokunuşlar mevcut seçime eklenir"
+            else "Yeni seçim modu: her dokunuş yeni seçim başlatır",
+            2200L
+        )
+    }
+
     fun selectRect(x: Int, y: Int, width: Int, height: Int) {
-        val ellipse = _uiState.value.selectEllipse
+        val s = _uiState.value
+        val mode = if (s.selectAddMode) "add" else "replace"
         paintExecutor.execute {
             runCatching {
-                val b = engine.selectRect(x, y, width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt(), ellipse)
+                val b = engine.selectRect(x, y, width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt(), s.selectEllipse, mode)
                 _uiState.update { it.copy(selectionBounds = b) }
                 NativeSurfaceBridge.nativeRenderFrame()
-                showStatus(if (ellipse) "Elips alan seçildi" else "Dikdörtgen alan seçildi", 1800L)
+                showStatus(if (s.selectEllipse) "Elips alan seçildi" else "Dikdörtgen alan seçildi", 1600L)
             }.onFailure { err ->
                 showStatus("Seçim hatası: ${err.message}", 3000L)
             }
@@ -202,14 +225,16 @@ class EditorViewModel : ViewModel() {
     }
 
     fun selectMagicWand(docX: Float, docY: Float) {
-        val tol = _uiState.value.wandTolerance.toInt().coerceIn(0, 255).toUInt()
+        val s = _uiState.value
+        val tol = s.wandTolerance.toInt().coerceIn(0, 255).toUInt()
+        val mode = if (s.selectAddMode) "add" else "replace"
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
-                val b = engine.selectMagicWand(docX.toInt(), docY.toInt(), tol, true)
+                val b = engine.selectMagicWand(docX.toInt(), docY.toInt(), tol, s.wandContiguous, mode)
                 _uiState.update { it.copy(selectionBounds = b, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
-                showStatus(if (b != null) "Sihirli Değnek seçimi hazır" else "Seçilecek alan bulunamadı", 1800L)
+                showStatus(if (b != null) "Sihirli Değnek seçimi hazır" else "Seçilecek alan bulunamadı", 1600L)
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("Sihirli Değnek hatası: ${err.message}", 3000L)

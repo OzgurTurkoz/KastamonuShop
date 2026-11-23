@@ -80,6 +80,7 @@ struct ViewportUniforms {
     filter_p: [f32; 4],
     levels: [f32; 4],
     color_bal: [f32; 4],
+    sel_info: [f32; 4],
 }
 
 pub struct VulkanRenderer {
@@ -94,6 +95,9 @@ pub struct VulkanRenderer {
     sampler: wgpu::Sampler,
     uniform_buf: wgpu::Buffer,
     doc_texture: Option<wgpu::Texture>,
+    sel_texture: wgpu::Texture,
+    sel_tex_size: (u32, u32),
+    has_selection: bool,
     cached_blit_bg: Option<wgpu::BindGroup>,
     doc_tex_size: (u32, u32),
     last_rendered_gen: u64,
@@ -207,6 +211,16 @@ impl VulkanRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -258,6 +272,7 @@ impl VulkanRenderer {
             filter_p: [0.0, 0.0, 0.0, 0.0],
             levels: [0.0, 1.0, 1.0, 0.0],
             color_bal: [0.0, 0.0, 0.0, 0.0],
+            sel_info: [0.0, 1.0, 1.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport_uniforms"),
@@ -266,6 +281,28 @@ impl VulkanRenderer {
             mapped_at_creation: false,
         });
         queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&initial_uniforms));
+
+        let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("stonebridgecraft_sel_mask"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &sel_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0u8],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
 
         Ok(Self {
             _instance: instance,
@@ -279,6 +316,9 @@ impl VulkanRenderer {
             sampler,
             uniform_buf,
             doc_texture: None,
+            sel_texture,
+            sel_tex_size: (1, 1),
+            has_selection: false,
             cached_blit_bg: None,
             doc_tex_size: (0, 0),
             last_rendered_gen: 0,
@@ -350,6 +390,12 @@ impl VulkanRenderer {
                 preview.cb_mg,
                 preview.cb_yb,
                 if (preview.cb_cr.abs() > 0.001 || preview.cb_mg.abs() > 0.001 || preview.cb_yb.abs() > 0.001) { 1.0 } else { 0.0 },
+            ],
+            sel_info: [
+                if self.has_selection { 1.0 } else { 0.0 },
+                self.sel_tex_size.0 as f32,
+                self.sel_tex_size.1 as f32,
+                0.0,
             ],
         };
         self.queue
@@ -426,28 +472,9 @@ impl VulkanRenderer {
                 usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-            let doc_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("cached_blit_bg"),
-                layout: &self.blit_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniform_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&doc_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
             self.doc_texture = Some(tex);
-            self.cached_blit_bg = Some(bg);
             self.doc_tex_size = (tex_w, tex_h);
+            self.rebuild_blit_bind_group();
             self.last_rendered_gen = 0;
             need_full = true;
         }
@@ -508,8 +535,110 @@ impl VulkanRenderer {
                 }
                 self.last_rendered_gen = generation;
             }
+            self.sync_selection_texture(doc);
         }
 
         self.present_cached_only(camera, preview)
+    }
+
+    fn rebuild_blit_bind_group(&mut self) {
+        let Some(doc_tex) = &self.doc_texture else {
+            return;
+        };
+        let doc_view = doc_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let sel_view = self.sel_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.cached_blit_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("cached_blit_bg"),
+            layout: &self.blit_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&doc_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&sel_view),
+                },
+            ],
+        }));
+    }
+
+    fn sync_selection_texture(&mut self, doc: &Document) {
+        let Some(sel) = doc.selection.as_ref() else {
+            self.has_selection = false;
+            return;
+        };
+        let bounds = sel.content_bounds();
+        if bounds.is_empty() {
+            self.has_selection = false;
+            return;
+        }
+        let doc_w = doc.size.width.max(1);
+        let doc_h = doc.size.height.max(1);
+        let max_dim = 768u32;
+        let scale = (max_dim as f32 / doc_w.max(doc_h) as f32).min(1.0);
+        let sw = ((doc_w as f32 * scale).round() as u32).clamp(1, max_dim);
+        let sh = ((doc_h as f32 * scale).round() as u32).clamp(1, max_dim);
+
+        if self.sel_tex_size != (sw, sh) {
+            self.sel_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("stonebridgecraft_sel_mask"),
+                size: wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.sel_tex_size = (sw, sh);
+            self.rebuild_blit_bind_group();
+        }
+
+        let mut buf = vec![0u8; (sw as usize) * (sh as usize)];
+        let sx_step = doc_w as f32 / sw as f32;
+        let sy_step = doc_h as f32 / sh as f32;
+        for y in 0..sh {
+            let dy = ((y as f32 + 0.5) * sy_step) as i32;
+            if dy < bounds.y0 || dy >= bounds.y1 {
+                continue;
+            }
+            let row = (y as usize) * (sw as usize);
+            for x in 0..sw {
+                let dx = ((x as f32 + 0.5) * sx_step) as i32;
+                if dx < bounds.x0 || dx >= bounds.x1 {
+                    continue;
+                }
+                let v = sel.sample_channel(dx, dy, 0);
+                if v > 0.004 {
+                    buf[row + x as usize] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
+            }
+        }
+
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.sel_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &buf,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(sw),
+                rows_per_image: Some(sh),
+            },
+            wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
+        );
+        self.has_selection = true;
     }
 }

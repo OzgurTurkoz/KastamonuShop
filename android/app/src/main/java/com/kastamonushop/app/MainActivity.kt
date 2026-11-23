@@ -258,7 +258,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.7.0",
+                    text = "v0.7.1",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -884,26 +884,7 @@ fun StonebridgeStudioScreen(
                 }
             }
         }
-        state.selectionBounds?.let { sb ->
-            val view = canvasViewRef
-            if (view != null && selectPreviewRect == null) {
-                val _tick = cameraTick
-                val (sx0, sy0) = view.docToScreen(sb.x0.toFloat(), sb.y0.toFloat())
-                val (sx1, sy1) = view.docToScreen(sb.x1.toFloat(), sb.y1.toFloat())
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val l = min(sx0, sx1)
-                    val t = min(sy0, sy1)
-                    val w = kotlin.math.abs(sx1 - sx0).coerceAtLeast(2f)
-                    val h = kotlin.math.abs(sy1 - sy0).coerceAtLeast(2f)
-                    drawRect(
-                        color = Color.White,
-                        topLeft = Offset(l, t),
-                        size = Size(w, h),
-                        style = Stroke(width = 2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)))
-                    )
-                }
-            }
-        }
+        // Active selection pixel mask & organic contour are rendered at 60 FPS directly in blit.wgsl
         // Clone Stamp Source Crosshair
         if (state.activeTool == ActiveTool.CLONE_STAMP) {
             state.cloneSourceDoc?.let { (cx, cy) ->
@@ -1793,7 +1774,7 @@ fun StonebridgeStudioScreen(
                             )
                             CircularDockButton(
                                 icon = Icons.Default.AutoFixHigh,
-                                label = "Sihirli Değnek",
+                                label = "Değnek",
                                 selected = state.activeTool == ActiveTool.SELECT_WAND,
                                 onClick = { vm.setTool(ActiveTool.SELECT_WAND) }
                             )
@@ -1822,6 +1803,24 @@ fun StonebridgeStudioScreen(
                                     icon = Icons.Default.Close,
                                     label = "Kaldır",
                                     onClick = { vm.deselect() }
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilterChip(
+                                selected = state.selectAddMode,
+                                onClick = { vm.toggleSelectAddMode() },
+                                label = { Text(if (state.selectAddMode) "Ekle (+) Açık" else "Ekle (+)", fontSize = 11.sp) }
+                            )
+                            if (state.activeTool == ActiveTool.SELECT_WAND) {
+                                FilterChip(
+                                    selected = state.wandContiguous,
+                                    onClick = { vm.toggleWandContiguous() },
+                                    label = { Text(if (state.wandContiguous) "Bitişik ✓" else "Tüm Renk", fontSize = 11.sp) }
                                 )
                             }
                         }
