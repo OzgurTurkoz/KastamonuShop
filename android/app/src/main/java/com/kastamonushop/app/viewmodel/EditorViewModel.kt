@@ -1,11 +1,14 @@
 package com.kastamonushop.app.viewmodel
 
 import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kastamonushop.app.bridge.NativeSurfaceBridge
+import com.kastamonushop.app.data.SavedGalleryStore
+import com.kastamonushop.app.data.SavedPhotoItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -21,6 +24,7 @@ import uniffi.kastamonushop_ffi.StrokeSample
 import uniffi.kastamonushop_ffi.createKastamonuEngine
 import uniffi.kastamonushop_ffi.engineVersionInfo
 import uniffi.kastamonushop_ffi.getLastGpuError
+import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -28,14 +32,18 @@ import java.util.concurrent.atomic.AtomicReference
 enum class ActiveTool {
     NONE,
     BRUSH,
-    ERASER
+    ERASER,
+    EYEDROPPER
 }
 
 data class EditorUiState(
     val engineVersion: String = "",
     val docInfo: DocumentInfo? = null,
     val layers: List<LayerSummary> = emptyList(),
+    val savedPhotos: List<SavedPhotoItem> = emptyList(),
     val activeTool: ActiveTool = ActiveTool.NONE,
+    val rulerEnabled: Boolean = false,
+    val symmetryMode: String = "off",
     val brushSize: Float = 28f,
     val brushHardness: Float = 0.85f,
     val brushOpacity: Float = 1.0f,
@@ -63,13 +71,17 @@ class EditorViewModel : ViewModel() {
     private val pendingAdjParams = AtomicReference<String?>(null)
     private val adjDrainScheduled = AtomicBoolean(false)
 
-    // Coalesced live pixel filter preview state (Gaussian Blur / Sharpen)
+    // Coalesced live pixel filter preview state
     private val pendingFilterUpdate = AtomicReference<Pair<String, String>?>(null)
     private val filterDrainScheduled = AtomicBoolean(false)
 
     // Coalesced layer opacity slider state
     private val pendingOpacityUpdate = AtomicReference<Pair<ULong, Float>?>(null)
     private val opacityDrainScheduled = AtomicBoolean(false)
+
+    // Coalesced eyedropper sample state
+    private val pendingSamplePt = AtomicReference<Pair<Float, Float>?>(null)
+    private val sampleDrainScheduled = AtomicBoolean(false)
 
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
@@ -84,6 +96,20 @@ class EditorViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         paintExecutor.shutdown()
+    }
+
+    fun loadSavedGallery(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val items = SavedGalleryStore.list(context)
+            _uiState.update { it.copy(savedPhotos = items) }
+        }
+    }
+
+    fun deleteSavedPhoto(context: Context, id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val remaining = SavedGalleryStore.delete(context, id)
+            _uiState.update { it.copy(savedPhotos = remaining) }
+        }
     }
 
     private fun showStatus(msg: String, autoHideMs: Long = 3000L) {
@@ -113,6 +139,65 @@ class EditorViewModel : ViewModel() {
 
     fun setTool(tool: ActiveTool) {
         _uiState.update { it.copy(activeTool = tool) }
+    }
+
+    fun toggleRuler() {
+        val next = !_uiState.value.rulerEnabled
+        _uiState.update { it.copy(rulerEnabled = next) }
+        showStatus(
+            if (next) "Cetvel açık — düz çizgi çek (0°/45°/90° otomatik hizalanır)"
+            else "Cetvel kapatıldı — serbest çizim",
+            2200L
+        )
+    }
+
+    fun cycleSymmetry() {
+        val order = listOf("off", "vertical", "horizontal", "dual")
+        val curIdx = order.indexOf(_uiState.value.symmetryMode).coerceAtLeast(0)
+        val nextMode = order[(curIdx + 1) % order.size]
+        setSymmetry(nextMode)
+    }
+
+    fun setSymmetry(mode: String) {
+        _uiState.update { it.copy(symmetryMode = mode) }
+        paintExecutor.execute {
+            runCatching {
+                engine.setSymmetry(mode)
+                val label = when (mode) {
+                    "vertical" -> "Ayna: Dikey simetri açık"
+                    "horizontal" -> "Ayna: Yatay simetri açık"
+                    "dual" -> "Ayna: Dörtlü (Mandala) simetri açık"
+                    else -> "Ayna simetrisi kapatıldı"
+                }
+                showStatus(label, 2000L)
+            }.onFailure { err ->
+                showStatus("Simetri hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun sampleColorAt(docX: Float, docY: Float) {
+        pendingSamplePt.set(docX to docY)
+        if (sampleDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingColorSamples() }
+        }
+    }
+
+    private fun drainPendingColorSamples() {
+        while (true) {
+            val pt = pendingSamplePt.getAndSet(null)
+            if (pt == null) {
+                sampleDrainScheduled.set(false)
+                if (pendingSamplePt.get() == null) return
+                if (!sampleDrainScheduled.compareAndSet(false, true)) return
+                continue
+            }
+            runCatching {
+                val hex = engine.sampleColorHex(pt.first, pt.second)
+                _uiState.update { it.copy(colorHex = hex) }
+                showStatus("Renk seçildi: $hex", 1400L)
+            }
+        }
     }
 
     fun updateBrush(
@@ -145,7 +230,7 @@ class EditorViewModel : ViewModel() {
 
     fun beginLiveStroke(sample: StrokeSample) {
         val s = _uiState.value
-        if (s.activeTool == ActiveTool.NONE) return
+        if (s.activeTool != ActiveTool.BRUSH && s.activeTool != ActiveTool.ERASER) return
         val activeLayer = s.layers.firstOrNull { it.isActive }
         if (activeLayer?.locked == true) {
             showStatus("Orijinal fotoğraf kilitli — düzenlemek için Katman panelinden kilidi açabilirsin", 3200L)
@@ -164,7 +249,8 @@ class EditorViewModel : ViewModel() {
     }
 
     fun pushLiveStroke(samples: List<StrokeSample>) {
-        if (_uiState.value.activeTool == ActiveTool.NONE || samples.isEmpty()) return
+        val tool = _uiState.value.activeTool
+        if ((tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER) || samples.isEmpty()) return
         synchronized(pendingLock) {
             pendingSamples.addAll(samples)
         }
@@ -192,7 +278,8 @@ class EditorViewModel : ViewModel() {
     }
 
     fun finishLiveStroke() {
-        if (_uiState.value.activeTool == ActiveTool.NONE) return
+        val tool = _uiState.value.activeTool
+        if (tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER) return
         paintExecutor.execute {
             drainPendingSamples()
             runCatching {
@@ -205,12 +292,77 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun commitRulerStroke(samples: List<StrokeSample>) {
+        val s = _uiState.value
+        if ((s.activeTool != ActiveTool.BRUSH && s.activeTool != ActiveTool.ERASER) || samples.isEmpty()) return
+        val activeLayer = s.layers.firstOrNull { it.isActive }
+        if (activeLayer?.locked == true) {
+            showStatus("Orijinal fotoğraf kilitli — düzenlemek için Katman panelinden kilidi açabilirsin", 3200L)
+            return
+        }
+        val isEraser = s.activeTool == ActiveTool.ERASER
+        paintExecutor.execute {
+            runCatching {
+                engine.beginLiveStroke(samples.first(), s.colorHex, isEraser)
+                if (samples.size > 1) {
+                    engine.pushLiveStroke(samples.drop(1))
+                }
+                val info = engine.finishLiveStroke()
+                _uiState.update { it.copy(docInfo = info) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Cetvel çizim hatası: ${err.message}")
+            }
+        }
+    }
+
     fun cancelLiveStroke() {
         synchronized(pendingLock) { pendingSamples.clear() }
         paintExecutor.execute {
             runCatching {
                 engine.cancelLiveStroke()
                 NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    // Canvas rotate / flip & crop
+    fun transformCanvas(action: String, labelTr: String) {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.transformCanvas(action)
+                val layers = engine.getLayers()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        fitCameraSignal = it.fitCameraSignal + 1
+                    )
+                }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(labelTr, 1800L)
+            }.onFailure { err ->
+                showStatus("Döndürme hatası: ${err.message}", 3500L)
+            }
+        }
+    }
+
+    fun cropCanvas(x: Int, y: Int, width: Int, height: Int) {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.cropCanvas(x, y, width, height)
+                val layers = engine.getLayers()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        fitCameraSignal = it.fitCameraSignal + 1
+                    )
+                }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Kırpıldı (${info.width}×${info.height})", 2200L)
+            }.onFailure { err ->
+                showStatus("Kırpma hatası: ${err.message}", 3500L)
             }
         }
     }
@@ -282,7 +434,7 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    // Coalesced real-time live pixel filter preview (Gaussian Blur / Sharpen)
+    // Coalesced real-time live pixel filter preview
     fun beginLiveFilter() {
         pendingFilterUpdate.set(null)
         paintExecutor.execute {
@@ -348,23 +500,6 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    fun cancelAllLivePreviews() {
-        pendingAdjParams.set(null)
-        pendingFilterUpdate.set(null)
-        paintExecutor.execute {
-            liveAdjustmentLayerId = null
-            runCatching { engine.cancelLiveAdjustment() }
-            runCatching { engine.cancelLiveFilter() }
-            runCatching {
-                val info = engine.getDocumentInfo()
-                val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers) }
-                NativeSurfaceBridge.nativeRenderFrame()
-            }
-        }
-    }
-
-    // True ON/OFF toggles for Black & White and Invert
     fun toggleBlackAndWhite() {
         val existingId = _uiState.value.bwLayerId
         paintExecutor.execute {
@@ -555,6 +690,57 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun newBlankCanvas() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.newDocument("StonebridgeCraft Canvas", 2048u, 2048u)
+                val layers = engine.getLayers()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        bwLayerId = null,
+                        invertLayerId = null,
+                        symmetryMode = "off",
+                        activeTool = ActiveTool.NONE,
+                        fitCameraSignal = it.fitCameraSignal + 1
+                    )
+                }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun openSavedPhoto(item: SavedPhotoItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isBusy = true) }
+            showStatus("Kaydedilen fotoğraf açılıyor...", 0L)
+            runCatching {
+                val f = File(item.filePath)
+                val bytes = f.readBytes()
+                val info = engine.openDocumentBytes(f.name, bytes)
+                val layers = engine.getLayers()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        isBusy = false,
+                        bwLayerId = null,
+                        invertLayerId = null,
+                        symmetryMode = "off",
+                        activeTool = ActiveTool.NONE,
+                        fitCameraSignal = it.fitCameraSignal + 1
+                    )
+                }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Açıldı: ${item.displayName}")
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Açma hatası: ${err.message}", 4500L)
+            }
+        }
+    }
+
     fun openDocumentFromUri(resolver: ContentResolver, uri: Uri, asLayer: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
@@ -576,6 +762,7 @@ class EditorViewModel : ViewModel() {
                         isBusy = false,
                         bwLayerId = if (asLayer) it.bwLayerId else null,
                         invertLayerId = if (asLayer) it.invertLayerId else null,
+                        symmetryMode = if (asLayer) it.symmetryMode else "off",
                         fitCameraSignal = if (asLayer) it.fitCameraSignal else it.fitCameraSignal + 1
                     )
                 }
@@ -588,15 +775,30 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    fun exportDocumentToUri(resolver: ContentResolver, uri: Uri, formatExt: String) {
+    fun exportDocumentToUri(context: Context, uri: Uri, formatExt: String) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
             showStatus("Kaydediliyor ($formatExt)...", 0L)
             runCatching {
                 val bytes = engine.exportDocumentBytes(formatExt)
-                resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
                     ?: error("Hedef dosyaya yazılamadı")
-                _uiState.update { it.copy(isBusy = false) }
+                val doc = _uiState.value.docInfo
+                val previewBytes = if (formatExt.equals("png", true) || formatExt.equals("jpg", true) || formatExt.equals("webp", true)) {
+                    null
+                } else {
+                    runCatching { engine.exportDocumentBytes("jpg") }.getOrNull()
+                }
+                val updatedGallery = SavedGalleryStore.recordSavedPhoto(
+                    context = context,
+                    displayName = doc?.name ?: "StonebridgeCraft",
+                    formatExt = formatExt,
+                    exportedBytes = bytes,
+                    previewPngBytes = previewBytes,
+                    width = doc?.width?.toInt() ?: 0,
+                    height = doc?.height?.toInt() ?: 0
+                )
+                _uiState.update { it.copy(isBusy = false, savedPhotos = updatedGallery) }
                 showStatus("Kaydedildi (${bytes.size / 1024} KB)")
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }

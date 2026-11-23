@@ -1,6 +1,8 @@
-//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.4.4 — StonebridgeCraft).
-//! - Undo-clean live adjustment preview (prevents undo-stack bloat during slider drags)
-//! - Undo-clean live pixel filter preview (auto-targets photo layer, restores lock cleanly)
+//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.5.0 — StonebridgeCraft).
+//! - Live undo-clean adjustments & pixel filters
+//! - Eyedropper color sampling (`sample_color_hex`)
+//! - Painting symmetry (`set_symmetry`: vertical, horizontal, dual, diagonal, off)
+//! - Canvas crop & rotation/flip (`crop_canvas`, `transform_canvas`)
 
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -267,8 +269,89 @@ impl KastamonuEngine {
         Ok(out.to_string())
     }
 
+    /// Eyedropper: samples the visible composite pixel color at document coordinates `(x, y)` and returns `#RRGGBB`.
+    pub fn sample_color_hex(&self, x: f32, y: f32) -> Result<String, EngineError> {
+        let mut guard = self.core.lock();
+        let out = guard
+            .session
+            .execute(
+                "document.sampleColor",
+                json!({ "x": x as f64, "y": y as f64, "size": 3 }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let arr = out
+            .as_array()
+            .filter(|a| a.len() >= 3)
+            .ok_or_else(|| EngineError::CommandFailed { detail: "Geçersiz renk örneği".into() })?;
+        let r = (arr[0].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+        let g = (arr[1].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+        let b = (arr[2].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+        Ok(format!("#{r:02X}{g:02X}{b:02X}"))
+    }
+
+    /// Sets or disables painting symmetry (`"off"`, `"vertical"`, `"horizontal"`, `"dual"`, `"diagonal"`).
+    pub fn set_symmetry(&self, mode: String) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let m = mode.trim().to_ascii_lowercase();
+        if m.is_empty() || m == "off" {
+            let _ = guard.session.execute("paint.symmetryDisable", json!({}));
+            return Ok(());
+        }
+        guard
+            .session
+            .execute("paint.setSymmetry", json!({ "mode": m }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        Ok(())
+    }
+
+    /// Rotates or flips the whole canvas (`"90cw"`, `"90ccw"`, `"flip_h"`, `"flip_v"`).
+    pub fn transform_canvas(&self, action: String) -> Result<DocumentInfo, EngineError> {
+        let cmd = match action.as_str() {
+            "90cw" => "image.imageRotation.90cw",
+            "90ccw" => "image.imageRotation.90ccw",
+            "flip_h" => "image.imageRotation.flipCanvasHorizontal",
+            "flip_v" => "image.imageRotation.flipCanvasVertical",
+            other => {
+                return Err(EngineError::InvalidParams {
+                    detail: format!("Bilinmeyen döndürme komutu: {other}"),
+                })
+            }
+        };
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_adjustment = None;
+        guard.live_filter = None;
+        guard
+            .session
+            .execute(cmd, json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Crops the canvas to the given rectangle `(x, y, width, height)` in document pixels.
+    pub fn crop_canvas(&self, x: i32, y: i32, width: i32, height: i32) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_adjustment = None;
+        guard.live_filter = None;
+        guard
+            .session
+            .execute(
+                "image.crop",
+                json!({
+                    "x": x.max(0),
+                    "y": y.max(0),
+                    "width": width.max(1),
+                    "height": height.max(1)
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     /// Creates a new live adjustment layer (e.g. `brightnessContrast`, `hueSaturation`) and returns its layer ID.
-    /// Tracks the session so repeated slider updates never bloat the Undo stack.
     pub fn begin_live_adjustment(&self, kind: String, params_json: String) -> Result<u64, EngineError> {
         let params: Value = if params_json.trim().is_empty() {
             json!({})
@@ -280,7 +363,6 @@ impl KastamonuEngine {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
 
-        // Cleanly cancel any dangling live adjustment session first
         if let Some(old_adj) = guard.live_adjustment.take() {
             if old_adj.has_updated {
                 let _ = guard.session.execute("edit.undo", json!({}));
@@ -297,7 +379,6 @@ impl KastamonuEngine {
             .and_then(Value::as_u64)
             .ok_or_else(|| EngineError::CommandFailed { detail: "Adjustment layer id missing".into() })?;
 
-        // Only track interactive slider adjustments; instant toggles (blackWhite/invert) are standalone
         if kind != "blackWhite" && kind != "invert" {
             guard.live_adjustment = Some(LiveAdjustmentSession {
                 layer_id,
@@ -337,7 +418,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Commits the live adjustment preview.
     pub fn commit_live_adjustment(&self) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         guard.live_adjustment = None;
@@ -345,7 +425,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Cancels the live adjustment preview cleanly via undo so zero stray undo entries remain.
     pub fn cancel_live_adjustment(&self) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         if let Some(adj) = guard.live_adjustment.take() {
@@ -358,7 +437,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Deletes a specific layer by ID (used for toggling B&W / Invert off).
     pub fn delete_layer_by_id(&self, layer_id: u64) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -370,7 +448,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Starts a live pixel filter preview session on the photo/raster layer.
     pub fn begin_live_filter(&self) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -427,7 +504,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Updates the live pixel filter preview in real time as the slider moves.
     pub fn update_live_filter(&self, command_id: String, params_json: String) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let Some(mut lf) = guard.live_filter.take() else {
@@ -463,7 +539,6 @@ impl KastamonuEngine {
         }
     }
 
-    /// Commits the current live pixel filter preview and restores lock/selection state.
     pub fn commit_live_filter(&self) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let Some(lf) = guard.live_filter.take() else {
@@ -486,7 +561,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Cancels the live pixel filter preview, restoring original pixels and lock state.
     pub fn cancel_live_filter(&self) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let Some(lf) = guard.live_filter.take() else {

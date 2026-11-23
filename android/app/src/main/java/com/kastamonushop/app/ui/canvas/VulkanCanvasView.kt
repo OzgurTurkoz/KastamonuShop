@@ -7,26 +7,46 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.kastamonushop.app.bridge.NativeSurfaceBridge
 import uniffi.kastamonushop_ffi.StrokeSample
+import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
+
+data class RulerLinePreview(
+    val startX: Float,
+    val startY: Float,
+    val endX: Float,
+    val endY: Float,
+    val angleDeg: Int,
+    val isSnapped: Boolean
+)
 
 /**
  * Hardware-accelerated Vulkan/GLES canvas:
- * - When a drawing tool is active: 1-finger draws with distance-decimated sampling, 2-finger pans/zooms/rotates.
- * - When idle (no drawing tool active): 1-finger smoothly pans the canvas, 2-finger zooms/rotates.
+ * - Canvas movement (pan, zoom, rotate) is STRICTLY two-finger only (never accidental 1-finger drift).
+ * - 1-finger draws when Brush/Eraser is active, draws magnetic straight lines when Ruler is ON,
+ *   or samples colors when Eyedropper is active.
  */
 class VulkanCanvasView(
     context: Context,
     private val getDocSize: () -> Pair<Int, Int>,
     private val getBrushSize: () -> Float,
     private val isDrawingActive: () -> Boolean,
+    private val isEyedropperActive: () -> Boolean,
+    private val isRulerEnabled: () -> Boolean,
     private val onStrokeBegin: (StrokeSample) -> Unit,
     private val onStrokeMove: (List<StrokeSample>) -> Unit,
     private val onStrokeEnd: () -> Unit,
-    private val onStrokeCancel: () -> Unit
+    private val onStrokeCancel: () -> Unit,
+    private val onRulerPreview: (RulerLinePreview?) -> Unit,
+    private val onRulerStrokeCommit: (List<StrokeSample>) -> Unit,
+    private val onEyedropperSample: (Float, Float) -> Unit,
+    private val onCameraChanged: () -> Unit = {}
 ) : SurfaceView(context), SurfaceHolder.Callback {
 
     private var panX = 0f
@@ -35,14 +55,19 @@ class VulkanCanvasView(
     private var rotationRad = 0f
 
     private var isMultiTouch = false
-    private var isSingleFingerPan = false
     private var strokeActive = false
+    private var rulerActive = false
+    private var eyedropperActive = false
+
     private var prevMidX = 0f
     private var prevMidY = 0f
     private var prevDist = 1f
     private var prevAngle = 0f
-    private var prevPanX = 0f
-    private var prevPanY = 0f
+
+    private var rulerStartScreenX = 0f
+    private var rulerStartScreenY = 0f
+    private var rulerEndScreenX = 0f
+    private var rulerEndScreenY = 0f
 
     private var lastSampleDocX = 0f
     private var lastSampleDocY = 0f
@@ -63,6 +88,7 @@ class VulkanCanvasView(
         NativeSurfaceBridge.nativeResizeSurface(width.coerceAtLeast(1), height.coerceAtLeast(1))
         NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
         NativeSurfaceBridge.nativeRenderFrame()
+        onCameraChanged()
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -73,13 +99,27 @@ class VulkanCanvasView(
         val (docW, docH) = getDocSize()
         val viewW = width.coerceAtLeast(1).toFloat()
         val viewH = height.coerceAtLeast(1).toFloat()
-        val fitZoom = min(viewW / docW.coerceAtLeast(1), viewH / docH.coerceAtLeast(1)) * 0.88f
+        val fitZoom = min(viewW / docW.coerceAtLeast(1), viewH / docH.coerceAtLeast(1)) * 0.86f
         panX = 0f
         panY = 0f
         zoom = fitZoom.coerceIn(0.05f, 16f)
         rotationRad = 0f
         NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
         NativeSurfaceBridge.nativeRenderFrame()
+        onCameraChanged()
+    }
+
+    fun docToScreen(dx: Float, dy: Float): Pair<Float, Float> {
+        val (docW, docH) = getDocSize()
+        val cx = width * 0.5f
+        val cy = height * 0.5f
+        val rx = (dx - docW * 0.5f) * zoom
+        val ry = (dy - docH * 0.5f) * zoom
+        val c = cos(rotationRad)
+        val s = sin(rotationRad)
+        val px = rx * c - ry * s
+        val py = rx * s + ry * c
+        return (px + cx + panX) to (py + cy + panY)
     }
 
     private fun screenToDoc(sx: Float, sy: Float): Pair<Float, Float> {
@@ -121,8 +161,48 @@ class VulkanCanvasView(
         return false
     }
 
+    private fun computeSnappedRulerEnd(sx: Float, sy: Float): Triple<Float, Float, Pair<Int, Boolean>> {
+        val dx = sx - rulerStartScreenX
+        val dy = sy - rulerStartScreenY
+        val len = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+        if (len < 4f) return Triple(sx, sy, 0 to false)
+
+        val rawDeg = (atan2(dy.toDouble(), dx.toDouble()) * 180.0 / PI).toFloat()
+        val nearest45 = (rawDeg / 45f).roundToInt() * 45f
+        val snapped = abs(rawDeg - nearest45) <= 4.5f
+        val finalDeg = if (snapped) nearest45 else rawDeg
+        val rad = finalDeg * PI / 180.0
+        val ex = rulerStartScreenX + (cos(rad) * len).toFloat()
+        val ey = rulerStartScreenY + (sin(rad) * len).toFloat()
+        val normDeg = ((finalDeg.roundToInt() % 360) + 360) % 360
+        return Triple(ex, ey, normDeg to snapped)
+    }
+
+    private fun buildRulerStrokeSamples(): List<StrokeSample> {
+        val (x0, y0) = screenToDoc(rulerStartScreenX, rulerStartScreenY)
+        val (x1, y1) = screenToDoc(rulerEndScreenX, rulerEndScreenY)
+        val dist = hypot((x1 - x0).toDouble(), (y1 - y0).toDouble()).toFloat()
+        val step = max(2f, getBrushSize() * 0.18f)
+        val count = max(2, (dist / step).roundToInt() + 1).coerceAtMost(400)
+        val out = ArrayList<StrokeSample>(count)
+        for (i in 0 until count) {
+            val t = if (count <= 1) 0f else i.toFloat() / (count - 1).toFloat()
+            out.add(
+                StrokeSample(
+                    x = x0 + (x1 - x0) * t,
+                    y = y0 + (y1 - y0) * t,
+                    pressure = 1.0f,
+                    tiltX = 0f,
+                    tiltY = 0f
+                )
+            )
+        }
+        return out
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // Two-finger ONLY pan, zoom, and rotate
         if (event.pointerCount >= 2) {
             val x0 = event.getX(0)
             val y0 = event.getY(0)
@@ -136,7 +216,11 @@ class VulkanCanvasView(
             when (event.actionMasked) {
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     isMultiTouch = true
-                    isSingleFingerPan = false
+                    eyedropperActive = false
+                    if (rulerActive) {
+                        rulerActive = false
+                        onRulerPreview(null)
+                    }
                     if (strokeActive) {
                         strokeActive = false
                         onStrokeCancel()
@@ -160,6 +244,7 @@ class VulkanCanvasView(
 
                         NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
                         NativeSurfaceBridge.nativeRenderFrame()
+                        onCameraChanged()
                     }
                 }
             }
@@ -173,11 +258,23 @@ class VulkanCanvasView(
             return true
         }
 
+        // Single-finger interactions: Eyedropper, Ruler straight-line, or Freehand Brush/Eraser.
+        // When idle (no tool selected), single-finger touch intentionally does NOT pan the canvas.
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (isDrawingActive()) {
+                if (isEyedropperActive()) {
+                    eyedropperActive = true
+                    val (dx, dy) = screenToDoc(event.x, event.y)
+                    onEyedropperSample(dx, dy)
+                } else if (isDrawingActive() && isRulerEnabled()) {
+                    rulerActive = true
+                    rulerStartScreenX = event.x
+                    rulerStartScreenY = event.y
+                    rulerEndScreenX = event.x
+                    rulerEndScreenY = event.y
+                    onRulerPreview(RulerLinePreview(event.x, event.y, event.x, event.y, 0, false))
+                } else if (isDrawingActive()) {
                     strokeActive = true
-                    isSingleFingerPan = false
                     val sample = makeSample(
                         event.x,
                         event.y,
@@ -188,21 +285,28 @@ class VulkanCanvasView(
                     lastSampleDocX = sample.x
                     lastSampleDocY = sample.y
                     onStrokeBegin(sample)
-                } else {
-                    isSingleFingerPan = true
-                    strokeActive = false
-                    prevPanX = event.x
-                    prevPanY = event.y
                 }
             }
             MotionEvent.ACTION_MOVE -> {
-                if (isSingleFingerPan) {
-                    panX += (event.x - prevPanX)
-                    panY += (event.y - prevPanY)
-                    prevPanX = event.x
-                    prevPanY = event.y
-                    NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
-                    NativeSurfaceBridge.nativeRenderFrame()
+                if (eyedropperActive) {
+                    val (dx, dy) = screenToDoc(event.x, event.y)
+                    onEyedropperSample(dx, dy)
+                    return true
+                }
+                if (rulerActive) {
+                    val (ex, ey, degInfo) = computeSnappedRulerEnd(event.x, event.y)
+                    rulerEndScreenX = ex
+                    rulerEndScreenY = ey
+                    onRulerPreview(
+                        RulerLinePreview(
+                            startX = rulerStartScreenX,
+                            startY = rulerStartScreenY,
+                            endX = ex,
+                            endY = ey,
+                            angleDeg = degInfo.first,
+                            isSnapped = degInfo.second
+                        )
+                    )
                     return true
                 }
                 if (!strokeActive) return true
@@ -230,14 +334,26 @@ class VulkanCanvasView(
                 }
             }
             MotionEvent.ACTION_UP -> {
-                isSingleFingerPan = false
+                eyedropperActive = false
+                if (rulerActive) {
+                    rulerActive = false
+                    onRulerPreview(null)
+                    val samples = buildRulerStrokeSamples()
+                    if (samples.size >= 2) {
+                        onRulerStrokeCommit(samples)
+                    }
+                }
                 if (strokeActive) {
                     strokeActive = false
                     onStrokeEnd()
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
-                isSingleFingerPan = false
+                eyedropperActive = false
+                if (rulerActive) {
+                    rulerActive = false
+                    onRulerPreview(null)
+                }
                 if (strokeActive) {
                     strokeActive = false
                     onStrokeCancel()
