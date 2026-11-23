@@ -2,6 +2,7 @@ package com.kastamonushop.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -278,6 +279,39 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
     var blurRadiusVal by remember { mutableFloatStateOf(0f) }
     var sharpenAmountVal by remember { mutableFloatStateOf(0f) }
 
+    fun dismissLivePanelIfActive() {
+        when (activePanel) {
+            BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE -> {
+                vm.cancelLiveAdjustment()
+                activePanel = BottomPanel.DOCK
+            }
+            BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT -> {
+                vm.cancelLiveFilter()
+                activePanel = BottomPanel.DOCK
+            }
+            else -> Unit
+        }
+    }
+
+    // Android hardware/gesture Back button closes Layers drawer or steps back out of sub-menus safely
+    BackHandler(enabled = showLayers || activePanel != BottomPanel.DOCK) {
+        if (showLayers) {
+            showLayers = false
+        } else {
+            when (activePanel) {
+                BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE -> {
+                    vm.cancelLiveAdjustment()
+                    activePanel = BottomPanel.ADJUST_MENU
+                }
+                BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT -> {
+                    vm.cancelLiveFilter()
+                    activePanel = BottomPanel.FILTER_MENU
+                }
+                else -> activePanel = BottomPanel.DOCK
+            }
+        }
+    }
+
     LaunchedEffect(state.fitCameraSignal) {
         if (state.fitCameraSignal > 0) {
             canvasViewRef?.fitToDocument()
@@ -288,6 +322,7 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
+            dismissLivePanelIfActive()
             vm.openDocumentFromUri(context.contentResolver, uri, asLayer = openAsLayer)
         }
     }
@@ -315,6 +350,7 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                         (d?.width?.toInt() ?: 2048) to (d?.height?.toInt() ?: 2048)
                     },
                     getBrushSize = { vm.uiState.value.brushSize },
+                    isDrawingActive = { vm.uiState.value.activeTool != ActiveTool.NONE },
                     onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
                     onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
                     onStrokeEnd = { vm.finishLiveStroke() },
@@ -403,14 +439,20 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                     icon = Icons.AutoMirrored.Filled.Undo,
                     label = "Geri",
                     enabled = state.docInfo?.canUndo == true,
-                    onClick = { vm.undo() }
+                    onClick = {
+                        dismissLivePanelIfActive()
+                        vm.undo()
+                    }
                 )
 
                 TopBarButton(
                     icon = Icons.AutoMirrored.Filled.Redo,
                     label = "İleri",
                     enabled = state.docInfo?.canRedo == true,
-                    onClick = { vm.redo() }
+                    onClick = {
+                        dismissLivePanelIfActive()
+                        vm.redo()
+                    }
                 )
 
                 TopBarButton(

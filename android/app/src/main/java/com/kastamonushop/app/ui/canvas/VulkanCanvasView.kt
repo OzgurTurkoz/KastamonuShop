@@ -14,13 +14,15 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * Hardware-accelerated Vulkan/GLES canvas with distance-decimated stroke sampling
- * so even giant 250px brushes paint at silky-smooth 60fps.
+ * Hardware-accelerated Vulkan/GLES canvas:
+ * - When a drawing tool is active: 1-finger draws with distance-decimated sampling, 2-finger pans/zooms/rotates.
+ * - When idle (no drawing tool active): 1-finger smoothly pans the canvas, 2-finger zooms/rotates.
  */
 class VulkanCanvasView(
     context: Context,
     private val getDocSize: () -> Pair<Int, Int>,
     private val getBrushSize: () -> Float,
+    private val isDrawingActive: () -> Boolean,
     private val onStrokeBegin: (StrokeSample) -> Unit,
     private val onStrokeMove: (List<StrokeSample>) -> Unit,
     private val onStrokeEnd: () -> Unit,
@@ -33,11 +35,14 @@ class VulkanCanvasView(
     private var rotationRad = 0f
 
     private var isMultiTouch = false
+    private var isSingleFingerPan = false
     private var strokeActive = false
     private var prevMidX = 0f
     private var prevMidY = 0f
     private var prevDist = 1f
     private var prevAngle = 0f
+    private var prevPanX = 0f
+    private var prevPanY = 0f
 
     private var lastSampleDocX = 0f
     private var lastSampleDocY = 0f
@@ -131,6 +136,7 @@ class VulkanCanvasView(
             when (event.actionMasked) {
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     isMultiTouch = true
+                    isSingleFingerPan = false
                     if (strokeActive) {
                         strokeActive = false
                         onStrokeCancel()
@@ -169,19 +175,36 @@ class VulkanCanvasView(
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                strokeActive = true
-                val sample = makeSample(
-                    event.x,
-                    event.y,
-                    event.pressure,
-                    event.getAxisValue(MotionEvent.AXIS_TILT),
-                    event.orientation
-                )
-                lastSampleDocX = sample.x
-                lastSampleDocY = sample.y
-                onStrokeBegin(sample)
+                if (isDrawingActive()) {
+                    strokeActive = true
+                    isSingleFingerPan = false
+                    val sample = makeSample(
+                        event.x,
+                        event.y,
+                        event.pressure,
+                        event.getAxisValue(MotionEvent.AXIS_TILT),
+                        event.orientation
+                    )
+                    lastSampleDocX = sample.x
+                    lastSampleDocY = sample.y
+                    onStrokeBegin(sample)
+                } else {
+                    isSingleFingerPan = true
+                    strokeActive = false
+                    prevPanX = event.x
+                    prevPanY = event.y
+                }
             }
             MotionEvent.ACTION_MOVE -> {
+                if (isSingleFingerPan) {
+                    panX += (event.x - prevPanX)
+                    panY += (event.y - prevPanY)
+                    prevPanX = event.x
+                    prevPanY = event.y
+                    NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
+                    NativeSurfaceBridge.nativeRenderFrame()
+                    return true
+                }
                 if (!strokeActive) return true
                 val batch = ArrayList<StrokeSample>(4)
                 for (h in 0 until event.historySize) {
@@ -207,12 +230,14 @@ class VulkanCanvasView(
                 }
             }
             MotionEvent.ACTION_UP -> {
+                isSingleFingerPan = false
                 if (strokeActive) {
                     strokeActive = false
                     onStrokeEnd()
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
+                isSingleFingerPan = false
                 if (strokeActive) {
                     strokeActive = false
                     onStrokeCancel()

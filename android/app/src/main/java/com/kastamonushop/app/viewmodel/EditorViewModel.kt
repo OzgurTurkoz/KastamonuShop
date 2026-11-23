@@ -67,6 +67,10 @@ class EditorViewModel : ViewModel() {
     private val pendingFilterUpdate = AtomicReference<Pair<String, String>?>(null)
     private val filterDrainScheduled = AtomicBoolean(false)
 
+    // Coalesced layer opacity slider state
+    private val pendingOpacityUpdate = AtomicReference<Pair<ULong, Float>?>(null)
+    private val opacityDrainScheduled = AtomicBoolean(false)
+
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
     )
@@ -211,12 +215,11 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    // Coalesced real-time live adjustment preview while dragging sliders
+    // Coalesced, undo-clean real-time live adjustment preview
     fun beginLiveAdjustment(kind: String, initialParamsJson: String) {
         pendingAdjParams.set(null)
         paintExecutor.execute {
             runCatching {
-                liveAdjustmentLayerId?.let { oldId -> runCatching { engine.deleteLayerById(oldId) } }
                 val id = engine.beginLiveAdjustment(kind, initialParamsJson)
                 liveAdjustmentLayerId = id
                 NativeSurfaceBridge.nativeRenderFrame()
@@ -255,6 +258,7 @@ class EditorViewModel : ViewModel() {
             drainPendingAdjustments()
             liveAdjustmentLayerId = null
             runCatching {
+                engine.commitLiveAdjustment()
                 val info = engine.getDocumentInfo()
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
@@ -267,10 +271,9 @@ class EditorViewModel : ViewModel() {
     fun cancelLiveAdjustment() {
         pendingAdjParams.set(null)
         paintExecutor.execute {
-            val id = liveAdjustmentLayerId ?: return@execute
             liveAdjustmentLayerId = null
             runCatching {
-                engine.deleteLayerById(id)
+                engine.cancelLiveAdjustment()
                 val info = engine.getDocumentInfo()
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
@@ -337,6 +340,22 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 engine.cancelLiveFilter()
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun cancelAllLivePreviews() {
+        pendingAdjParams.set(null)
+        pendingFilterUpdate.set(null)
+        paintExecutor.execute {
+            liveAdjustmentLayerId = null
+            runCatching { engine.cancelLiveAdjustment() }
+            runCatching { engine.cancelLiveFilter() }
+            runCatching {
                 val info = engine.getDocumentInfo()
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
@@ -486,9 +505,23 @@ class EditorViewModel : ViewModel() {
         _uiState.update { st ->
             st.copy(layers = st.layers.map { if (it.id == layerId) it.copy(opacity = opacity) else it })
         }
-        paintExecutor.execute {
+        pendingOpacityUpdate.set(layerId to opacity)
+        if (opacityDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingOpacityUpdates() }
+        }
+    }
+
+    private fun drainPendingOpacityUpdates() {
+        while (true) {
+            val next = pendingOpacityUpdate.getAndSet(null)
+            if (next == null) {
+                opacityDrainScheduled.set(false)
+                if (pendingOpacityUpdate.get() == null) return
+                if (!opacityDrainScheduled.compareAndSet(false, true)) return
+                continue
+            }
             runCatching {
-                engine.setLayerOpacity(layerId, opacity)
+                engine.setLayerOpacity(next.first, next.second)
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }

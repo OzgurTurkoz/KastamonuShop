@@ -1,7 +1,6 @@
-//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.4.3 — StonebridgeCraft).
-//! - Live real-time adjustment preview (`begin_live_adjustment`, `update_live_adjustment`, `delete_layer_by_id`)
-//! - Live real-time pixel filter preview (`begin_live_filter`, `update_live_filter`, `commit_live_filter`, `cancel_live_filter`)
-//! - Smart pixel filter targeting (auto-targets the photo layer even when an adjustment layer is selected)
+//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.4.4 — StonebridgeCraft).
+//! - Undo-clean live adjustment preview (prevents undo-stack bloat during slider drags)
+//! - Undo-clean live pixel filter preview (auto-targets photo layer, restores lock cleanly)
 
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -65,6 +64,11 @@ struct ActiveLiveStroke {
     is_eraser: bool,
 }
 
+struct LiveAdjustmentSession {
+    layer_id: u64,
+    has_updated: bool,
+}
+
 struct LiveFilterSession {
     target_id: LayerId,
     prev_active: Option<LayerId>,
@@ -78,6 +82,7 @@ pub(crate) struct EngineCore {
     pub pending_dirty: Option<Rect>,
     pub force_full_redraw: bool,
     live_stroke: Option<ActiveLiveStroke>,
+    live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
 }
 
@@ -101,6 +106,7 @@ impl EngineCore {
             pending_dirty: None,
             force_full_redraw: true,
             live_stroke: None,
+            live_adjustment: None,
             live_filter: None,
         }
     }
@@ -173,6 +179,7 @@ impl KastamonuEngine {
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_adjustment = None;
         guard.live_filter = None;
         guard
             .session
@@ -206,6 +213,7 @@ impl KastamonuEngine {
         };
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_adjustment = None;
         guard.live_filter = None;
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
@@ -223,6 +231,7 @@ impl KastamonuEngine {
     pub fn place_image_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_adjustment = None;
         guard.live_filter = None;
         photocraft_engine::file_cmds::place_bytes(&mut guard.session, &file_name, bytes, None, &json!({}))
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
@@ -258,8 +267,8 @@ impl KastamonuEngine {
         Ok(out.to_string())
     }
 
-    /// Creates a new live adjustment layer (e.g. `brightnessContrast`, `hueSaturation`) and returns its layer ID
-    /// so Kotlin sliders can update it in real time via `update_live_adjustment`.
+    /// Creates a new live adjustment layer (e.g. `brightnessContrast`, `hueSaturation`) and returns its layer ID.
+    /// Tracks the session so repeated slider updates never bloat the Undo stack.
     pub fn begin_live_adjustment(&self, kind: String, params_json: String) -> Result<u64, EngineError> {
         let params: Value = if params_json.trim().is_empty() {
             json!({})
@@ -270,6 +279,15 @@ impl KastamonuEngine {
         let cmd = format!("layer.newAdjustmentLayer.{kind}");
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+
+        // Cleanly cancel any dangling live adjustment session first
+        if let Some(old_adj) = guard.live_adjustment.take() {
+            if old_adj.has_updated {
+                let _ = guard.session.execute("edit.undo", json!({}));
+            }
+            let _ = guard.session.execute("edit.undo", json!({}));
+        }
+
         let out = guard
             .session
             .execute(&cmd, params)
@@ -278,11 +296,19 @@ impl KastamonuEngine {
             .get("layer")
             .and_then(Value::as_u64)
             .ok_or_else(|| EngineError::CommandFailed { detail: "Adjustment layer id missing".into() })?;
+
+        // Only track interactive slider adjustments; instant toggles (blackWhite/invert) are standalone
+        if kind != "blackWhite" && kind != "invert" {
+            guard.live_adjustment = Some(LiveAdjustmentSession {
+                layer_id,
+                has_updated: false,
+            });
+        }
         guard.mark_full_dirty();
         Ok(layer_id)
     }
 
-    /// Updates an active live adjustment layer in real time as the user drags a slider.
+    /// Updates an active live adjustment layer in real time without bloating the Undo stack.
     pub fn update_live_adjustment(&self, layer_id: u64, params_json: String) -> Result<(), EngineError> {
         let mut params: Value = serde_json::from_str(&params_json)
             .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?;
@@ -290,15 +316,49 @@ impl KastamonuEngine {
             obj.insert("layer".to_string(), json!(layer_id));
         }
         let mut guard = self.core.lock();
-        guard
-            .session
-            .execute("layer.setAdjustment", params)
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        if let Some(mut adj) = guard.live_adjustment.take() {
+            if adj.layer_id == layer_id && adj.has_updated {
+                let _ = guard.session.execute("edit.undo", json!({}));
+                adj.has_updated = false;
+            }
+            let res = guard.session.execute("layer.setAdjustment", params);
+            if res.is_ok() && adj.layer_id == layer_id {
+                adj.has_updated = true;
+            }
+            guard.live_adjustment = Some(adj);
+            res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        } else {
+            guard
+                .session
+                .execute("layer.setAdjustment", params)
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        }
         guard.mark_full_dirty();
         Ok(())
     }
 
-    /// Deletes a specific layer by ID (used for cancelling a live adjustment preview or toggling B&W / Invert off).
+    /// Commits the live adjustment preview.
+    pub fn commit_live_adjustment(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_adjustment = None;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Cancels the live adjustment preview cleanly via undo so zero stray undo entries remain.
+    pub fn cancel_live_adjustment(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        if let Some(adj) = guard.live_adjustment.take() {
+            if adj.has_updated {
+                let _ = guard.session.execute("edit.undo", json!({}));
+            }
+            let _ = guard.session.execute("edit.undo", json!({}));
+            guard.mark_full_dirty();
+        }
+        Ok(())
+    }
+
+    /// Deletes a specific layer by ID (used for toggling B&W / Invert off).
     pub fn delete_layer_by_id(&self, layer_id: u64) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -315,7 +375,6 @@ impl KastamonuEngine {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
 
-        // If a previous live filter session was somehow left open, cancel it cleanly first.
         if let Some(old_lf) = guard.live_filter.take() {
             if old_lf.has_applied_preview {
                 let _ = guard.session.execute("edit.undo", json!({}));
@@ -369,7 +428,6 @@ impl KastamonuEngine {
     }
 
     /// Updates the live pixel filter preview in real time as the slider moves.
-    /// Pass empty `command_id` to revert to the clean un-filtered photo (e.g. slider at 0).
     pub fn update_live_filter(&self, command_id: String, params_json: String) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let Some(mut lf) = guard.live_filter.take() else {
@@ -418,7 +476,6 @@ impl KastamonuEngine {
                     json!({ "layer": lf.target_id.0, "locks": { "pixels": true } }),
                 );
             } else {
-                // No filter was applied; undo the unlock cleanly
                 let _ = guard.session.execute("edit.undo", json!({}));
             }
         }
@@ -429,7 +486,7 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Cancels the live pixel filter preview, restoring the exact original pixels and lock state.
+    /// Cancels the live pixel filter preview, restoring original pixels and lock state.
     pub fn cancel_live_filter(&self) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let Some(lf) = guard.live_filter.take() else {
@@ -448,7 +505,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// One-shot pixel filter helper (kept for compatibility).
     pub fn apply_pixel_filter(&self, command_id: String, params_json: String) -> Result<(), EngineError> {
         self.begin_live_filter()?;
         let res = self.update_live_filter(command_id, params_json);
@@ -459,6 +515,7 @@ impl KastamonuEngine {
     pub fn undo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_adjustment = None;
         guard.live_filter = None;
         guard
             .session
@@ -471,6 +528,7 @@ impl KastamonuEngine {
     pub fn redo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_adjustment = None;
         guard.live_filter = None;
         guard
             .session

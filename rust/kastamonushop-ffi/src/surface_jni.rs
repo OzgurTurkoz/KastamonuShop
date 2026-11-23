@@ -12,7 +12,7 @@ use raw_window_handle::{
 };
 
 use crate::renderer::{ViewportCamera, VulkanRenderer};
-use crate::{runtime, set_gpu_error};
+use crate::{SendNativeWindow, runtime, set_gpu_error};
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
@@ -33,6 +33,11 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
     height: jint,
 ) -> jboolean {
     let res = catch_unwind(AssertUnwindSafe(|| {
+        let rt = runtime();
+        // Drop any previous renderer BEFORE releasing any previous NativeWindow
+        *rt.renderer.lock() = None;
+        *rt.native_window.lock() = None;
+
         let raw_env = env.get_native_interface();
         let Some(native_window) = (unsafe { NativeWindow::from_surface(raw_env, surface.as_raw()) }) else {
             set_gpu_error("ANativeWindow_fromSurface returned null");
@@ -52,14 +57,13 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
             raw_window_handle: raw_window,
         };
 
-        let _leaked_ref = std::mem::ManuallyDrop::new(native_window);
-
         match VulkanRenderer::new(target, width.max(1) as u32, height.max(1) as u32) {
             Ok(renderer) => {
-                *runtime().renderer.lock() = Some(renderer);
-                *runtime().last_gpu_error.lock() = None;
-                runtime().engine.lock().mark_full_dirty();
-                log::info!("KastamonuShop: Vulkan Surface attached ({}x{})", width, height);
+                *rt.native_window.lock() = Some(SendNativeWindow(native_window));
+                *rt.renderer.lock() = Some(renderer);
+                *rt.last_gpu_error.lock() = None;
+                rt.engine.lock().mark_full_dirty();
+                log::info!("StonebridgeCraft: Vulkan Surface attached ({}x{})", width, height);
                 JNI_TRUE
             }
             Err(e) => {
@@ -98,8 +102,11 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
     _class: JClass,
 ) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        *runtime().renderer.lock() = None;
-        log::info!("KastamonuShop: Vulkan Surface detached cleanly");
+        let rt = runtime();
+        // Critical order: drop wgpu::Surface/VulkanRenderer FIRST, then release ANativeWindow
+        *rt.renderer.lock() = None;
+        *rt.native_window.lock() = None;
+        log::info!("StonebridgeCraft: Vulkan Surface detached cleanly");
     }));
 }
 
@@ -129,6 +136,11 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
 ) -> jboolean {
     let res = catch_unwind(AssertUnwindSafe(|| {
         let rt = runtime();
+        let mut r_guard = rt.renderer.lock();
+        let Some(renderer) = r_guard.as_mut() else {
+            return JNI_FALSE;
+        };
+
         let (doc, render_gen, force_full, dirty_rect) = {
             let mut guard = rt.engine.lock();
             let Some(doc) = guard.active_document() else {
@@ -138,10 +150,6 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
             (doc, guard.render_generation, full, rect)
         };
         let camera = *rt.camera.lock();
-        let mut r_guard = rt.renderer.lock();
-        let Some(renderer) = r_guard.as_mut() else {
-            return JNI_FALSE;
-        };
 
         match renderer.render_frame(&doc, render_gen, force_full, dirty_rect, camera) {
             Ok(()) => JNI_TRUE,

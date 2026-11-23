@@ -1,4 +1,4 @@
-//! KastamonuShop — Native Android FFI & Vulkan GPU Bridge for PhotoCraft.
+//! StonebridgeCraft — Native Android FFI & Vulkan GPU Bridge for PhotoCraft.
 
 #![allow(unsafe_code)]
 
@@ -17,9 +17,17 @@ pub use renderer::{ViewportCamera, VulkanRenderer};
 
 uniffi::setup_scaffolding!();
 
+#[cfg(target_os = "android")]
+pub(crate) struct SendNativeWindow(pub ndk::native_window::NativeWindow);
+
+#[cfg(target_os = "android")]
+unsafe impl Send for SendNativeWindow {}
+
 pub(crate) struct SharedRuntime {
     pub engine: Arc<Mutex<engine::EngineCore>>,
     pub renderer: Mutex<Option<VulkanRenderer>>,
+    #[cfg(target_os = "android")]
+    pub native_window: Mutex<Option<SendNativeWindow>>,
     pub camera: Mutex<ViewportCamera>,
     pub last_gpu_error: Mutex<Option<String>>,
 }
@@ -32,12 +40,14 @@ pub(crate) fn runtime() -> &'static SharedRuntime {
         android_logger::init_once(
             android_logger::Config::default()
                 .with_max_level(log::LevelFilter::Info)
-                .with_tag("KastamonuShop"),
+                .with_tag("StonebridgeCraft"),
         );
 
         SharedRuntime {
             engine: Arc::new(Mutex::new(engine::EngineCore::new())),
             renderer: Mutex::new(None),
+            #[cfg(target_os = "android")]
+            native_window: Mutex::new(None),
             camera: Mutex::new(ViewportCamera::default()),
             last_gpu_error: Mutex::new(None),
         }
@@ -46,7 +56,7 @@ pub(crate) fn runtime() -> &'static SharedRuntime {
 
 pub(crate) fn set_gpu_error(msg: impl Into<String>) {
     let s = msg.into();
-    log::error!("KastamonuShop GPU Error: {s}");
+    log::error!("StonebridgeCraft GPU Error: {s}");
     *runtime().last_gpu_error.lock() = Some(s);
 }
 
@@ -59,7 +69,7 @@ pub fn create_kastamonu_engine() -> Arc<KastamonuEngine> {
 #[uniffi::export]
 pub fn engine_version_info() -> String {
     format!(
-        "KastamonuShop {} (PhotoCraft Core + wgpu 30 Vulkan/GLES)",
+        "StonebridgeCraft 0.4.4 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
         env!("CARGO_PKG_VERSION")
     )
 }
