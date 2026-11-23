@@ -11,7 +11,7 @@ use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 
-use crate::renderer::{GpuPreviewState, ViewportCamera, VulkanRenderer};
+use crate::renderer::{ViewportCamera, VulkanRenderer};
 use crate::{SendNativeWindow, runtime, set_gpu_error};
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -137,12 +137,33 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
     flip_y: jboolean,
 ) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        *runtime().preview.lock() = GpuPreviewState {
-            mirror_mode,
-            mirror_axis: mirror_axis.clamp(0.05, 0.95),
-            flip_x: flip_x != JNI_FALSE,
-            flip_y: flip_y != JNI_FALSE,
-        };
+        let mut p = runtime().preview.lock();
+        p.mirror_mode = mirror_mode;
+        p.mirror_axis = mirror_axis.clamp(0.05, 0.95);
+        p.flip_x = flip_x != JNI_FALSE;
+        p.flip_y = flip_y != JNI_FALSE;
+    }));
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nativeSetAdjustPreview(
+    _env: JNIEnv,
+    _class: JClass,
+    brightness: jfloat,
+    contrast: jfloat,
+    saturation: jfloat,
+    hue: jfloat,
+    blur_radius: jfloat,
+    sharpen_amount: jfloat,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let mut p = runtime().preview.lock();
+        p.brightness = brightness;
+        p.contrast = contrast;
+        p.saturation = saturation;
+        p.hue = hue;
+        p.blur_radius = blur_radius.max(0.0);
+        p.sharpen_amount = sharpen_amount.max(0.0);
     }));
 }
 

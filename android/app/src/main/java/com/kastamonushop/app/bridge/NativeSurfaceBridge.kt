@@ -12,5 +12,13 @@ object NativeSurfaceBridge {
     external fun nativeDetachSurface()
     external fun nativeSetCamera(panX: Float, panY: Float, zoom: Float, rotationRad: Float)
     external fun nativeSetPreview(mirrorMode: Int, mirrorAxis: Float, flipX: Boolean, flipY: Boolean)
+    external fun nativeSetAdjustPreview(
+        brightness: Float,
+        contrast: Float,
+        saturation: Float,
+        hue: Float,
+        blurRadius: Float,
+        sharpenAmount: Float
+    )
     external fun nativeRenderFrame(): Boolean
 }

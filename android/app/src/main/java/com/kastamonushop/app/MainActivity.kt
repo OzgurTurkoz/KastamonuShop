@@ -254,7 +254,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.5.3",
+                    text = "v0.5.4",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -679,7 +679,13 @@ fun StonebridgeStudioScreen(
         pendingFlipH = false
         pendingFlipV = false
         NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
+        NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
         canvasViewRef?.fitToDocument(0)
+    }
+
+    fun clearAdjustGpuPreviewOnly() {
+        NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+        NativeSurfaceBridge.nativeRenderFrame()
     }
 
     fun pushGpuTransformPreview(turns: Int, flipH: Boolean, flipV: Boolean) {
@@ -690,11 +696,11 @@ fun StonebridgeStudioScreen(
     fun dismissLivePanelIfActive() {
         when (activePanel) {
             BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE -> {
-                vm.cancelLiveAdjustment()
+                clearAdjustGpuPreviewOnly()
                 activePanel = BottomPanel.DOCK
             }
             BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT -> {
-                vm.cancelLiveFilter()
+                clearAdjustGpuPreviewOnly()
                 activePanel = BottomPanel.DOCK
             }
             BottomPanel.MIRROR_EDIT -> {
@@ -717,11 +723,11 @@ fun StonebridgeStudioScreen(
         } else if (activePanel != BottomPanel.DOCK) {
             when (activePanel) {
                 BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE -> {
-                    vm.cancelLiveAdjustment()
+                    clearAdjustGpuPreviewOnly()
                     activePanel = BottomPanel.ADJUST_MENU
                 }
                 BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT -> {
-                    vm.cancelLiveFilter()
+                    clearAdjustGpuPreviewOnly()
                     activePanel = BottomPanel.FILTER_MENU
                 }
                 BottomPanel.MIRROR_EDIT -> {
@@ -1266,7 +1272,7 @@ fun StonebridgeStudioScreen(
                         )
                         CircularDockButton(
                             icon = Icons.Default.Tune,
-                            label = "Ayarla",
+                            label = "Ayarlar",
                             onClick = {
                                 vm.setTool(ActiveTool.NONE)
                                 activePanel = BottomPanel.ADJUST_MENU
@@ -1460,7 +1466,7 @@ fun StonebridgeStudioScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         BottomEditorHeader(
-                            title = "Ayarla",
+                            title = "Ayarlar",
                             subtitle = "Canlı önizlemeli ışık ve renk ayarları",
                             onClose = { activePanel = BottomPanel.DOCK }
                         )
@@ -1474,7 +1480,7 @@ fun StonebridgeStudioScreen(
                                 onClick = {
                                     brightnessVal = 0f
                                     contrastVal = 0f
-                                    vm.beginLiveAdjustment("brightnessContrast", """{"brightness":0,"contrast":0}""")
+                                    NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
                                     activePanel = BottomPanel.LIGHT_LIVE
                                 }
                             )
@@ -1484,7 +1490,7 @@ fun StonebridgeStudioScreen(
                                 onClick = {
                                     hueVal = 0f
                                     saturationVal = 0f
-                                    vm.beginLiveAdjustment("hueSaturation", """{"hue":0,"saturation":0,"lightness":0}""")
+                                    NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
                                     activePanel = BottomPanel.COLOR_LIVE
                                 }
                             )
@@ -1502,21 +1508,31 @@ fun StonebridgeStudioScreen(
                             subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
                             applyLabel = "Uygula",
                             onClose = {
-                                vm.cancelLiveAdjustment()
+                                clearAdjustGpuPreviewOnly()
                                 activePanel = BottomPanel.ADJUST_MENU
                             },
                             onApply = {
-                                vm.commitLiveAdjustment("Işık & Kontrast")
+                                if (brightnessVal.roundToInt() == 0 && contrastVal.roundToInt() == 0) {
+                                    clearAdjustGpuPreviewOnly()
+                                } else {
+                                    vm.applyAdjustmentOnce(
+                                        "brightnessContrast",
+                                        """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""",
+                                        "Işık & Kontrast"
+                                    )
+                                }
                                 activePanel = BottomPanel.DOCK
                             }
                         )
                         CompactSliderRow("Parlaklık", "${brightnessVal.roundToInt()}", brightnessVal, -100f..100f, defaultValue = 0f) {
                             brightnessVal = it
-                            vm.updateLiveAdjustment("""{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
+                            NativeSurfaceBridge.nativeSetAdjustPreview(brightnessVal, contrastVal, 0f, 0f, 0f, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
                         }
                         CompactSliderRow("Kontrast", "${contrastVal.roundToInt()}", contrastVal, -50f..100f, defaultValue = 0f) {
                             contrastVal = it
-                            vm.updateLiveAdjustment("""{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
+                            NativeSurfaceBridge.nativeSetAdjustPreview(brightnessVal, contrastVal, 0f, 0f, 0f, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
                         }
                     }
                 }
@@ -1531,21 +1547,31 @@ fun StonebridgeStudioScreen(
                             subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
                             applyLabel = "Uygula",
                             onClose = {
-                                vm.cancelLiveAdjustment()
+                                clearAdjustGpuPreviewOnly()
                                 activePanel = BottomPanel.ADJUST_MENU
                             },
                             onApply = {
-                                vm.commitLiveAdjustment("Renk & Canlılık")
+                                if (saturationVal.roundToInt() == 0 && hueVal.roundToInt() == 0) {
+                                    clearAdjustGpuPreviewOnly()
+                                } else {
+                                    vm.applyAdjustmentOnce(
+                                        "hueSaturation",
+                                        """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""",
+                                        "Renk & Canlılık"
+                                    )
+                                }
                                 activePanel = BottomPanel.DOCK
                             }
                         )
                         CompactSliderRow("Canlılık", "${saturationVal.roundToInt()}", saturationVal, -100f..100f, defaultValue = 0f) {
                             saturationVal = it
-                            vm.updateLiveAdjustment("""{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
+                            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, saturationVal, hueVal, 0f, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
                         }
                         CompactSliderRow("Renk Tonu", "${hueVal.roundToInt()}°", hueVal, -180f..180f, defaultValue = 0f) {
                             hueVal = it
-                            vm.updateLiveAdjustment("""{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
+                            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, saturationVal, hueVal, 0f, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
                         }
                     }
                 }
@@ -1687,7 +1713,7 @@ fun StonebridgeStudioScreen(
                                 label = "Bulanık",
                                 onClick = {
                                     blurRadiusVal = 0f
-                                    vm.beginLiveFilter()
+                                    NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
                                     activePanel = BottomPanel.BLUR_EDIT
                                 }
                             )
@@ -1696,7 +1722,7 @@ fun StonebridgeStudioScreen(
                                 label = "Keskin",
                                 onClick = {
                                     sharpenAmountVal = 0f
-                                    vm.beginLiveFilter()
+                                    NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
                                     activePanel = BottomPanel.SHARPEN_EDIT
                                 }
                             )
@@ -1714,21 +1740,18 @@ fun StonebridgeStudioScreen(
                             subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
                             applyLabel = "Uygula",
                             onClose = {
-                                vm.cancelLiveFilter()
+                                clearAdjustGpuPreviewOnly()
                                 activePanel = BottomPanel.FILTER_MENU
                             },
                             onApply = {
-                                vm.commitLiveFilter("Bulanıklaştırma")
+                                vm.applyBlurFast(blurRadiusVal)
                                 activePanel = BottomPanel.DOCK
                             }
                         )
                         CompactSliderRow("Yarıçap", "${blurRadiusVal.roundToInt()}px", blurRadiusVal, 0f..60f, defaultValue = 0f) {
                             blurRadiusVal = it
-                            if (it < 0.5f) {
-                                vm.updateLiveFilter("", "{}")
-                            } else {
-                                vm.updateLiveFilter("filter.blur.gaussianBlur", """{"radius":${it}}""")
-                            }
+                            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, blurRadiusVal, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
                         }
                     }
                 }
@@ -1743,21 +1766,18 @@ fun StonebridgeStudioScreen(
                             subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
                             applyLabel = "Uygula",
                             onClose = {
-                                vm.cancelLiveFilter()
+                                clearAdjustGpuPreviewOnly()
                                 activePanel = BottomPanel.FILTER_MENU
                             },
                             onApply = {
-                                vm.commitLiveFilter("Keskinleştirme")
+                                vm.applySharpenFast(sharpenAmountVal)
                                 activePanel = BottomPanel.DOCK
                             }
                         )
                         CompactSliderRow("Güç", "%${sharpenAmountVal.roundToInt()}", sharpenAmountVal, 0f..250f, defaultValue = 0f) {
                             sharpenAmountVal = it
-                            if (it < 1f) {
-                                vm.updateLiveFilter("", "{}")
-                            } else {
-                                vm.updateLiveFilter("filter.sharpen.unsharpMask", """{"amount":${it},"radius":1.2,"threshold":0.0}""")
-                            }
+                            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, sharpenAmountVal)
+                            NativeSurfaceBridge.nativeRenderFrame()
                         }
                     }
                 }

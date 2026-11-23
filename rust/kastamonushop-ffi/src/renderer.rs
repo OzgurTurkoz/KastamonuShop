@@ -1,6 +1,6 @@
 //! Zero-copy Vulkan (GLES fallback) GPU Renderer binding `photocraft_gpu::Compositor`
 //! directly to an Android `SurfaceView` (`ANativeWindow`) with incremental dirty-rect updates,
-//! zero per-frame BindGroup allocations, and 60 FPS GPU preview uniforms (Mirror & Flip).
+//! zero per-frame BindGroup allocations, and 60 FPS GPU preview uniforms (Mirror, Flip, Adjust, Filter).
 
 use bytemuck::{Pod, Zeroable};
 use photocraft_doc::Document;
@@ -28,11 +28,16 @@ impl Default for ViewportCamera {
 
 #[derive(Clone, Copy, Debug)]
 pub struct GpuPreviewState {
-    /// 0 = off, 1 = left_to_right, 2 = right_to_left, 3 = top_to_bottom, 4 = bottom_to_top
     pub mirror_mode: i32,
     pub mirror_axis: f32,
     pub flip_x: bool,
     pub flip_y: bool,
+    pub brightness: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+    pub hue: f32,
+    pub blur_radius: f32,
+    pub sharpen_amount: f32,
 }
 
 impl Default for GpuPreviewState {
@@ -42,6 +47,12 @@ impl Default for GpuPreviewState {
             mirror_axis: 0.5,
             flip_x: false,
             flip_y: false,
+            brightness: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+            hue: 0.0,
+            blur_radius: 0.0,
+            sharpen_amount: 0.0,
         }
     }
 }
@@ -53,6 +64,8 @@ struct ViewportUniforms {
     camera: [f32; 4],
     style: [f32; 4],
     preview: [f32; 4],
+    adjust: [f32; 4],
+    filter_p: [f32; 4],
 }
 
 pub struct VulkanRenderer {
@@ -225,6 +238,8 @@ impl VulkanRenderer {
             camera: [0.0, 0.0, 1.0, 0.0],
             style: [16.0, 0.10, 0.10, 0.12],
             preview: [0.0, 0.5, 0.0, 0.0],
+            adjust: [0.0, 0.0, 0.0, 0.0],
+            filter_p: [0.0, 0.0, 0.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport_uniforms"),
@@ -407,6 +422,18 @@ impl VulkanRenderer {
                 preview.mirror_axis.clamp(0.05, 0.95),
                 if preview.flip_x { 1.0 } else { 0.0 },
                 if preview.flip_y { 1.0 } else { 0.0 },
+            ],
+            adjust: [
+                preview.brightness,
+                preview.contrast,
+                preview.saturation,
+                preview.hue,
+            ],
+            filter_p: [
+                preview.blur_radius,
+                preview.sharpen_amount,
+                0.0,
+                0.0,
             ],
         };
         self.queue

@@ -1,6 +1,5 @@
 // StonebridgeCraft — Hardware-accelerated Canvas Blit & 60 FPS GPU Preview Shader (WGSL)
-// Renders PhotoCraft's GPU-composited RGBA texture onto Android's Vulkan/GLES SurfaceView
-// with smooth pan, zoom, rotation, transparency checkerboard, and zero-lag Smart Mirror & Flip previews.
+// Zero-lag 60 FPS GPU previews for Mirror, Flip, Brightness/Contrast, Hue/Saturation, Blur, and Sharpen.
 
 struct ViewportUniforms {
     // [canvas_width, canvas_height, doc_width, doc_height]
@@ -9,8 +8,12 @@ struct ViewportUniforms {
     camera: vec4<f32>,
     // [checker_size_px, bg_r, bg_g, bg_b]
     style: vec4<f32>,
-    // [mirror_mode (0=off, 1=enine_auto, 2=enine_flip, 3=boyuna_auto, 4=boyuna_flip), mirror_axis, flip_x, flip_y]
+    // [mirror_mode (0..4), mirror_axis, flip_x, flip_y]
     preview: vec4<f32>,
+    // [brightness (-100..100), contrast (-50..100), saturation (-100..100), hue_deg (-180..180)]
+    adjust: vec4<f32>,
+    // [blur_radius_px (0..60), sharpen_amount (0..250), 0.0, 0.0]
+    filter_p: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -80,7 +83,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         doc_uv.y = 1.0 - doc_uv.y;
     }
 
-    // 60 FPS Smart GPU Mirror preview (always mirrors from the larger side cleanly; ping-pong prevents streaks in flip mode)
+    // 60 FPS Smart GPU Mirror preview
     let mirror_mode = i32(round(u.preview.x));
     let axis = clamp(u.preview.y, 0.05, 0.95);
     if (mirror_mode == 1) {
@@ -109,7 +112,69 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         }
     }
 
-    let sampled = textureSample(doc_tex, doc_sampler, doc_uv);
-    let rgb = mix(checker, sampled.rgb, sampled.a);
+    var sampled = textureSample(doc_tex, doc_sampler, doc_uv);
+    let texel = vec2<f32>(1.0, 1.0) / max(doc_size, vec2<f32>(1.0, 1.0));
+
+    // 60 FPS GPU Blur preview (13-tap 2-ring disk blur)
+    let blur_r = u.filter_p.x;
+    if (blur_r > 0.25) {
+        let r1 = texel * (blur_r * 0.45);
+        let r2 = texel * blur_r;
+        let d2 = r2 * 0.70710678;
+        var acc = sampled * 2.0;
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>( r1.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))) * 1.5;
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(-r1.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))) * 1.5;
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(0.0,  r1.y), vec2<f32>(0.0), vec2<f32>(1.0))) * 1.5;
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(0.0, -r1.y), vec2<f32>(0.0), vec2<f32>(1.0))) * 1.5;
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>( r2.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)));
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(-r2.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)));
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(0.0,  r2.y), vec2<f32>(0.0), vec2<f32>(1.0)));
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(0.0, -r2.y), vec2<f32>(0.0), vec2<f32>(1.0)));
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>( d2.x,  d2.y), vec2<f32>(0.0), vec2<f32>(1.0)));
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(-d2.x,  d2.y), vec2<f32>(0.0), vec2<f32>(1.0)));
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>( d2.x, -d2.y), vec2<f32>(0.0), vec2<f32>(1.0)));
+        acc += textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(-d2.x, -d2.y), vec2<f32>(0.0), vec2<f32>(1.0)));
+        sampled = acc / 16.0;
+    }
+
+    // 60 FPS GPU Sharpen preview (5-tap Unsharp Mask)
+    let sharp_amt = u.filter_p.y;
+    if (sharp_amt > 0.5) {
+        let step = texel * 1.5;
+        let n1 = textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>( step.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
+        let n2 = textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(-step.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
+        let n3 = textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(0.0,  step.y), vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
+        let n4 = textureSample(doc_tex, doc_sampler, clamp(doc_uv + vec2<f32>(0.0, -step.y), vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
+        let blur4 = (n1 + n2 + n3 + n4) * 0.25;
+        let k = (sharp_amt / 100.0) * 1.1;
+        sampled = vec4<f32>(clamp(sampled.rgb + (sampled.rgb - blur4) * k, vec3<f32>(0.0), vec3<f32>(1.0)), sampled.a);
+    }
+
+    var col = sampled.rgb;
+
+    // 60 FPS GPU Brightness & Contrast preview
+    if (abs(u.adjust.x) > 0.01 || abs(u.adjust.y) > 0.01) {
+        let b = u.adjust.x / 200.0;
+        let c_norm = u.adjust.y / 100.0;
+        let factor = select(1.0 + c_norm * 0.65, 1.0 + c_norm * 1.25, c_norm > 0.0);
+        col = clamp((col + b - 0.5) * factor + 0.5, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
+    // 60 FPS GPU Saturation & Hue preview
+    if (abs(u.adjust.z) > 0.01 || abs(u.adjust.w) > 0.01) {
+        let luma = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let sat_scale = max(0.0, 1.0 + u.adjust.z / 100.0);
+        col = mix(vec3<f32>(luma), col, sat_scale);
+        if (abs(u.adjust.w) > 0.01) {
+            let rad = u.adjust.w * 0.0174532925;
+            let k = vec3<f32>(0.57735027);
+            let cos_a = cos(rad);
+            let sin_a = sin(rad);
+            col = col * cos_a + cross(k, col) * sin_a + k * dot(k, col) * (1.0 - cos_a);
+        }
+        col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
+    let rgb = mix(checker, col, sampled.a);
     return vec4<f32>(rgb, 1.0);
 }

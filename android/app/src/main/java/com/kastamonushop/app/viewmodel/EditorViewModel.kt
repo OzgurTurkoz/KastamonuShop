@@ -398,6 +398,73 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    // One-shot native adjustment bake after 60 FPS GPU preview
+    fun applyAdjustmentOnce(kind: String, paramsJson: String, labelTr: String) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyAdjustmentOnce(kind, paramsJson)
+                val layers = engine.getLayers()
+                NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("$labelTr uygulandı", 2000L)
+            }.onFailure { err ->
+                NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("$labelTr hatası: ${err.message}", 3500L)
+            }
+        }
+    }
+
+    // One-shot low-memory Blur bake after 60 FPS GPU preview
+    fun applyBlurFast(radius: Float) {
+        if (radius < 0.5f) {
+            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+            NativeSurfaceBridge.nativeRenderFrame()
+            return
+        }
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyBlurFast(radius)
+                val layers = engine.getLayers()
+                NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Bulanıklaştırma uygulandı", 2000L)
+            }.onFailure { err ->
+                NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Bulanıklaştırma hatası: ${err.message}", 3500L)
+            }
+        }
+    }
+
+    // One-shot low-memory Sharpen bake after 60 FPS GPU preview
+    fun applySharpenFast(amount: Float) {
+        if (amount < 1f) {
+            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+            NativeSurfaceBridge.nativeRenderFrame()
+            return
+        }
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applySharpenFast(amount)
+                val layers = engine.getLayers()
+                NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Keskinleştirme uygulandı", 2000L)
+            }.onFailure { err ->
+                NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Keskinleştirme hatası: ${err.message}", 3500L)
+            }
+        }
+    }
+
     // Coalesced, undo-clean real-time live adjustment preview
     fun beginLiveAdjustment(kind: String, initialParamsJson: String) {
         pendingAdjParams.set(null)

@@ -71,7 +71,7 @@ pub fn create_kastamonu_engine() -> Arc<KastamonuEngine> {
 #[uniffi::export]
 pub fn engine_version_info() -> String {
     format!(
-        "StonebridgeCraft 0.5.3 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
+        "StonebridgeCraft 0.5.4 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
         env!("CARGO_PKG_VERSION")
     )
 }

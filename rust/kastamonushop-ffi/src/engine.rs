@@ -508,6 +508,186 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+    /// Low-memory O(1)-per-pixel 3-pass separable Box/Gaussian Blur that NEVER hits Android's working-memory cap.
+    pub fn apply_blur_fast(&self, radius: f32) -> Result<DocumentInfo, EngineError> {
+        let r = radius.round().clamp(1.0, 80.0) as usize;
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Bulanıklaştırma uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard
+            .session
+            .edit("Bulanıklaştırma", |doc, _| {
+                let bounds = doc.bounds();
+                let w = doc.size.width as usize;
+                let h = doc.size.height as usize;
+                if w < 2 || h < 2 {
+                    return Ok(());
+                }
+                let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+                    return Ok(());
+                };
+                let LayerContent::Raster(surf) = &mut layer.content else {
+                    return Ok(());
+                };
+                let ch = surf.format().channels();
+                let mut data = surf.read_region(bounds);
+                if data.len() < w * h * ch {
+                    return Ok(());
+                }
+                // 3-pass separable sliding-window box blur approximates Gaussian blur with tiny O(max(w,h)) scratch RAM
+                let pass_r = ((r as f32) * 0.58).round().max(1.0) as usize;
+                let mut line_buf = vec![0.0f32; w.max(h) * ch];
+                let mut acc = [0.0f32; 8];
+                let active_ch = ch.min(8);
+
+                for _ in 0..3 {
+                    // Horizontal pass
+                    let win = (2 * pass_r + 1) as f32;
+                    for y in 0..h {
+                        let row = y * w * ch;
+                        for c in 0..active_ch {
+                            let first = data[row + c];
+                            acc[c] = first * (pass_r + 1) as f32;
+                            for k in 1..=pass_r {
+                                let xk = k.min(w - 1);
+                                acc[c] += data[row + xk * ch + c];
+                            }
+                        }
+                        for x in 0..w {
+                            for c in 0..active_ch {
+                                line_buf[x * ch + c] = acc[c] / win;
+                            }
+                            let add_x = (x + pass_r + 1).min(w - 1);
+                            let sub_x = x.saturating_sub(pass_r);
+                            for c in 0..active_ch {
+                                acc[c] += data[row + add_x * ch + c] - data[row + sub_x * ch + c];
+                            }
+                        }
+                        data[row..(row + w * ch)].copy_from_slice(&line_buf[..(w * ch)]);
+                    }
+
+                    // Vertical pass
+                    for x in 0..w {
+                        for c in 0..active_ch {
+                            let first = data[x * ch + c];
+                            acc[c] = first * (pass_r + 1) as f32;
+                            for k in 1..=pass_r {
+                                let yk = k.min(h - 1);
+                                acc[c] += data[(yk * w + x) * ch + c];
+                            }
+                        }
+                        for y in 0..h {
+                            for c in 0..active_ch {
+                                line_buf[y * ch + c] = acc[c] / win;
+                            }
+                            let add_y = (y + pass_r + 1).min(h - 1);
+                            let sub_y = y.saturating_sub(pass_r);
+                            for c in 0..active_ch {
+                                acc[c] += data[(add_y * w + x) * ch + c] - data[(sub_y * w + x) * ch + c];
+                            }
+                        }
+                        for y in 0..h {
+                            let idx = (y * w + x) * ch;
+                            for c in 0..active_ch {
+                                data[idx + c] = line_buf[y * ch + c];
+                            }
+                        }
+                    }
+                }
+
+                surf.write_region_par(bounds, &data);
+                Ok(())
+            })
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Low-memory Unsharp Mask sharpen that NEVER hits Android's working-memory cap.
+    pub fn apply_sharpen_fast(&self, amount: f32) -> Result<DocumentInfo, EngineError> {
+        let strength = (amount.clamp(0.0, 250.0) / 100.0) * 1.1;
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Keskinleştirme uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard
+            .session
+            .edit("Keskinleştirme", |doc, _| {
+                let bounds = doc.bounds();
+                let w = doc.size.width as usize;
+                let h = doc.size.height as usize;
+                if w < 3 || h < 3 {
+                    return Ok(());
+                }
+                let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+                    return Ok(());
+                };
+                let LayerContent::Raster(surf) = &mut layer.content else {
+                    return Ok(());
+                };
+                let ch = surf.format().channels();
+                let rgb_ch = ch.min(3);
+                let orig = surf.read_region(bounds);
+                if orig.len() < w * h * ch {
+                    return Ok(());
+                }
+                let mut out = orig.clone();
+                let row_stride = w * ch;
+                for y in 1..(h - 1) {
+                    let row = y * row_stride;
+                    for x in 1..(w - 1) {
+                        let idx = row + x * ch;
+                        let left = idx - ch;
+                        let right = idx + ch;
+                        let up = idx - row_stride;
+                        let down = idx + row_stride;
+                        for c in 0..rgb_ch {
+                            let blur4 = (orig[left + c] + orig[right + c] + orig[up + c] + orig[down + c]) * 0.25;
+                            let v = orig[idx + c] + (orig[idx + c] - blur4) * strength;
+                            out[idx + c] = v.clamp(0.0, 1.0);
+                        }
+                    }
+                }
+                surf.write_region_par(bounds, &out);
+                Ok(())
+            })
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Creates a single native PhotoCraft adjustment layer with final slider values (called once on Uygula after 60 FPS GPU preview).
+    pub fn apply_adjustment_once(&self, kind: String, params_json: String) -> Result<DocumentInfo, EngineError> {
+        let params: Value = if params_json.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&params_json)
+                .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?
+        };
+        let cmd = format!("layer.newAdjustmentLayer.{kind}");
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute(&cmd, params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     pub fn begin_live_adjustment(&self, kind: String, params_json: String) -> Result<u64, EngineError> {
         let params: Value = if params_json.trim().is_empty() {
             json!({})
