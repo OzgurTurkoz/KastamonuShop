@@ -258,7 +258,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.7.1",
+                    text = "v0.7.2",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -821,7 +821,11 @@ fun StonebridgeStudioScreen(
                             (t == ActiveTool.CLONE_STAMP && !st.pickingCloneSource)
                     },
                     isRetouchActive = {
-                        vm.uiState.value.activeTool == ActiveTool.SPOT_HEAL
+                        val t = vm.uiState.value.activeTool
+                        t == ActiveTool.SPOT_HEAL ||
+                            t == ActiveTool.SELECT_QUICK ||
+                            t == ActiveTool.SELECT_BRUSH_ADD ||
+                            t == ActiveTool.SELECT_BRUSH_SUB
                     },
                     isEyedropperActive = { vm.uiState.value.activeTool == ActiveTool.EYEDROPPER },
                     isRulerEnabled = { vm.uiState.value.rulerEnabled },
@@ -839,7 +843,14 @@ fun StonebridgeStudioScreen(
                     onStrokeEnd = { vm.finishLiveStroke() },
                     onStrokeCancel = { vm.cancelLiveStroke() },
                     onRetouchPreview = { pos -> retouchCursor = pos },
-                    onRetouchCommit = { samples -> vm.applyRetouchStroke(samples) },
+                    onRetouchCommit = { samples ->
+                        val t = vm.uiState.value.activeTool
+                        if (t == ActiveTool.SELECT_QUICK || t == ActiveTool.SELECT_BRUSH_ADD || t == ActiveTool.SELECT_BRUSH_SUB) {
+                            vm.applySelectionStroke(samples)
+                        } else {
+                            vm.applyRetouchStroke(samples)
+                        }
+                    },
                     onRulerPreview = { preview -> rulerPreview = preview },
                     onRulerStrokeCommit = { samples -> vm.commitRulerStroke(samples) },
                     onEyedropperSample = { dx, dy -> vm.sampleColorAt(dx, dy) },
@@ -1432,20 +1443,25 @@ fun StonebridgeStudioScreen(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val isSelectTool = state.activeTool == ActiveTool.SELECT_RECT ||
+                            state.activeTool == ActiveTool.SELECT_WAND ||
+                            state.activeTool == ActiveTool.SELECT_QUICK ||
+                            state.activeTool == ActiveTool.SELECT_BRUSH_ADD ||
+                            state.activeTool == ActiveTool.SELECT_BRUSH_SUB
                         CircularDockButton(
                             icon = Icons.Default.Brush,
                             label = "Çizim",
-                            selected = state.activeTool != ActiveTool.NONE && state.activeTool != ActiveTool.SELECT_RECT && state.activeTool != ActiveTool.SELECT_WAND,
+                            selected = state.activeTool != ActiveTool.NONE && !isSelectTool,
                             accentDot = if (state.activeTool == ActiveTool.BRUSH || state.activeTool == ActiveTool.EYEDROPPER) activeColor else null,
                             onClick = { activePanel = BottomPanel.DRAW_MENU }
                         )
                         CircularDockButton(
                             icon = Icons.Default.SelectAll,
                             label = "Seçim",
-                            selected = state.selectionBounds != null || state.activeTool == ActiveTool.SELECT_RECT || state.activeTool == ActiveTool.SELECT_WAND,
+                            selected = state.selectionBounds != null || isSelectTool,
                             onClick = {
-                                if (state.activeTool != ActiveTool.SELECT_RECT && state.activeTool != ActiveTool.SELECT_WAND) {
-                                    vm.setTool(ActiveTool.SELECT_RECT)
+                                if (!isSelectTool) {
+                                    vm.setTool(ActiveTool.SELECT_QUICK)
                                 }
                                 activePanel = BottomPanel.SELECT_MENU
                             }
@@ -1525,6 +1541,9 @@ fun StonebridgeStudioScreen(
                                 ActiveTool.CLONE_STAMP -> if (state.pickingCloneSource) "Klon kaynağı seç: fotoğrafa dokun" else "Klonla · boyamak istediğin yere sürükle"
                                 ActiveTool.SELECT_RECT -> "Dikdörtgen/Elips alan seç"
                                 ActiveTool.SELECT_WAND -> "Sihirli Değnek · renge dokunarak seç"
+                                ActiveTool.SELECT_QUICK -> "Akıllı Fırça · nesne üzerinden geç"
+                                ActiveTool.SELECT_BRUSH_ADD -> "Elle Ekle (+) · parmağınla seçime boya"
+                                ActiveTool.SELECT_BRUSH_SUB -> "Elle Sil (-) · yanlış seçilen yerleri sil"
                                 ActiveTool.NONE -> "Çizim veya Rötuş için bir araç seç"
                             },
                             onClose = { activePanel = BottomPanel.DOCK }
@@ -1746,7 +1765,10 @@ fun StonebridgeStudioScreen(
                         BottomEditorHeader(
                             title = "Seçim Araçları",
                             subtitle = when (state.activeTool) {
-                                ActiveTool.SELECT_WAND -> "Seçmek istediğin renge dokun (Tolerans: ${state.wandTolerance.roundToInt()})"
+                                ActiveTool.SELECT_QUICK -> if (state.selectSubtractMode) "Akıllı Fırça (-) · kenar algılayarak çıkar" else "Akıllı Fırça (+) · nesne üzerinden parmağınla geç"
+                                ActiveTool.SELECT_BRUSH_ADD -> "Elle Ekle (+) · parmağınla boyayarak seçime ekle"
+                                ActiveTool.SELECT_BRUSH_SUB -> "Elle Sil (-) · yanlış seçilen yerleri parmağınla sil"
+                                ActiveTool.SELECT_WAND -> "Değnek · renge dokun (Tolerans: ${state.wandTolerance.roundToInt()})"
                                 else -> "Parmağınla sürükleyerek alan seç"
                             },
                             onClose = {
@@ -1761,8 +1783,37 @@ fun StonebridgeStudioScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
+                                icon = Icons.Default.AutoAwesome,
+                                label = "Konu Seç",
+                                onClick = { vm.selectSubject() }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Gesture,
+                                label = "Akıllı",
+                                selected = state.activeTool == ActiveTool.SELECT_QUICK,
+                                onClick = { vm.setTool(ActiveTool.SELECT_QUICK) }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.AddCircleOutline,
+                                label = "Elle (+)",
+                                selected = state.activeTool == ActiveTool.SELECT_BRUSH_ADD,
+                                onClick = { vm.setTool(ActiveTool.SELECT_BRUSH_ADD) }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.RemoveCircleOutline,
+                                label = "Elle (-)",
+                                selected = state.activeTool == ActiveTool.SELECT_BRUSH_SUB,
+                                onClick = { vm.setTool(ActiveTool.SELECT_BRUSH_SUB) }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.AutoFixHigh,
+                                label = "Değnek",
+                                selected = state.activeTool == ActiveTool.SELECT_WAND,
+                                onClick = { vm.setTool(ActiveTool.SELECT_WAND) }
+                            )
+                            CircularDockButton(
                                 icon = Icons.Default.CropFree,
-                                label = if (state.selectEllipse) "Elips" else "Dikdörtgen",
+                                label = if (state.selectEllipse) "Elips" else "Kutu",
                                 selected = state.activeTool == ActiveTool.SELECT_RECT,
                                 onClick = {
                                     if (state.activeTool == ActiveTool.SELECT_RECT) {
@@ -1771,12 +1822,6 @@ fun StonebridgeStudioScreen(
                                         vm.setTool(ActiveTool.SELECT_RECT)
                                     }
                                 }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.AutoFixHigh,
-                                label = "Değnek",
-                                selected = state.activeTool == ActiveTool.SELECT_WAND,
-                                onClick = { vm.setTool(ActiveTool.SELECT_WAND) }
                             )
                             if (state.selectionBounds != null) {
                                 CircularDockButton(
@@ -1806,27 +1851,44 @@ fun StonebridgeStudioScreen(
                                 )
                             }
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            FilterChip(
-                                selected = state.selectAddMode,
-                                onClick = { vm.toggleSelectAddMode() },
-                                label = { Text(if (state.selectAddMode) "Ekle (+) Açık" else "Ekle (+)", fontSize = 11.sp) }
-                            )
-                            if (state.activeTool == ActiveTool.SELECT_WAND) {
+                        if (state.activeTool == ActiveTool.SELECT_WAND || state.activeTool == ActiveTool.SELECT_RECT || state.activeTool == ActiveTool.SELECT_QUICK) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (state.activeTool != ActiveTool.SELECT_QUICK) {
+                                    FilterChip(
+                                        selected = state.selectAddMode,
+                                        onClick = { vm.toggleSelectAddMode() },
+                                        label = { Text(if (state.selectAddMode) "Ekle (+) ✓" else "Ekle (+)", fontSize = 11.sp) }
+                                    )
+                                }
                                 FilterChip(
-                                    selected = state.wandContiguous,
-                                    onClick = { vm.toggleWandContiguous() },
-                                    label = { Text(if (state.wandContiguous) "Bitişik ✓" else "Tüm Renk", fontSize = 11.sp) }
+                                    selected = state.selectSubtractMode,
+                                    onClick = { vm.toggleSelectSubtractMode() },
+                                    label = { Text(if (state.selectSubtractMode) "Çıkar (-) ✓" else "Çıkar (-)", fontSize = 11.sp) }
                                 )
+                                if (state.activeTool == ActiveTool.SELECT_WAND) {
+                                    FilterChip(
+                                        selected = state.wandContiguous,
+                                        onClick = { vm.toggleWandContiguous() },
+                                        label = { Text(if (state.wandContiguous) "Bitişik ✓" else "Tüm Renk", fontSize = 11.sp) }
+                                    )
+                                }
                             }
                         }
                         if (state.activeTool == ActiveTool.SELECT_WAND) {
                             CompactSliderRow("Tolerans", "${state.wandTolerance.roundToInt()}", state.wandTolerance, 0f..120f, defaultValue = 32f) {
                                 vm.updateWandTolerance(it)
+                            }
+                        } else if (
+                            state.activeTool == ActiveTool.SELECT_QUICK ||
+                            state.activeTool == ActiveTool.SELECT_BRUSH_ADD ||
+                            state.activeTool == ActiveTool.SELECT_BRUSH_SUB
+                        ) {
+                            CompactSliderRow("Fırça", "${state.brushSize.toInt()}px", state.brushSize, 10f..250f, defaultValue = 48f) {
+                                vm.updateBrush(size = it)
                             }
                         }
                     }

@@ -1699,6 +1699,173 @@ impl KastamonuEngine {
         Ok(b)
     }
 
+    /// One-tap automatic Subject selection (`select.subject`).
+    pub fn select_subject(&self) -> Result<Option<SelectionBounds>, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute(
+                "select.subject",
+                json!({
+                    "sampleAllLayers": true,
+                    "mode": "replace"
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        let b = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
+            .filter(|r| !r.is_empty())
+            .map(|r| SelectionBounds { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+        Ok(b)
+    }
+
+    /// Edge-aware Quick Selection Brush (`select.quick` with `enhanceEdge: true`).
+    pub fn select_quick_stroke(
+        &self,
+        samples: Vec<StrokeSample>,
+        size: f32,
+        subtract: bool,
+    ) -> Result<Option<SelectionBounds>, EngineError> {
+        if samples.is_empty() {
+            return Ok(self.get_selection_bounds());
+        }
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let pts: Vec<Value> = samples
+            .iter()
+            .map(|s| json!([s.x as f64, s.y as f64]))
+            .collect();
+        let mode = if subtract { "subtract" } else { "add" };
+        guard
+            .session
+            .execute(
+                "select.quick",
+                json!({
+                    "points": pts,
+                    "size": size.clamp(8.0, 400.0) as f64,
+                    "mode": mode,
+                    "sampleAllLayers": true,
+                    "enhanceEdge": true
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        let b = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
+            .filter(|r| !r.is_empty())
+            .map(|r| SelectionBounds { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+        Ok(b)
+    }
+
+    /// Instant manual selection brush: paint directly onto `doc.selection` to add (`subtract = false`)
+    /// or erase (`subtract = true`) any area by hand with smooth edges.
+    pub fn paint_selection_stroke(
+        &self,
+        samples: Vec<StrokeSample>,
+        size: f32,
+        subtract: bool,
+    ) -> Result<Option<SelectionBounds>, EngineError> {
+        if samples.is_empty() {
+            return Ok(self.get_selection_bounds());
+        }
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let radius = (size.clamp(6.0, 400.0) * 0.5).max(3.0);
+        let pad = radius.ceil() as i32 + 2;
+        let label = if subtract { "Seçim Silgisi" } else { "Seçim Fırçası" };
+
+        guard
+            .session
+            .edit(label, |doc, _| {
+                let canvas = doc.bounds();
+                if subtract && doc.selection.is_none() {
+                    return Ok(());
+                }
+                let mut min_x = i32::MAX;
+                let mut min_y = i32::MAX;
+                let mut max_x = i32::MIN;
+                let mut max_y = i32::MIN;
+                for s in &samples {
+                    let sx = s.x.round() as i32;
+                    let sy = s.y.round() as i32;
+                    min_x = min_x.min(sx - pad);
+                    min_y = min_y.min(sy - pad);
+                    max_x = max_x.max(sx + pad);
+                    max_y = max_y.max(sy + pad);
+                }
+                let roi = Rect::new(min_x, min_y, max_x, max_y).intersect(&canvas);
+                if roi.is_empty() {
+                    return Ok(());
+                }
+
+                let sel = doc
+                    .selection
+                    .get_or_insert_with(|| Surface::new(PixelFormat::GRAY8));
+                let rw = roi.width() as usize;
+                let rh = roi.height() as usize;
+                let mut buf = sel.read_region(roi);
+                if buf.len() < rw * rh {
+                    return Ok(());
+                }
+
+                // Stamp smooth circular dabs along stroke segments
+                let mut stamp_disc = |cx: f32, cy: f32| {
+                    let x0 = ((cx - radius - 1.0).floor() as i32).max(roi.x0);
+                    let x1 = ((cx + radius + 1.0).ceil() as i32).min(roi.x1 - 1);
+                    let y0 = ((cy - radius - 1.0).floor() as i32).max(roi.y0);
+                    let y1 = ((cy + radius + 1.0).ceil() as i32).min(roi.y1 - 1);
+                    for py in y0..=y1 {
+                        let dy = (py as f32 + 0.5) - cy;
+                        let row = (py - roi.y0) as usize * rw;
+                        for px in x0..=x1 {
+                            let dx = (px as f32 + 0.5) - cx;
+                            let dist = (dx * dx + dy * dy).sqrt();
+                            if dist <= radius {
+                                let edge = ((radius - dist) * 0.5).clamp(0.0, 1.0);
+                                let idx = row + (px - roi.x0) as usize;
+                                if subtract {
+                                    buf[idx] = (buf[idx] * (1.0 - edge)).clamp(0.0, 1.0);
+                                } else {
+                                    buf[idx] = buf[idx].max(edge);
+                                }
+                            }
+                        }
+                    }
+                };
+
+                let step = (radius * 0.35).max(2.0);
+                stamp_disc(samples[0].x, samples[0].y);
+                for win in samples.windows(2) {
+                    let (a, b) = (&win[0], &win[1]);
+                    let d = ((b.x - a.x).hypot(b.y - a.y)).max(0.001);
+                    let n = (d / step).ceil() as i32;
+                    for i in 1..=n {
+                        let t = i as f32 / n as f32;
+                        stamp_disc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+                    }
+                }
+
+                sel.write_region(roi, &buf);
+                if subtract && sel.content_bounds().is_empty() {
+                    doc.selection = None;
+                }
+                Ok(())
+            })
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+
+        guard.mark_full_dirty();
+        let b = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
+            .filter(|r| !r.is_empty())
+            .map(|r| SelectionBounds { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+        Ok(b)
+    }
+
     pub fn select_inverse(&self) -> Result<Option<SelectionBounds>, EngineError> {
         let mut guard = self.core.lock();
         guard

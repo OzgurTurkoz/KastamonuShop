@@ -46,7 +46,10 @@ enum class ActiveTool {
     BURN,
     CLONE_STAMP,
     SELECT_RECT,
-    SELECT_WAND
+    SELECT_WAND,
+    SELECT_QUICK,
+    SELECT_BRUSH_ADD,
+    SELECT_BRUSH_SUB
 }
 
 data class EditorUiState(
@@ -70,6 +73,7 @@ data class EditorUiState(
     val wandTolerance: Float = 32f,
     val wandContiguous: Boolean = true,
     val selectAddMode: Boolean = false,
+    val selectSubtractMode: Boolean = false,
     val cloneSourceDoc: Pair<Float, Float>? = null,
     val pickingCloneSource: Boolean = false,
     val statusMessage: String? = null,
@@ -201,7 +205,7 @@ class EditorViewModel : ViewModel() {
 
     fun toggleSelectAddMode() {
         val next = !_uiState.value.selectAddMode
-        _uiState.update { it.copy(selectAddMode = next) }
+        _uiState.update { it.copy(selectAddMode = next, selectSubtractMode = false) }
         showStatus(
             if (next) "Ekle (+) açık: yeni dokunuşlar mevcut seçime eklenir"
             else "Yeni seçim modu: her dokunuş yeni seçim başlatır",
@@ -209,9 +213,60 @@ class EditorViewModel : ViewModel() {
         )
     }
 
+    fun toggleSelectSubtractMode() {
+        val next = !_uiState.value.selectSubtractMode
+        _uiState.update { it.copy(selectSubtractMode = next, selectAddMode = false) }
+        showStatus(
+            if (next) "Çıkar (-) açık: dokunduğun yerler seçimden çıkarılır"
+            else "Normal ekleme moduna dönüldü",
+            2200L
+        )
+    }
+
+    fun selectSubject() {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val b = engine.selectSubject()
+                _uiState.update { it.copy(selectionBounds = b, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (b != null) "Ana konu otomatik seçildi" else "Konu bulunamadı — Akıllı Fırça veya Elle Ekle kullanabilirsin", 2400L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Konu seçim hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun applySelectionStroke(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        val s = _uiState.value
+        val tool = s.activeTool
+        val size = s.brushSize
+        val sub = (tool == ActiveTool.SELECT_BRUSH_SUB) || (tool == ActiveTool.SELECT_QUICK && s.selectSubtractMode)
+        if (tool == ActiveTool.SELECT_QUICK) {
+            _uiState.update { it.copy(isBusy = true) }
+        }
+        paintExecutor.execute {
+            runCatching {
+                val b = when (tool) {
+                    ActiveTool.SELECT_QUICK -> engine.selectQuickStroke(samples, size, sub)
+                    ActiveTool.SELECT_BRUSH_ADD -> engine.paintSelectionStroke(samples, size, false)
+                    ActiveTool.SELECT_BRUSH_SUB -> engine.paintSelectionStroke(samples, size, true)
+                    else -> return@runCatching
+                }
+                _uiState.update { it.copy(selectionBounds = b, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Seçim fırçası hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
     fun selectRect(x: Int, y: Int, width: Int, height: Int) {
         val s = _uiState.value
-        val mode = if (s.selectAddMode) "add" else "replace"
+        val mode = when { s.selectSubtractMode -> "subtract"; s.selectAddMode -> "add"; else -> "replace" }
         paintExecutor.execute {
             runCatching {
                 val b = engine.selectRect(x, y, width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt(), s.selectEllipse, mode)
@@ -227,7 +282,7 @@ class EditorViewModel : ViewModel() {
     fun selectMagicWand(docX: Float, docY: Float) {
         val s = _uiState.value
         val tol = s.wandTolerance.toInt().coerceIn(0, 255).toUInt()
-        val mode = if (s.selectAddMode) "add" else "replace"
+        val mode = when { s.selectSubtractMode -> "subtract"; s.selectAddMode -> "add"; else -> "replace" }
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
