@@ -387,9 +387,13 @@ impl KastamonuEngine {
             (prev, id, locked)
         };
 
-        let pts_json: Vec<Value> = samples.iter().map(sample_to_json).collect();
+        // retouch_cmds.rs expects points as [[x, y, pressure], ...] arrays and hardness in 0..100%
+        let pts_json: Vec<Value> = samples
+            .iter()
+            .map(|pt| json!([pt.x as f64, pt.y as f64, pt.pressure.clamp(0.05, 1.0) as f64]))
+            .collect();
         let clamped_size = size.clamp(4.0, 400.0);
-        let clamped_hard = hardness.clamp(0.0, 1.0);
+        let clamped_hard = (hardness.clamp(0.0, 1.0) * 100.0).round();
         let clamped_str = strength.clamp(5.0, 100.0);
 
         let (cmd, params) = match tool.as_str() {
