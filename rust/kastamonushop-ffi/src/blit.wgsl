@@ -1,6 +1,6 @@
-// KastamonuShop — Hardware-accelerated Canvas Blit & Viewport Shader (WGSL)
+// StonebridgeCraft — Hardware-accelerated Canvas Blit & 60 FPS GPU Preview Shader (WGSL)
 // Renders PhotoCraft's GPU-composited RGBA texture onto Android's Vulkan/GLES SurfaceView
-// with smooth pan, zoom, rotation, and transparency checkerboard.
+// with smooth pan, zoom, rotation, transparency checkerboard, and zero-lag GPU Mirror & Flip previews.
 
 struct ViewportUniforms {
     // [canvas_width, canvas_height, doc_width, doc_height]
@@ -9,6 +9,8 @@ struct ViewportUniforms {
     camera: vec4<f32>,
     // [checker_size_px, bg_r, bg_g, bg_b]
     style: vec4<f32>,
+    // [mirror_mode (0=off, 1=L->R, 2=R->L, 3=T->B, 4=B->T), mirror_axis (0.0..1.0), flip_x (0/1), flip_y (0/1)]
+    preview: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -27,7 +29,6 @@ struct VertexOut {
 
 @vertex
 fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
-    // Full-screen triangle (3 vertices, zero vertex buffer overhead)
     var pos = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -3.0),
         vec2<f32>(-1.0,  1.0),
@@ -36,7 +37,6 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     let ndc = pos[idx];
     var out: VertexOut;
     out.clip_pos = vec4<f32>(ndc, 0.0, 1.0);
-    // Convert NDC to screen pixel coordinates (top-left origin)
     let uv = vec2<f32>((ndc.x + 1.0) * 0.5, (1.0 - ndc.y) * 0.5);
     out.screen_px = uv * u.dims.xy;
     return out;
@@ -50,27 +50,44 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let zoom = max(u.camera.z, 0.01);
     let rot = u.camera.w;
 
-    // Screen pixel -> centered offset -> undo pan -> undo rotation -> undo zoom -> doc space
     let p = in.screen_px - canvas_center - pan;
     let c = cos(-rot);
     let s = sin(-rot);
     let rotated = vec2<f32>(p.x * c - p.y * s, p.x * s + p.y * c);
     let doc_px = rotated / zoom + doc_size * 0.5;
 
-    // Outside document bounds: draw studio workspace background + subtle drop shadow
     if (doc_px.x < 0.0 || doc_px.y < 0.0 || doc_px.x > doc_size.x || doc_px.y > doc_size.y) {
         return vec4<f32>(u.style.y, u.style.z, u.style.w, 1.0);
     }
 
-    // Transparency checkerboard in screen space so it stays crisp at every zoom level
     let cell = floor(in.screen_px / max(u.style.x, 4.0));
     let is_light = ((i32(cell.x) + i32(cell.y)) & 1) == 0;
     let checker = select(vec3<f32>(0.76, 0.76, 0.76), vec3<f32>(0.90, 0.90, 0.90), is_light);
 
-    let doc_uv = doc_px / doc_size;
-    let sampled = textureSample(doc_tex, doc_sampler, doc_uv);
+    var doc_uv = doc_px / doc_size;
 
-    // Straight-alpha composite over checkerboard
+    // 60 FPS GPU Flip preview
+    if (u.preview.z > 0.5) {
+        doc_uv.x = 1.0 - doc_uv.x;
+    }
+    if (u.preview.w > 0.5) {
+        doc_uv.y = 1.0 - doc_uv.y;
+    }
+
+    // 60 FPS GPU Mirror preview
+    let mirror_mode = i32(round(u.preview.x));
+    let axis = clamp(u.preview.y, 0.05, 0.95);
+    if (mirror_mode == 1 && doc_uv.x > axis) {
+        doc_uv.x = clamp(2.0 * axis - doc_uv.x, 0.0, 1.0);
+    } else if (mirror_mode == 2 && doc_uv.x < axis) {
+        doc_uv.x = clamp(2.0 * axis - doc_uv.x, 0.0, 1.0);
+    } else if (mirror_mode == 3 && doc_uv.y > axis) {
+        doc_uv.y = clamp(2.0 * axis - doc_uv.y, 0.0, 1.0);
+    } else if (mirror_mode == 4 && doc_uv.y < axis) {
+        doc_uv.y = clamp(2.0 * axis - doc_uv.y, 0.0, 1.0);
+    }
+
+    let sampled = textureSample(doc_tex, doc_sampler, doc_uv);
     let rgb = mix(checker, sampled.rgb, sampled.a);
     return vec4<f32>(rgb, 1.0);
 }

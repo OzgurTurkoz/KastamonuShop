@@ -28,9 +28,9 @@ data class RulerLinePreview(
 
 /**
  * Hardware-accelerated Vulkan/GLES canvas:
- * - Canvas movement (pan, zoom, rotate) is STRICTLY two-finger only (never accidental 1-finger drift).
- * - 1-finger draws when Brush/Eraser is active, draws magnetic straight lines when Ruler is ON,
- *   or samples colors when Eyedropper is active.
+ * - Canvas movement (pan, zoom, rotate) is STRICTLY two-finger only.
+ * - 1-finger drags the Mirror axis directly on the photo at 60 FPS when Mirror mode is open,
+ *   or draws / uses Ruler / samples Eyedropper when those tools are active.
  */
 class VulkanCanvasView(
     context: Context,
@@ -39,6 +39,8 @@ class VulkanCanvasView(
     private val isDrawingActive: () -> Boolean,
     private val isEyedropperActive: () -> Boolean,
     private val isRulerEnabled: () -> Boolean,
+    private val isMirrorDragActive: () -> Boolean,
+    private val isMirrorVerticalAxis: () -> Boolean,
     private val onStrokeBegin: (StrokeSample) -> Unit,
     private val onStrokeMove: (List<StrokeSample>) -> Unit,
     private val onStrokeEnd: () -> Unit,
@@ -46,6 +48,7 @@ class VulkanCanvasView(
     private val onRulerPreview: (RulerLinePreview?) -> Unit,
     private val onRulerStrokeCommit: (List<StrokeSample>) -> Unit,
     private val onEyedropperSample: (Float, Float) -> Unit,
+    private val onMirrorAxisDrag: (Float) -> Unit,
     private val onCameraChanged: () -> Unit = {}
 ) : SurfaceView(context), SurfaceHolder.Callback {
 
@@ -58,6 +61,7 @@ class VulkanCanvasView(
     private var strokeActive = false
     private var rulerActive = false
     private var eyedropperActive = false
+    private var mirrorDragActive = false
 
     private var prevMidX = 0f
     private var prevMidY = 0f
@@ -95,15 +99,18 @@ class VulkanCanvasView(
         NativeSurfaceBridge.nativeDetachSurface()
     }
 
-    fun fitToDocument() {
-        val (docW, docH) = getDocSize()
+    fun fitToDocument(previewQuarterTurnsCw: Int = 0) {
+        val (rawW, rawH) = getDocSize()
+        val turns = ((previewQuarterTurnsCw % 4) + 4) % 4
+        val effW = if (turns % 2 == 1) rawH else rawW
+        val effH = if (turns % 2 == 1) rawW else rawH
         val viewW = width.coerceAtLeast(1).toFloat()
         val viewH = height.coerceAtLeast(1).toFloat()
-        val fitZoom = min(viewW / docW.coerceAtLeast(1), viewH / docH.coerceAtLeast(1)) * 0.86f
+        val fitZoom = min(viewW / effW.coerceAtLeast(1), viewH / effH.coerceAtLeast(1)) * 0.86f
         panX = 0f
         panY = 0f
         zoom = fitZoom.coerceIn(0.05f, 16f)
-        rotationRad = 0f
+        rotationRad = (turns * (PI / 2.0)).toFloat()
         NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
         NativeSurfaceBridge.nativeRenderFrame()
         onCameraChanged()
@@ -135,6 +142,17 @@ class VulkanCanvasView(
         val dx = rx / zoom + docW * 0.5f
         val dy = ry / zoom + docH * 0.5f
         return dx to dy
+    }
+
+    private fun updateMirrorRatioFromScreen(sx: Float, sy: Float) {
+        val (docW, docH) = getDocSize()
+        val (dx, dy) = screenToDoc(sx, sy)
+        val ratio = if (isMirrorVerticalAxis()) {
+            (dx / docW.coerceAtLeast(1).toFloat()).coerceIn(0.05f, 0.95f)
+        } else {
+            (dy / docH.coerceAtLeast(1).toFloat()).coerceIn(0.05f, 0.95f)
+        }
+        onMirrorAxisDrag(ratio)
     }
 
     private fun makeSample(sx: Float, sy: Float, pressure: Float, tilt: Float, orientation: Float): StrokeSample {
@@ -217,6 +235,7 @@ class VulkanCanvasView(
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     isMultiTouch = true
                     eyedropperActive = false
+                    mirrorDragActive = false
                     if (rulerActive) {
                         rulerActive = false
                         onRulerPreview(null)
@@ -258,11 +277,12 @@ class VulkanCanvasView(
             return true
         }
 
-        // Single-finger interactions: Eyedropper, Ruler straight-line, or Freehand Brush/Eraser.
-        // When idle (no tool selected), single-finger touch intentionally does NOT pan the canvas.
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (isEyedropperActive()) {
+                if (isMirrorDragActive()) {
+                    mirrorDragActive = true
+                    updateMirrorRatioFromScreen(event.x, event.y)
+                } else if (isEyedropperActive()) {
                     eyedropperActive = true
                     val (dx, dy) = screenToDoc(event.x, event.y)
                     onEyedropperSample(dx, dy)
@@ -288,6 +308,10 @@ class VulkanCanvasView(
                 }
             }
             MotionEvent.ACTION_MOVE -> {
+                if (mirrorDragActive) {
+                    updateMirrorRatioFromScreen(event.x, event.y)
+                    return true
+                }
                 if (eyedropperActive) {
                     val (dx, dy) = screenToDoc(event.x, event.y)
                     onEyedropperSample(dx, dy)
@@ -334,6 +358,7 @@ class VulkanCanvasView(
                 }
             }
             MotionEvent.ACTION_UP -> {
+                mirrorDragActive = false
                 eyedropperActive = false
                 if (rulerActive) {
                     rulerActive = false
@@ -349,6 +374,7 @@ class VulkanCanvasView(
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
+                mirrorDragActive = false
                 eyedropperActive = false
                 if (rulerActive) {
                     rulerActive = false

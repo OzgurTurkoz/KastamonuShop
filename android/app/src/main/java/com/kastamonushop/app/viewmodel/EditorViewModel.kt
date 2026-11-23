@@ -75,10 +75,6 @@ class EditorViewModel : ViewModel() {
     private val pendingFilterUpdate = AtomicReference<Pair<String, String>?>(null)
     private val filterDrainScheduled = AtomicBoolean(false)
 
-    // Coalesced live photo mirror preview state
-    private val pendingMirrorUpdate = AtomicReference<Pair<String, Float>?>(null)
-    private val mirrorDrainScheduled = AtomicBoolean(false)
-
     // Coalesced layer opacity slider state
     private val pendingOpacityUpdate = AtomicReference<Pair<ULong, Float>?>(null)
     private val opacityDrainScheduled = AtomicBoolean(false)
@@ -330,96 +326,58 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    // Coalesced real-time live Photo Mirror Effect
-    fun beginLiveMirror(initialMode: String, initialRatio: Float) {
-        pendingMirrorUpdate.set(null)
+    // One-shot CPU bake after 60 FPS GPU Mirror preview
+    fun applyPhotoMirror(mode: String, axisRatio: Float) {
+        _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
-                engine.beginLiveMirror()
-                engine.updateLiveMirror(initialMode, initialRatio)
-                NativeSurfaceBridge.nativeRenderFrame()
-            }.onFailure { err ->
-                showStatus("Ayna efekti başlatılamadı: ${err.message}", 3500L)
-            }
-        }
-    }
-
-    fun updateLiveMirror(mode: String, axisRatio: Float) {
-        pendingMirrorUpdate.set(mode to axisRatio)
-        if (mirrorDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingMirrorUpdates() }
-        }
-    }
-
-    private fun drainPendingMirrorUpdates() {
-        while (true) {
-            val next = pendingMirrorUpdate.getAndSet(null)
-            if (next == null) {
-                mirrorDrainScheduled.set(false)
-                if (pendingMirrorUpdate.get() == null) return
-                if (!mirrorDrainScheduled.compareAndSet(false, true)) return
-                continue
-            }
-            runCatching {
-                engine.updateLiveMirror(next.first, next.second)
-                NativeSurfaceBridge.nativeRenderFrame()
-            }.onFailure { err ->
-                showStatus("Ayna önizleme hatası: ${err.message}", 3000L)
-            }
-        }
-    }
-
-    fun commitLiveMirror() {
-        paintExecutor.execute {
-            drainPendingMirrorUpdates()
-            runCatching {
-                engine.commitLiveMirror()
-                val info = engine.getDocumentInfo()
+                val info = engine.applyPhotoMirror(mode, axisRatio)
                 val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus("Ayna efekti uygulandı", 2000L)
             }.onFailure { err ->
+                NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
+                _uiState.update { it.copy(isBusy = false) }
                 showStatus("Ayna hatası: ${err.message}", 3500L)
             }
         }
     }
 
-    fun cancelLiveMirror() {
-        pendingMirrorUpdate.set(null)
-        paintExecutor.execute {
-            runCatching {
-                engine.cancelLiveMirror()
-                val info = engine.getDocumentInfo()
-                val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers) }
-                NativeSurfaceBridge.nativeRenderFrame()
-            }
+    // One-shot CPU bake after 60 FPS GPU Rotate/Flip preview
+    fun applyTransformBatch(quarterTurnsCw: Int, flipH: Boolean, flipV: Boolean) {
+        val turns = ((quarterTurnsCw % 4) + 4) % 4
+        if (turns == 0 && !flipH && !flipV) {
+            NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
+            _uiState.update { it.copy(fitCameraSignal = it.fitCameraSignal + 1) }
+            return
         }
-    }
-
-    // Canvas rotate / flip & crop
-    fun transformCanvas(action: String, labelTr: String) {
+        _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
-                val info = engine.transformCanvas(action)
+                val info = engine.applyCanvasTransformBatch(turns, flipH, flipV)
                 val layers = engine.getLayers()
+                NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
                 _uiState.update {
                     it.copy(
                         docInfo = info,
                         layers = layers,
+                        isBusy = false,
                         fitCameraSignal = it.fitCameraSignal + 1
                     )
                 }
-                NativeSurfaceBridge.nativeRenderFrame()
-                showStatus(labelTr, 1800L)
+                showStatus("Dönüştürme uygulandı", 1800L)
             }.onFailure { err ->
+                NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
+                _uiState.update { it.copy(isBusy = false) }
                 showStatus("Döndürme hatası: ${err.message}", 3500L)
             }
         }
     }
 
     fun cropCanvas(x: Int, y: Int, width: Int, height: Int) {
+        _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
                 val info = engine.cropCanvas(x, y, width, height)
@@ -428,12 +386,13 @@ class EditorViewModel : ViewModel() {
                     it.copy(
                         docInfo = info,
                         layers = layers,
+                        isBusy = false,
                         fitCameraSignal = it.fitCameraSignal + 1
                     )
                 }
-                NativeSurfaceBridge.nativeRenderFrame()
                 showStatus("Kırpıldı (${info.width}×${info.height})", 2200L)
             }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
                 showStatus("Kırpma hatası: ${err.message}", 3500L)
             }
         }
@@ -779,7 +738,6 @@ class EditorViewModel : ViewModel() {
                         fitCameraSignal = it.fitCameraSignal + 1
                     )
                 }
-                NativeSurfaceBridge.nativeRenderFrame()
             }
         }
     }
@@ -787,7 +745,6 @@ class EditorViewModel : ViewModel() {
     fun openSavedPhoto(item: SavedPhotoItem) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
-            showStatus("Kaydedilen fotoğraf açılıyor...", 0L)
             runCatching {
                 val f = File(item.filePath)
                 val bytes = f.readBytes()
@@ -806,8 +763,7 @@ class EditorViewModel : ViewModel() {
                         fitCameraSignal = it.fitCameraSignal + 1
                     )
                 }
-                NativeSurfaceBridge.nativeRenderFrame()
-                showStatus("Açıldı: ${item.displayName}")
+                showStatus("Açıldı: ${item.displayName}", 2000L)
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("Açma hatası: ${err.message}", 4500L)
@@ -818,7 +774,6 @@ class EditorViewModel : ViewModel() {
     fun openDocumentFromUri(resolver: ContentResolver, uri: Uri, asLayer: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
-            showStatus(if (asLayer) "Fotoğraf katman olarak ekleniyor..." else "Dosya açılıyor...", 0L)
             runCatching {
                 val fileName = resolveDisplayName(resolver, uri) ?: "image.png"
                 val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
@@ -842,8 +797,10 @@ class EditorViewModel : ViewModel() {
                         fitCameraSignal = if (asLayer) it.fitCameraSignal else it.fitCameraSignal + 1
                     )
                 }
-                NativeSurfaceBridge.nativeRenderFrame()
-                showStatus("Açıldı: ${info.name} (${info.width}×${info.height})")
+                if (asLayer) {
+                    NativeSurfaceBridge.nativeRenderFrame()
+                }
+                showStatus("Açıldı: ${info.name} (${info.width}×${info.height})", 2200L)
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("Açma hatası: ${err.message}", 5000L)

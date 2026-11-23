@@ -1,6 +1,6 @@
 //! Zero-copy Vulkan (GLES fallback) GPU Renderer binding `photocraft_gpu::Compositor`
-//! directly to an Android `SurfaceView` (`ANativeWindow`) with incremental dirty-rect updates
-//! and zero per-frame BindGroup allocations.
+//! directly to an Android `SurfaceView` (`ANativeWindow`) with incremental dirty-rect updates,
+//! zero per-frame BindGroup allocations, and 60 FPS GPU preview uniforms (Mirror & Flip).
 
 use bytemuck::{Pod, Zeroable};
 use photocraft_doc::Document;
@@ -26,12 +26,33 @@ impl Default for ViewportCamera {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GpuPreviewState {
+    /// 0 = off, 1 = left_to_right, 2 = right_to_left, 3 = top_to_bottom, 4 = bottom_to_top
+    pub mirror_mode: i32,
+    pub mirror_axis: f32,
+    pub flip_x: bool,
+    pub flip_y: bool,
+}
+
+impl Default for GpuPreviewState {
+    fn default() -> Self {
+        Self {
+            mirror_mode: 0,
+            mirror_axis: 0.5,
+            flip_x: false,
+            flip_y: false,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ViewportUniforms {
     dims: [f32; 4],
     camera: [f32; 4],
     style: [f32; 4],
+    preview: [f32; 4],
 }
 
 pub struct VulkanRenderer {
@@ -77,13 +98,13 @@ impl VulkanRenderer {
         .map_err(|e| format!("No compatible Vulkan/GLES GPU adapter: {e}"))?;
 
         log::info!(
-            "StonbridgeCraft GPU Adapter: {} ({:?})",
+            "StonebridgeCraft GPU Adapter: {} ({:?})",
             adapter.get_info().name,
             adapter.get_info().backend
         );
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("kastamonushop_gpu"),
+            label: Some("stonebridgecraft_gpu"),
             required_features: wgpu::Features::empty(),
             required_limits: adapter.limits(),
             ..Default::default()
@@ -99,7 +120,6 @@ impl VulkanRenderer {
             .or_else(|| caps.formats.first().copied())
             .ok_or_else(|| "Surface reported zero supported formats".to_string())?;
 
-        // Prefer low-latency Mailbox if supported by mobile driver, else Fifo
         let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
             wgpu::PresentMode::Mailbox
         } else {
@@ -124,7 +144,7 @@ impl VulkanRenderer {
             .map_err(|e| format!("Compositor init failed ({acc_format:?}): {e:?}"))?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kastamonushop_blit_wgsl"),
+            label: Some("stonebridgecraft_blit_wgsl"),
             source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
         });
 
@@ -168,7 +188,7 @@ impl VulkanRenderer {
         });
 
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("kastamonushop_blit_pipeline"),
+            label: Some("stonebridgecraft_blit_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -203,7 +223,8 @@ impl VulkanRenderer {
         let initial_uniforms = ViewportUniforms {
             dims: [config.width as f32, config.height as f32, 1.0, 1.0],
             camera: [0.0, 0.0, 1.0, 0.0],
-            style: [16.0, 0.11, 0.11, 0.13],
+            style: [16.0, 0.10, 0.10, 0.12],
+            preview: [0.0, 0.5, 0.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport_uniforms"),
@@ -247,6 +268,7 @@ impl VulkanRenderer {
         force_full: bool,
         dirty_rect: Option<Rect>,
         camera: ViewportCamera,
+        preview: GpuPreviewState,
     ) -> Result<(), String> {
         let doc_w = doc.size.width.max(1);
         let doc_h = doc.size.height.max(1);
@@ -257,7 +279,7 @@ impl VulkanRenderer {
             let tex_w = doc_w.min(max_dim);
             let tex_h = doc_h.min(max_dim);
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("kastamonushop_doc_composite"),
+                label: Some("stonebridgecraft_doc_composite"),
                 size: wgpu::Extent3d {
                     width: tex_w,
                     height: tex_h,
@@ -380,6 +402,12 @@ impl VulkanRenderer {
             ],
             camera: [camera.pan_x, camera.pan_y, camera.zoom, camera.rotation_rad],
             style: [16.0, 0.10, 0.10, 0.12],
+            preview: [
+                preview.mirror_mode as f32,
+                preview.mirror_axis.clamp(0.05, 0.95),
+                if preview.flip_x { 1.0 } else { 0.0 },
+                if preview.flip_y { 1.0 } else { 0.0 },
+            ],
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
@@ -390,11 +418,11 @@ impl VulkanRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("kastamonushop_present"),
+                label: Some("stonebridgecraft_present"),
             });
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("kastamonushop_blit_pass"),
+                label: Some("stonebridgecraft_blit_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &swap_view,
                     resolve_target: None,

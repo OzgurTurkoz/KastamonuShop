@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 pub use engine::{
     DocumentInfo, EngineError, KastamonuEngine, LayerSummary, StrokeSample,
 };
-pub use renderer::{ViewportCamera, VulkanRenderer};
+pub use renderer::{GpuPreviewState, ViewportCamera, VulkanRenderer};
 
 uniffi::setup_scaffolding!();
 
@@ -29,6 +29,7 @@ pub(crate) struct SharedRuntime {
     #[cfg(target_os = "android")]
     pub native_window: Mutex<Option<SendNativeWindow>>,
     pub camera: Mutex<ViewportCamera>,
+    pub preview: Mutex<GpuPreviewState>,
     pub last_gpu_error: Mutex<Option<String>>,
 }
 
@@ -49,6 +50,7 @@ pub(crate) fn runtime() -> &'static SharedRuntime {
             #[cfg(target_os = "android")]
             native_window: Mutex::new(None),
             camera: Mutex::new(ViewportCamera::default()),
+            preview: Mutex::new(GpuPreviewState::default()),
             last_gpu_error: Mutex::new(None),
         }
     })
@@ -69,7 +71,7 @@ pub fn create_kastamonu_engine() -> Arc<KastamonuEngine> {
 #[uniffi::export]
 pub fn engine_version_info() -> String {
     format!(
-        "StonebridgeCraft 0.5.1 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
+        "StonebridgeCraft 0.5.2 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
         env!("CARGO_PKG_VERSION")
     )
 }

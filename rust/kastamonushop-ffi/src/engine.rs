@@ -1,8 +1,8 @@
-//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.5.1 — StonebridgeCraft).
-//! - Live undo-clean adjustments, pixel filters, and Photo Mirror Effect (Fotoğraf Ayna Efekti)
-//! - Eyedropper color sampling (`sample_color_hex`)
-//! - Painting symmetry (`set_symmetry`)
-//! - Canvas crop & rotation/flip (`crop_canvas`, `transform_canvas`)
+//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.5.2 — StonebridgeCraft).
+//! - Live undo-clean adjustments & pixel filters
+//! - 60 FPS GPU-previewed Photo Mirror Effect (`apply_photo_mirror` bakes once on commit)
+//! - 60 FPS GPU-previewed Rotate/Flip (`apply_canvas_transform_batch` bakes net result once on commit)
+//! - Eyedropper color sampling, Painting symmetry, Canvas crop
 
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -78,11 +78,6 @@ struct LiveFilterSession {
     has_applied_preview: bool,
 }
 
-struct LiveMirrorSession {
-    target_id: LayerId,
-    has_applied_preview: bool,
-}
-
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
@@ -91,7 +86,6 @@ pub(crate) struct EngineCore {
     live_stroke: Option<ActiveLiveStroke>,
     live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
-    live_mirror: Option<LiveMirrorSession>,
 }
 
 impl EngineCore {
@@ -116,7 +110,6 @@ impl EngineCore {
             live_stroke: None,
             live_adjustment: None,
             live_filter: None,
-            live_mirror: None,
         }
     }
 
@@ -206,7 +199,6 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
-        guard.live_mirror = None;
         guard
             .session
             .execute(
@@ -241,7 +233,6 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
-        guard.live_mirror = None;
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
         if let Some(bg_id) = single_layer_id {
@@ -260,7 +251,6 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
-        guard.live_mirror = None;
         photocraft_engine::file_cmds::place_bytes(&mut guard.session, &file_name, bytes, None, &json!({}))
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
@@ -328,27 +318,53 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    pub fn transform_canvas(&self, action: String) -> Result<DocumentInfo, EngineError> {
-        let cmd = match action.as_str() {
-            "90cw" => "image.imageRotation.90cw",
-            "90ccw" => "image.imageRotation.90ccw",
-            "flip_h" => "image.imageRotation.flipCanvasHorizontal",
-            "flip_v" => "image.imageRotation.flipCanvasVertical",
-            other => {
-                return Err(EngineError::InvalidParams {
-                    detail: format!("Bilinmeyen döndürme komutu: {other}"),
-                })
-            }
-        };
+    /// Applies the net result of GPU-previewed flips and 90-degree rotations in one clean batch.
+    pub fn apply_canvas_transform_batch(
+        &self,
+        quarter_turns_cw: i32,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let turns = ((quarter_turns_cw % 4) + 4) % 4;
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
-        guard.live_mirror = None;
-        guard
-            .session
-            .execute(cmd, json!({}))
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+
+        if flip_h {
+            guard
+                .session
+                .execute("image.imageRotation.flipCanvasHorizontal", json!({}))
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        }
+        if flip_v {
+            guard
+                .session
+                .execute("image.imageRotation.flipCanvasVertical", json!({}))
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        }
+        match turns {
+            1 => {
+                guard
+                    .session
+                    .execute("image.imageRotation.90cw", json!({}))
+                    .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            }
+            2 => {
+                guard
+                    .session
+                    .execute("image.imageRotation.180", json!({}))
+                    .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            }
+            3 => {
+                guard
+                    .session
+                    .execute("image.imageRotation.90ccw", json!({}))
+                    .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            }
+            _ => {}
+        }
+
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
@@ -358,7 +374,6 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
-        guard.live_mirror = None;
         guard
             .session
             .execute(
@@ -375,15 +390,11 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Starts a live Photo Mirror Effect session (mirrors one half of the photo onto the other across a movable axis).
-    pub fn begin_live_mirror(&self) -> Result<(), EngineError> {
+    /// Bakes the 60 FPS GPU-previewed Photo Mirror Effect into the photo raster layer once (single clean Undo step).
+    /// `mode`: `"left_to_right"`, `"right_to_left"`, `"top_to_bottom"`, `"bottom_to_top"`.
+    pub fn apply_photo_mirror(&self, mode: String, axis_ratio: f32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
-        if let Some(old) = guard.live_mirror.take() {
-            if old.has_applied_preview {
-                let _ = guard.session.execute("edit.undo", json!({}));
-            }
-        }
         let target_id = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
             find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
@@ -392,132 +403,85 @@ impl KastamonuEngine {
                     detail: "Ayna efekti uygulanacak fotoğraf katmanı bulunamadı".into(),
                 })?
         };
-        guard.live_mirror = Some(LiveMirrorSession {
-            target_id,
-            has_applied_preview: false,
-        });
-        Ok(())
-    }
+        let ratio = axis_ratio.clamp(0.05, 0.95);
+        guard
+            .session
+            .edit("Ayna Efekti", |doc, _| {
+                let bounds = doc.bounds();
+                let w = doc.size.width as usize;
+                let h = doc.size.height as usize;
+                if w < 2 || h < 2 {
+                    return Ok(());
+                }
+                let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+                    return Ok(());
+                };
+                let LayerContent::Raster(surf) = &mut layer.content else {
+                    return Ok(());
+                };
+                let ch = surf.format().channels();
+                let mut data = surf.read_region(bounds);
+                let row_stride = w * ch;
+                if data.len() < row_stride * h {
+                    return Ok(());
+                }
 
-    /// Updates the live Photo Mirror Effect in real time.
-    /// `mode`: `"left_to_right"`, `"right_to_left"`, `"top_to_bottom"`, `"bottom_to_top"`.
-    /// `axis_ratio`: `0.10..=0.90` (0.50 = center).
-    pub fn update_live_mirror(&self, mode: String, axis_ratio: f32) -> Result<(), EngineError> {
-        let mut guard = self.core.lock();
-        let Some(mut lm) = guard.live_mirror.take() else {
-            return Ok(());
-        };
+                let ax = ((w as f32) * ratio).round().clamp(1.0, (w - 1) as f32) as isize;
+                let ay = ((h as f32) * ratio).round().clamp(1.0, (h - 1) as f32) as isize;
 
-        if lm.has_applied_preview {
-            let _ = guard.session.execute("edit.undo", json!({}));
-            lm.has_applied_preview = false;
-        }
-
-        let target_id = lm.target_id;
-        let ratio = axis_ratio.clamp(0.10, 0.90);
-        let res = guard.session.edit("Ayna Efekti", |doc, _| {
-            let bounds = doc.bounds();
-            let w = doc.size.width as usize;
-            let h = doc.size.height as usize;
-            if w < 2 || h < 2 {
-                return Ok(());
-            }
-            let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
-                return Ok(());
-            };
-            let LayerContent::Raster(surf) = &mut layer.content else {
-                return Ok(());
-            };
-            let ch = surf.format().channels();
-            let mut data = surf.read_region(bounds);
-            let row_stride = w * ch;
-            if data.len() < row_stride * h {
-                return Ok(());
-            }
-
-            let ax = ((w as f32) * ratio).round().clamp(1.0, (w - 1) as f32) as isize;
-            let ay = ((h as f32) * ratio).round().clamp(1.0, (h - 1) as f32) as isize;
-
-            match mode.as_str() {
-                "left_to_right" => {
-                    for y in 0..h {
-                        let base = y * row_stride;
-                        for x in (ax as usize)..w {
-                            let sx = (2 * ax - 1 - x as isize).clamp(0, (w - 1) as isize) as usize;
-                            let dst = base + x * ch;
-                            let src = base + sx * ch;
-                            for c in 0..ch {
-                                data[dst + c] = data[src + c];
+                match mode.as_str() {
+                    "left_to_right" => {
+                        for y in 0..h {
+                            let base = y * row_stride;
+                            for x in (ax as usize)..w {
+                                let sx = (2 * ax - 1 - x as isize).clamp(0, (w - 1) as isize) as usize;
+                                let dst = base + x * ch;
+                                let src = base + sx * ch;
+                                for c in 0..ch {
+                                    data[dst + c] = data[src + c];
+                                }
                             }
                         }
                     }
-                }
-                "right_to_left" => {
-                    for y in 0..h {
-                        let base = y * row_stride;
-                        for x in 0..(ax as usize) {
-                            let sx = (2 * ax - 1 - x as isize).clamp(0, (w - 1) as isize) as usize;
-                            let dst = base + x * ch;
-                            let src = base + sx * ch;
-                            for c in 0..ch {
-                                data[dst + c] = data[src + c];
+                    "right_to_left" => {
+                        for y in 0..h {
+                            let base = y * row_stride;
+                            for x in 0..(ax as usize) {
+                                let sx = (2 * ax - 1 - x as isize).clamp(0, (w - 1) as isize) as usize;
+                                let dst = base + x * ch;
+                                let src = base + sx * ch;
+                                for c in 0..ch {
+                                    data[dst + c] = data[src + c];
+                                }
                             }
                         }
                     }
-                }
-                "top_to_bottom" => {
-                    for y in (ay as usize)..h {
-                        let sy = (2 * ay - 1 - y as isize).clamp(0, (h - 1) as isize) as usize;
-                        let src_start = sy * row_stride;
-                        let dst_start = y * row_stride;
-                        data.copy_within(src_start..(src_start + row_stride), dst_start);
+                    "top_to_bottom" => {
+                        for y in (ay as usize)..h {
+                            let sy = (2 * ay - 1 - y as isize).clamp(0, (h - 1) as isize) as usize;
+                            let src_start = sy * row_stride;
+                            let dst_start = y * row_stride;
+                            data.copy_within(src_start..(src_start + row_stride), dst_start);
+                        }
                     }
-                }
-                "bottom_to_top" => {
-                    for y in 0..(ay as usize) {
-                        let sy = (2 * ay - 1 - y as isize).clamp(0, (h - 1) as isize) as usize;
-                        let src_start = sy * row_stride;
-                        let dst_start = y * row_stride;
-                        data.copy_within(src_start..(src_start + row_stride), dst_start);
+                    "bottom_to_top" => {
+                        for y in 0..(ay as usize) {
+                            let sy = (2 * ay - 1 - y as isize).clamp(0, (h - 1) as isize) as usize;
+                            let src_start = sy * row_stride;
+                            let dst_start = y * row_stride;
+                            data.copy_within(src_start..(src_start + row_stride), dst_start);
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
-            }
 
-            surf.write_region_par(bounds, &data);
-            Ok(())
-        });
-
-        match res {
-            Ok(()) => {
-                lm.has_applied_preview = true;
-                guard.live_mirror = Some(lm);
-                guard.mark_full_dirty();
+                surf.write_region_par(bounds, &data);
                 Ok(())
-            }
-            Err(e) => {
-                guard.live_mirror = Some(lm);
-                Err(EngineError::CommandFailed { detail: e.to_string() })
-            }
-        }
-    }
+            })
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
 
-    pub fn commit_live_mirror(&self) -> Result<(), EngineError> {
-        let mut guard = self.core.lock();
-        guard.live_mirror = None;
         guard.mark_full_dirty();
-        Ok(())
-    }
-
-    pub fn cancel_live_mirror(&self) -> Result<(), EngineError> {
-        let mut guard = self.core.lock();
-        if let Some(lm) = guard.live_mirror.take() {
-            if lm.has_applied_preview {
-                let _ = guard.session.execute("edit.undo", json!({}));
-                guard.mark_full_dirty();
-            }
-        }
-        Ok(())
+        self.info_from_locked(&guard)
     }
 
     pub fn begin_live_adjustment(&self, kind: String, params_json: String) -> Result<u64, EngineError> {
@@ -734,19 +698,11 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    pub fn apply_pixel_filter(&self, command_id: String, params_json: String) -> Result<(), EngineError> {
-        self.begin_live_filter()?;
-        let res = self.update_live_filter(command_id, params_json);
-        let _ = self.commit_live_filter();
-        res
-    }
-
     pub fn undo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
-        guard.live_mirror = None;
         guard
             .session
             .execute("edit.undo", json!({}))
@@ -760,7 +716,6 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
-        guard.live_mirror = None;
         guard
             .session
             .execute("edit.redo", json!({}))

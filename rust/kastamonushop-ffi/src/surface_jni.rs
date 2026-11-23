@@ -11,7 +11,7 @@ use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 
-use crate::renderer::{ViewportCamera, VulkanRenderer};
+use crate::renderer::{GpuPreviewState, ViewportCamera, VulkanRenderer};
 use crate::{SendNativeWindow, runtime, set_gpu_error};
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -34,7 +34,6 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
 ) -> jboolean {
     let res = catch_unwind(AssertUnwindSafe(|| {
         let rt = runtime();
-        // Drop any previous renderer BEFORE releasing any previous NativeWindow
         *rt.renderer.lock() = None;
         *rt.native_window.lock() = None;
 
@@ -103,7 +102,6 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
 ) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         let rt = runtime();
-        // Critical order: drop wgpu::Surface/VulkanRenderer FIRST, then release ANativeWindow
         *rt.renderer.lock() = None;
         *rt.native_window.lock() = None;
         log::info!("StonebridgeCraft: Vulkan Surface detached cleanly");
@@ -130,6 +128,25 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nativeSetPreview(
+    _env: JNIEnv,
+    _class: JClass,
+    mirror_mode: jint,
+    mirror_axis: jfloat,
+    flip_x: jboolean,
+    flip_y: jboolean,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        *runtime().preview.lock() = GpuPreviewState {
+            mirror_mode,
+            mirror_axis: mirror_axis.clamp(0.05, 0.95),
+            flip_x: flip_x != JNI_FALSE,
+            flip_y: flip_y != JNI_FALSE,
+        };
+    }));
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nativeRenderFrame(
     _env: JNIEnv,
     _class: JClass,
@@ -150,8 +167,9 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
             (doc, guard.render_generation, full, rect)
         };
         let camera = *rt.camera.lock();
+        let preview = *rt.preview.lock();
 
-        match renderer.render_frame(&doc, render_gen, force_full, dirty_rect, camera) {
+        match renderer.render_frame(&doc, render_gen, force_full, dirty_rect, camera, preview) {
             Ok(()) => JNI_TRUE,
             Err(e) => {
                 set_gpu_error(format!("render_frame error: {e}"));

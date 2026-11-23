@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kastamonushop.app.bridge.NativeSurfaceBridge
 import com.kastamonushop.app.data.SavedPhotoItem
 import com.kastamonushop.app.ui.canvas.RulerLinePreview
 import com.kastamonushop.app.ui.canvas.VulkanCanvasView
@@ -104,15 +105,16 @@ private data class CropRatioPreset(
 
 private data class MirrorModeOption(
     val id: String,
+    val gpuId: Int,
     val label: String,
     val isVerticalAxis: Boolean
 )
 
 private val MIRROR_MODES = listOf(
-    MirrorModeOption("left_to_right", "Sol→Sağ", true),
-    MirrorModeOption("right_to_left", "Sağ→Sol", true),
-    MirrorModeOption("top_to_bottom", "Üst→Alt", false),
-    MirrorModeOption("bottom_to_top", "Alt→Üst", false)
+    MirrorModeOption("left_to_right", 1, "Enine (Sol→Sağ)", true),
+    MirrorModeOption("right_to_left", 2, "Enine (Sağ→Sol)", true),
+    MirrorModeOption("top_to_bottom", 3, "Boyuna (Üst→Alt)", false),
+    MirrorModeOption("bottom_to_top", 4, "Boyuna (Alt→Üst)", false)
 )
 
 private val CROP_PRESETS = listOf(
@@ -252,7 +254,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.5.1",
+                    text = "v0.5.2",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -384,7 +386,6 @@ private fun SavedPhotoCard(
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
-    // Decode thumbnail asynchronously on Dispatchers.IO for smooth 60fps gallery scrolling
     val thumbBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = item.thumbPath) {
         value = withContext(Dispatchers.IO) {
             runCatching { BitmapFactory.decodeFile(item.thumbPath)?.asImageBitmap() }.getOrNull()
@@ -649,9 +650,14 @@ fun StonebridgeStudioScreen(
     var blurRadiusVal by remember { mutableFloatStateOf(0f) }
     var sharpenAmountVal by remember { mutableFloatStateOf(0f) }
 
-    // Live Photo Mirror Effect state
+    // 60 FPS GPU Mirror Effect state (zero CPU lag!)
     var selectedMirrorMode by remember { mutableStateOf(MIRROR_MODES.first()) }
     var mirrorAxisRatio by remember { mutableFloatStateOf(0.50f) }
+
+    // 60 FPS GPU Rotate/Flip preview state inside Kırp & Çevir
+    var pendingQuarterTurns by remember { mutableIntStateOf(0) }
+    var pendingFlipH by remember { mutableStateOf(false) }
+    var pendingFlipV by remember { mutableStateOf(false) }
 
     // Crop overlay state
     var selectedCropPreset by remember { mutableStateOf(CROP_PRESETS.first()) }
@@ -662,6 +668,24 @@ fun StonebridgeStudioScreen(
     var pickerH by remember(state.colorHex) { mutableFloatStateOf(initHsv[0]) }
     var pickerS by remember(state.colorHex) { mutableFloatStateOf(initHsv[1]) }
     var pickerV by remember(state.colorHex) { mutableFloatStateOf(initHsv[2]) }
+
+    fun pushGpuMirrorPreview(mode: MirrorModeOption, ratio: Float) {
+        NativeSurfaceBridge.nativeSetPreview(mode.gpuId, ratio, false, false)
+        NativeSurfaceBridge.nativeRenderFrame()
+    }
+
+    fun clearGpuPreview() {
+        pendingQuarterTurns = 0
+        pendingFlipH = false
+        pendingFlipV = false
+        NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
+        canvasViewRef?.fitToDocument(0)
+    }
+
+    fun pushGpuTransformPreview(turns: Int, flipH: Boolean, flipV: Boolean) {
+        NativeSurfaceBridge.nativeSetPreview(0, 0.5f, flipH, flipV)
+        canvasViewRef?.fitToDocument(turns)
+    }
 
     fun dismissLivePanelIfActive() {
         when (activePanel) {
@@ -674,7 +698,13 @@ fun StonebridgeStudioScreen(
                 activePanel = BottomPanel.DOCK
             }
             BottomPanel.MIRROR_EDIT -> {
-                vm.cancelLiveMirror()
+                clearGpuPreview()
+                activePanel = BottomPanel.DOCK
+            }
+            BottomPanel.CROP_MENU -> {
+                if (pendingQuarterTurns != 0 || pendingFlipH || pendingFlipV) {
+                    clearGpuPreview()
+                }
                 activePanel = BottomPanel.DOCK
             }
             else -> Unit
@@ -695,21 +725,27 @@ fun StonebridgeStudioScreen(
                     activePanel = BottomPanel.FILTER_MENU
                 }
                 BottomPanel.MIRROR_EDIT -> {
-                    vm.cancelLiveMirror()
+                    clearGpuPreview()
                     activePanel = BottomPanel.EFFECT_MENU
+                }
+                BottomPanel.CROP_MENU -> {
+                    if (pendingQuarterTurns != 0 || pendingFlipH || pendingFlipV) {
+                        clearGpuPreview()
+                    }
+                    activePanel = BottomPanel.DOCK
                 }
                 BottomPanel.CROP_RATIO_EDIT -> activePanel = BottomPanel.CROP_MENU
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
+            clearGpuPreview()
             onGoHome()
         }
     }
 
-    // Bulletproof camera auto-fit when opening/rotating/cropping or attaching canvas
     LaunchedEffect(state.fitCameraSignal, canvasViewRef) {
         if (state.fitCameraSignal > 0 && canvasViewRef != null) {
-            canvasViewRef?.fitToDocument()
+            canvasViewRef?.fitToDocument(0)
         }
     }
 
@@ -729,6 +765,10 @@ fun StonebridgeStudioScreen(
             vm.exportDocumentToUri(context, uri, pendingExportFormat)
         }
     }
+
+    // Keep latest mirror state accessible to VulkanCanvasView touch callbacks
+    val currentPanelState by rememberUpdatedState(activePanel)
+    val currentMirrorModeState by rememberUpdatedState(selectedMirrorMode)
 
     Box(
         modifier = Modifier
@@ -751,6 +791,8 @@ fun StonebridgeStudioScreen(
                     },
                     isEyedropperActive = { vm.uiState.value.activeTool == ActiveTool.EYEDROPPER },
                     isRulerEnabled = { vm.uiState.value.rulerEnabled },
+                    isMirrorDragActive = { currentPanelState == BottomPanel.MIRROR_EDIT },
+                    isMirrorVerticalAxis = { currentMirrorModeState.isVerticalAxis },
                     onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
                     onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
                     onStrokeEnd = { vm.finishLiveStroke() },
@@ -758,6 +800,10 @@ fun StonebridgeStudioScreen(
                     onRulerPreview = { preview -> rulerPreview = preview },
                     onRulerStrokeCommit = { samples -> vm.commitRulerStroke(samples) },
                     onEyedropperSample = { dx, dy -> vm.sampleColorAt(dx, dy) },
+                    onMirrorAxisDrag = { ratio ->
+                        mirrorAxisRatio = ratio
+                        pushGpuMirrorPreview(currentMirrorModeState, ratio)
+                    },
                     onCameraChanged = { cameraTick++ }
                 ).also { canvasViewRef = it }
             }
@@ -795,7 +841,7 @@ fun StonebridgeStudioScreen(
             }
         }
 
-        // Live Dashed Mirror Axis Overlay when in MIRROR_EDIT
+        // 60 FPS Dashed Mirror Axis Overlay with Finger Drag Handle
         if (activePanel == BottomPanel.MIRROR_EDIT) {
             val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
             val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
@@ -809,9 +855,10 @@ fun StonebridgeStudioScreen(
                     val ay = docH * mirrorAxisRatio
                     viewRef.docToScreen(0f, ay) to viewRef.docToScreen(docW, ay)
                 }
+                val midX = (p0.first + p1.first) * 0.5f
+                val midY = (p0.second + p1.second) * 0.5f
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 12f))
-                    // Subtle dark shadow behind white dashed line so it's readable on both light and dark photos
                     drawLine(
                         color = Color(0x99000000),
                         start = Offset(p0.first, p0.second),
@@ -826,6 +873,10 @@ fun StonebridgeStudioScreen(
                         strokeWidth = 3f,
                         pathEffect = dash
                     )
+                    // Center drag handle ring so user knows they can drag right on the photo
+                    drawCircle(color = Color(0xCC19191E), radius = 16f, center = Offset(midX, midY))
+                    drawCircle(color = Color.White, radius = 16f, center = Offset(midX, midY), style = Stroke(width = 3f))
+                    drawCircle(color = Color(0xFF4F9CFF), radius = 6f, center = Offset(midX, midY))
                 }
             }
         }
@@ -865,6 +916,35 @@ fun StonebridgeStudioScreen(
                         size = Size(boxW, boxH),
                         style = Stroke(width = 3.5f)
                     )
+                }
+            }
+        }
+
+        // Clean loading indicator while decoding/baking heavy 12MP images
+        if (state.isBusy) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x66111217)),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = Color(0xEE1E2028),
+                    tonalElevation = 10.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.5.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text("İşleniyor...", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
                 }
             }
         }
@@ -977,7 +1057,7 @@ fun StonebridgeStudioScreen(
                 TopBarButton(
                     icon = Icons.Default.CenterFocusStrong,
                     label = "Ortala",
-                    onClick = { canvasViewRef?.fitToDocument() }
+                    onClick = { canvasViewRef?.fitToDocument(pendingQuarterTurns) }
                 )
 
                 TopBarButton(
@@ -1147,9 +1227,6 @@ fun StonebridgeStudioScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (state.isBusy) {
-                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
-                    }
                     Text(msg, fontSize = 12.sp, color = Color.White)
                 }
             }
@@ -1200,6 +1277,9 @@ fun StonebridgeStudioScreen(
                             label = "Kırp",
                             onClick = {
                                 vm.setTool(ActiveTool.NONE)
+                                pendingQuarterTurns = 0
+                                pendingFlipH = false
+                                pendingFlipV = false
                                 activePanel = BottomPanel.CROP_MENU
                             }
                         )
@@ -1470,15 +1550,33 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
+                // Category 3: Kırp & Çevir — 0 ms Instant GPU Preview for 90° Rotate & Flip!
                 BottomPanel.CROP_MENU -> {
+                    val hasPendingTransform = pendingQuarterTurns != 0 || pendingFlipH || pendingFlipV
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         BottomEditorHeader(
                             title = "Kırp & Çevir",
-                            subtitle = "Fotoğrafı kırp, 90° döndür veya aynala",
-                            onClose = { activePanel = BottomPanel.DOCK }
+                            subtitle = if (hasPendingTransform) "Anlık önizleme · kaydetmek için Uygula de" else "Fotoğrafı kırp, anlık döndür veya çevir",
+                            applyLabel = if (hasPendingTransform) "Uygula" else null,
+                            onClose = {
+                                if (hasPendingTransform) clearGpuPreview()
+                                activePanel = BottomPanel.DOCK
+                            },
+                            onApply = if (hasPendingTransform) {
+                                {
+                                    val t = pendingQuarterTurns
+                                    val fh = pendingFlipH
+                                    val fv = pendingFlipV
+                                    pendingQuarterTurns = 0
+                                    pendingFlipH = false
+                                    pendingFlipV = false
+                                    vm.applyTransformBatch(t, fh, fv)
+                                    activePanel = BottomPanel.DOCK
+                                }
+                            } else null
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1488,7 +1586,8 @@ fun StonebridgeStudioScreen(
                                 icon = Icons.Default.Crop,
                                 label = "Oran Kırp",
                                 onClick = {
-                                    canvasViewRef?.fitToDocument()
+                                    if (hasPendingTransform) clearGpuPreview()
+                                    canvasViewRef?.fitToDocument(0)
                                     cropScale = 0.90f
                                     activePanel = BottomPanel.CROP_RATIO_EDIT
                                 }
@@ -1496,22 +1595,36 @@ fun StonebridgeStudioScreen(
                             CircularDockButton(
                                 icon = Icons.AutoMirrored.Filled.RotateLeft,
                                 label = "90° Sol",
-                                onClick = { vm.transformCanvas("90ccw", "90° sola döndürüldü") }
+                                onClick = {
+                                    pendingQuarterTurns = (pendingQuarterTurns + 3) % 4
+                                    pushGpuTransformPreview(pendingQuarterTurns, pendingFlipH, pendingFlipV)
+                                }
                             )
                             CircularDockButton(
                                 icon = Icons.AutoMirrored.Filled.RotateRight,
                                 label = "90° Sağ",
-                                onClick = { vm.transformCanvas("90cw", "90° sağa döndürüldü") }
+                                onClick = {
+                                    pendingQuarterTurns = (pendingQuarterTurns + 1) % 4
+                                    pushGpuTransformPreview(pendingQuarterTurns, pendingFlipH, pendingFlipV)
+                                }
                             )
                             CircularDockButton(
                                 icon = Icons.Default.Flip,
                                 label = "Yatay",
-                                onClick = { vm.transformCanvas("flip_h", "Yatay çevrildi") }
+                                selected = pendingFlipH,
+                                onClick = {
+                                    pendingFlipH = !pendingFlipH
+                                    pushGpuTransformPreview(pendingQuarterTurns, pendingFlipH, pendingFlipV)
+                                }
                             )
                             CircularDockButton(
                                 icon = Icons.Default.SwapVert,
                                 label = "Dikey",
-                                onClick = { vm.transformCanvas("flip_v", "Dikey çevrildi") }
+                                selected = pendingFlipV,
+                                onClick = {
+                                    pendingFlipV = !pendingFlipV
+                                    pushGpuTransformPreview(pendingQuarterTurns, pendingFlipH, pendingFlipV)
+                                }
                             )
                         }
                     }
@@ -1542,9 +1655,8 @@ fun StonebridgeStudioScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CROP_PRESETS.forEach { preset ->
-                                val isSel = preset == selectedCropPreset
                                 FilterChip(
-                                    selected = isSel,
+                                    selected = preset == selectedCropPreset,
                                     onClick = { selectedCropPreset = preset },
                                     label = { Text(preset.label, fontSize = 11.sp) }
                                 )
@@ -1650,7 +1762,7 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Category 5: Efekt -> [Siyah-Beyaz] [Negatif] [Ayna (Fotoğraf Yansıtma)]
+                // Category 5: Efekt -> [Siyah-Beyaz] [Negatif] [Ayna]
                 BottomPanel.EFFECT_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1658,7 +1770,7 @@ fun StonebridgeStudioScreen(
                     ) {
                         BottomEditorHeader(
                             title = "Hızlı Efektler",
-                            subtitle = "Siyah-Beyaz, Negatif veya Ayna Yansıtma",
+                            subtitle = "Siyah-Beyaz, Negatif veya 60 FPS Ayna",
                             onClose = { activePanel = BottomPanel.DOCK }
                         )
                         Row(
@@ -1683,8 +1795,8 @@ fun StonebridgeStudioScreen(
                                 onClick = {
                                     selectedMirrorMode = MIRROR_MODES.first()
                                     mirrorAxisRatio = 0.50f
-                                    canvasViewRef?.fitToDocument()
-                                    vm.beginLiveMirror(selectedMirrorMode.id, mirrorAxisRatio)
+                                    canvasViewRef?.fitToDocument(0)
+                                    pushGpuMirrorPreview(selectedMirrorMode, mirrorAxisRatio)
                                     activePanel = BottomPanel.MIRROR_EDIT
                                 }
                             )
@@ -1692,51 +1804,78 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                // Live Preview: Photo Mirror Effect (Fotoğraf Ayna Efekti)
+                // 60 FPS GPU Mirror Effect — drag right on the photo OR use the slider!
                 BottomPanel.MIRROR_EDIT -> {
+                    val isEnine = selectedMirrorMode.isVerticalAxis
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         BottomEditorHeader(
                             title = "Ayna Efekti",
-                            subtitle = "Yön seç ve kesikli çizgiyi kaydır, beğenirsen Uygula de",
+                            subtitle = "Fotoğraf üzerinde parmağınla çizgiyi sürükle",
                             applyLabel = "Uygula",
                             onClose = {
-                                vm.cancelLiveMirror()
+                                clearGpuPreview()
                                 activePanel = BottomPanel.EFFECT_MENU
                             },
                             onApply = {
-                                vm.commitLiveMirror()
+                                val modeId = selectedMirrorMode.id
+                                val ratio = mirrorAxisRatio
+                                vm.applyPhotoMirror(modeId, ratio)
                                 activePanel = BottomPanel.DOCK
                             }
                         )
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            MIRROR_MODES.forEach { mode ->
-                                FilterChip(
-                                    selected = mode == selectedMirrorMode,
-                                    onClick = {
-                                        selectedMirrorMode = mode
-                                        vm.updateLiveMirror(mode.id, mirrorAxisRatio)
-                                    },
-                                    label = { Text(mode.label, fontSize = 11.sp) }
-                                )
+                            FilterChip(
+                                selected = isEnine,
+                                onClick = {
+                                    selectedMirrorMode = MIRROR_MODES[0]
+                                    pushGpuMirrorPreview(selectedMirrorMode, mirrorAxisRatio)
+                                },
+                                label = { Text("Ayna (Enine)", fontSize = 11.sp) }
+                            )
+                            FilterChip(
+                                selected = !isEnine,
+                                onClick = {
+                                    selectedMirrorMode = MIRROR_MODES[2]
+                                    pushGpuMirrorPreview(selectedMirrorMode, mirrorAxisRatio)
+                                },
+                                label = { Text("Ayna (Boyuna)", fontSize = 11.sp) }
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            // Flip mirrored side (Sol->Sağ <-> Sağ->Sol, Üst->Alt <-> Alt->Üst)
+                            OutlinedButton(
+                                onClick = {
+                                    selectedMirrorMode = when (selectedMirrorMode.id) {
+                                        "left_to_right" -> MIRROR_MODES[1]
+                                        "right_to_left" -> MIRROR_MODES[0]
+                                        "top_to_bottom" -> MIRROR_MODES[3]
+                                        else -> MIRROR_MODES[2]
+                                    }
+                                    pushGpuMirrorPreview(selectedMirrorMode, mirrorAxisRatio)
+                                },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Icon(Icons.Default.SwapHoriz, contentDescription = "Yön Çevir", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Ters", fontSize = 11.sp)
                             }
                         }
                         CompactSliderRow(
-                            label = "Çizgi",
+                            label = "Pozisyon",
                             valueText = "%${(mirrorAxisRatio * 100).roundToInt()}",
                             value = mirrorAxisRatio,
-                            range = 0.15f..0.85f,
+                            range = 0.05f..0.95f,
                             defaultValue = 0.50f
                         ) {
                             mirrorAxisRatio = it
-                            vm.updateLiveMirror(selectedMirrorMode.id, it)
+                            pushGpuMirrorPreview(selectedMirrorMode, it)
                         }
                     }
                 }
