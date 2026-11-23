@@ -1,12 +1,11 @@
-//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.3).
-//! - Real-time `LiveStroke` with dirty-rect tracking + smart spacing for giant brushes
-//! - Verified PhotoCraft command IDs (`layer.new.layer`, `layer.setProps`, `layer.delete`, `tools.setBrush`)
-//! - Photo-safe workflow: opened photos auto-lock Background pixels + add a transparent "Çizim Katmanı"
-//! - Supports layer lock toggle, opacity, and blend modes
+//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.4.2 — StonebridgeCraft).
+//! - Live real-time adjustment preview (`begin_live_adjustment`, `update_live_adjustment`, `cancel_live_adjustment`)
+//! - Toggleable quick effects (`toggle_quick_adjustment` for B&W / Invert)
+//! - Smart pixel filter targeting (`apply_pixel_filter` auto-targets the photo layer even when an adjustment layer is selected)
 
 use std::sync::Arc;
 use parking_lot::Mutex;
-use photocraft_doc::{Document, LayerId};
+use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_engine::brush_cmds::LiveStroke;
 use photocraft_engine::Session;
 use photocraft_geom::Rect;
@@ -80,7 +79,7 @@ impl EngineCore {
         let _ = session.execute(
             "file.new",
             json!({
-                "name": "KastamonuShop Canvas",
+                "name": "StonebridgeCraft Canvas",
                 "width": 2048,
                 "height": 2048,
                 "resolution": 300.0,
@@ -183,8 +182,6 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Imports a photo/PSD; for single-layer photos, locks the original photo pixels by default
-    /// and adds a transparent "Çizim Katmanı" above it so beginners cannot accidentally erase the photo.
     pub fn open_document_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
         let imported = photocraft_io::import(&file_name, &bytes)
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
@@ -249,6 +246,119 @@ impl KastamonuEngine {
         Ok(out.to_string())
     }
 
+    /// Creates a new live adjustment layer (e.g. `brightnessContrast`, `hueSaturation`) and returns its layer ID
+    /// so Kotlin sliders can update it in real time via `update_live_adjustment`.
+    pub fn begin_live_adjustment(&self, kind: String, params_json: String) -> Result<u64, EngineError> {
+        let params: Value = if params_json.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&params_json)
+                .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?
+        };
+        let cmd = format!("layer.newAdjustmentLayer.{kind}");
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let out = guard
+            .session
+            .execute(&cmd, params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let layer_id = out
+            .get("layer")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| EngineError::CommandFailed { detail: "Adjustment layer id missing".into() })?;
+        guard.mark_full_dirty();
+        Ok(layer_id)
+    }
+
+    /// Updates an active live adjustment layer in real time as the user drags a slider.
+    pub fn update_live_adjustment(&self, layer_id: u64, params_json: String) -> Result<(), EngineError> {
+        let mut params: Value = serde_json::from_str(&params_json)
+            .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?;
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("layer".to_string(), json!(layer_id));
+        }
+        let mut guard = self.core.lock();
+        guard
+            .session
+            .execute("layer.setAdjustment", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Deletes a specific layer by ID (used for cancelling a live adjustment preview or toggling B&W / Invert off).
+    pub fn delete_layer_by_id(&self, layer_id: u64) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute("layer.delete", json!({ "layer": layer_id }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Applies a pixel filter (`filter.blur.gaussianBlur`, `filter.sharpen.unsharpMask`, etc.)
+    /// by automatically targeting the photo/background pixel layer even if an adjustment layer is currently selected.
+    pub fn apply_pixel_filter(&self, command_id: String, params_json: String) -> Result<(), EngineError> {
+        let params: Value = if params_json.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&params_json)
+                .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?
+        };
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+
+        // Find the best raster pixel layer (prefer Background / bottom raster photo layer if active isn't raster)
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let doc = ds.doc();
+            let prev = ds.active_layer();
+
+            let active_is_raster = prev
+                .and_then(|aid| doc.layers.iter().find(|l| l.id == aid))
+                .is_some_and(|l| matches!(l.content, LayerContent::Raster(_)) && !l.name.eq_ignore_ascii_case("Çizim Katmanı"));
+
+            let chosen = if active_is_raster {
+                prev.and_then(|aid| doc.layers.iter().find(|l| l.id == aid))
+            } else {
+                doc.layers
+                    .iter()
+                    .find(|l| matches!(l.content, LayerContent::Raster(_)))
+            };
+
+            let target = chosen.ok_or_else(|| EngineError::CommandFailed {
+                detail: "Filtre uygulanacak piksel katmanı bulunamadı".into(),
+            })?;
+            (prev, target.id, target.locks.pixels)
+        };
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+
+        let res = guard.session.execute(&command_id, params);
+
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
     pub fn undo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -292,7 +402,7 @@ impl KastamonuEngine {
                 visible: layer.visible,
                 opacity: layer.opacity,
                 blend_mode: format!("{:?}", layer.blend),
-                is_group: matches!(layer.content, photocraft_doc::LayerContent::Group(_)),
+                is_group: matches!(layer.content, LayerContent::Group(_)),
                 is_active: active_id == Some(layer.id),
                 locked: layer.locks.pixels || layer.locks.all,
                 is_background: is_bg,
@@ -370,7 +480,6 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Configures the active session brush with adaptive spacing for large brushes to keep 60fps.
     pub fn set_brush(
         &self,
         size: f32,

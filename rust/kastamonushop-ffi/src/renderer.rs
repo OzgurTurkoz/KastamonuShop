@@ -95,7 +95,7 @@ impl VulkanRenderer {
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .or_else(|| caps.formats.first().copied())
             .ok_or_else(|| "Surface reported zero supported formats".to_string())?;
 

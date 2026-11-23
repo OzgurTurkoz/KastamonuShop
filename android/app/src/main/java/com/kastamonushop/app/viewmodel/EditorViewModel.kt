@@ -25,6 +25,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class ActiveTool {
+    NONE,
     BRUSH,
     ERASER
 }
@@ -33,12 +34,14 @@ data class EditorUiState(
     val engineVersion: String = "",
     val docInfo: DocumentInfo? = null,
     val layers: List<LayerSummary> = emptyList(),
-    val activeTool: ActiveTool = ActiveTool.BRUSH,
+    val activeTool: ActiveTool = ActiveTool.NONE,
     val brushSize: Float = 28f,
     val brushHardness: Float = 0.85f,
     val brushOpacity: Float = 1.0f,
     val brushFlow: Float = 1.0f,
     val colorHex: String = "#FF4D4F",
+    val bwLayerId: ULong? = null,
+    val invertLayerId: ULong? = null,
     val statusMessage: String? = null,
     val isBusy: Boolean = false,
     val fitCameraSignal: Int = 0
@@ -52,6 +55,10 @@ class EditorViewModel : ViewModel() {
     private val pendingLock = Any()
     private val pendingSamples = ArrayList<StrokeSample>(64)
     private val drainScheduled = AtomicBoolean(false)
+
+    // Live adjustment preview state
+    @Volatile
+    private var liveAdjustmentLayerId: ULong? = null
 
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
@@ -68,7 +75,7 @@ class EditorViewModel : ViewModel() {
         paintExecutor.shutdown()
     }
 
-    private fun showStatus(msg: String, autoHideMs: Long = 3500L) {
+    private fun showStatus(msg: String, autoHideMs: Long = 3000L) {
         statusAutoHideJob?.cancel()
         _uiState.update { it.copy(statusMessage = msg) }
         if (autoHideMs > 0) {
@@ -80,7 +87,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun refreshState() {
-        viewModelScope.launch(Dispatchers.Default) {
+        paintExecutor.execute {
             runCatching {
                 val info = engine.getDocumentInfo()
                 val layers = engine.getLayers()
@@ -127,6 +134,7 @@ class EditorViewModel : ViewModel() {
 
     fun beginLiveStroke(sample: StrokeSample) {
         val s = _uiState.value
+        if (s.activeTool == ActiveTool.NONE) return
         val activeLayer = s.layers.firstOrNull { it.isActive }
         if (activeLayer?.locked == true) {
             showStatus("Orijinal fotoğraf kilitli — düzenlemek için Katman panelinden kilidi açabilirsin", 3200L)
@@ -145,14 +153,12 @@ class EditorViewModel : ViewModel() {
     }
 
     fun pushLiveStroke(samples: List<StrokeSample>) {
-        if (samples.isEmpty()) return
+        if (_uiState.value.activeTool == ActiveTool.NONE || samples.isEmpty()) return
         synchronized(pendingLock) {
             pendingSamples.addAll(samples)
         }
         if (drainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute {
-                drainPendingSamples()
-            }
+            paintExecutor.execute { drainPendingSamples() }
         }
     }
 
@@ -175,6 +181,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun finishLiveStroke() {
+        if (_uiState.value.activeTool == ActiveTool.NONE) return
         paintExecutor.execute {
             drainPendingSamples()
             runCatching {
@@ -197,22 +204,120 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    fun applyEffectCommand(commandId: String, paramsJson: String, labelTr: String, needsUnlockedLayer: Boolean = false) {
-        val activeLayer = _uiState.value.layers.firstOrNull { it.isActive }
-        if (needsUnlockedLayer && activeLayer?.locked == true) {
-            showStatus("Fotoğraf kilitli — filtre uygulamak için Katman panelinden kilidi açabilirsin", 3500L)
-            return
+    // Real-time live adjustment preview while dragging sliders!
+    fun beginLiveAdjustment(kind: String, initialParamsJson: String) {
+        paintExecutor.execute {
+            runCatching {
+                liveAdjustmentLayerId?.let { oldId -> runCatching { engine.deleteLayerById(oldId) } }
+                val id = engine.beginLiveAdjustment(kind, initialParamsJson)
+                liveAdjustmentLayerId = id
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Önizleme hatası: ${err.message}")
+            }
         }
+    }
+
+    fun updateLiveAdjustment(paramsJson: String) {
+        val id = liveAdjustmentLayerId ?: return
+        paintExecutor.execute {
+            runCatching {
+                engine.updateLiveAdjustment(id, paramsJson)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun commitLiveAdjustment(labelTr: String) {
+        liveAdjustmentLayerId = null
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("$labelTr uygulandı", 2000L)
+            }
+        }
+    }
+
+    fun cancelLiveAdjustment() {
+        val id = liveAdjustmentLayerId ?: return
+        liveAdjustmentLayerId = null
+        paintExecutor.execute {
+            runCatching {
+                engine.deleteLayerById(id)
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    // True ON/OFF toggles for Black & White and Invert
+    fun toggleBlackAndWhite() {
+        val existingId = _uiState.value.bwLayerId
+        paintExecutor.execute {
+            runCatching {
+                if (existingId != null) {
+                    runCatching { engine.deleteLayerById(existingId) }
+                    val info = engine.getDocumentInfo()
+                    val layers = engine.getLayers()
+                    _uiState.update { it.copy(docInfo = info, layers = layers, bwLayerId = null) }
+                    NativeSurfaceBridge.nativeRenderFrame()
+                    showStatus("Siyah-Beyaz kapatıldı", 1800L)
+                } else {
+                    val newId = engine.beginLiveAdjustment("blackWhite", "{}")
+                    val info = engine.getDocumentInfo()
+                    val layers = engine.getLayers()
+                    _uiState.update { it.copy(docInfo = info, layers = layers, bwLayerId = newId) }
+                    NativeSurfaceBridge.nativeRenderFrame()
+                    showStatus("Siyah-Beyaz açıldı", 1800L)
+                }
+            }.onFailure { err ->
+                showStatus("Siyah-Beyaz hatası: ${err.message}")
+            }
+        }
+    }
+
+    fun toggleInvert() {
+        val existingId = _uiState.value.invertLayerId
+        paintExecutor.execute {
+            runCatching {
+                if (existingId != null) {
+                    runCatching { engine.deleteLayerById(existingId) }
+                    val info = engine.getDocumentInfo()
+                    val layers = engine.getLayers()
+                    _uiState.update { it.copy(docInfo = info, layers = layers, invertLayerId = null) }
+                    NativeSurfaceBridge.nativeRenderFrame()
+                    showStatus("Negatif kapatıldı", 1800L)
+                } else {
+                    val newId = engine.beginLiveAdjustment("invert", "{}")
+                    val info = engine.getDocumentInfo()
+                    val layers = engine.getLayers()
+                    _uiState.update { it.copy(docInfo = info, layers = layers, invertLayerId = newId) }
+                    NativeSurfaceBridge.nativeRenderFrame()
+                    showStatus("Negatif açıldı", 1800L)
+                }
+            }.onFailure { err ->
+                showStatus("Negatif hatası: ${err.message}")
+            }
+        }
+    }
+
+    // Smart pixel filter (Gaussian Blur / Sharpen) that auto-targets the photo layer cleanly
+    fun applyPixelFilter(commandId: String, paramsJson: String, labelTr: String) {
         _uiState.update { it.copy(isBusy = true) }
         showStatus("$labelTr uygulanıyor...", 0L)
         paintExecutor.execute {
             runCatching {
-                engine.executeCommand(commandId, paramsJson)
+                engine.applyPixelFilter(commandId, paramsJson)
                 val info = engine.getDocumentInfo()
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
-                showStatus("$labelTr uygulandı", 2500L)
+                showStatus("$labelTr uygulandı", 2200L)
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("$labelTr hatası: ${err.message}", 4500L)
@@ -225,7 +330,15 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 val info = engine.undo()
                 val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                val ids = layers.map { it.id }.toSet()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        bwLayerId = it.bwLayerId?.takeIf { id -> id in ids },
+                        invertLayerId = it.invertLayerId?.takeIf { id -> id in ids }
+                    )
+                }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }
@@ -260,7 +373,15 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 val layers = engine.deleteActiveLayer()
                 val info = engine.getDocumentInfo()
-                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                val ids = layers.map { it.id }.toSet()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        bwLayerId = it.bwLayerId?.takeIf { id -> id in ids },
+                        invertLayerId = it.invertLayerId?.takeIf { id -> id in ids }
+                    )
+                }
                 NativeSurfaceBridge.nativeRenderFrame()
             }.onFailure { err ->
                 showStatus("Katman silinemedi: ${err.message}")
@@ -349,6 +470,8 @@ class EditorViewModel : ViewModel() {
                         docInfo = info,
                         layers = layers,
                         isBusy = false,
+                        bwLayerId = if (asLayer) it.bwLayerId else null,
+                        invertLayerId = if (asLayer) it.invertLayerId else null,
                         fitCameraSignal = if (asLayer) it.fitCameraSignal else it.fitCameraSignal + 1
                     )
                 }

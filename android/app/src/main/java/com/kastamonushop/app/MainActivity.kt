@@ -11,11 +11,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
@@ -50,12 +50,14 @@ private val StudioDarkScheme = darkColorScheme(
 
 private enum class BottomPanel {
     DOCK,
-    BRUSH_EDIT,
-    ERASER_EDIT,
-    LIGHT_EDIT,
-    COLOR_EDIT,
+    DRAW_MENU,
+    ADJUST_MENU,
+    LIGHT_LIVE,
+    COLOR_LIVE,
+    FILTER_MENU,
     BLUR_EDIT,
-    SHARPEN_EDIT
+    SHARPEN_EDIT,
+    EFFECT_MENU
 }
 
 private data class BlendModeOption(
@@ -78,7 +80,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MaterialTheme(colorScheme = StudioDarkScheme) {
-                StonbridgeStudioScreen()
+                StonebridgeStudioScreen()
             }
         }
     }
@@ -126,14 +128,14 @@ private fun CircularDockButton(
 
     Column(
         modifier = Modifier
-            .width(62.dp)
+            .width(72.dp)
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
-                .size(46.dp)
+                .size(48.dp)
                 .clip(CircleShape)
                 .background(circleBg)
                 .border(
@@ -177,7 +179,7 @@ private fun CompactSliderRow(
             text = label,
             color = Color(0xFFDCE0EC),
             fontSize = 12.sp,
-            modifier = Modifier.width(74.dp)
+            modifier = Modifier.width(72.dp)
         )
         Slider(
             value = value,
@@ -185,7 +187,7 @@ private fun CompactSliderRow(
             valueRange = range,
             modifier = Modifier
                 .weight(1f)
-                .height(30.dp)
+                .height(28.dp)
         )
         Text(
             text = valueText,
@@ -211,8 +213,8 @@ private fun BottomEditorHeader(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-            IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(18.dp))
+            IconButton(onClick = onClose, modifier = Modifier.size(30.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(18.dp))
             }
             Column(modifier = Modifier.padding(start = 4.dp)) {
                 Text(title, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
@@ -224,7 +226,7 @@ private fun BottomEditorHeader(
                 onClick = onApply,
                 shape = RoundedCornerShape(20.dp),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                modifier = Modifier.height(32.dp)
+                modifier = Modifier.height(30.dp)
             ) {
                 Text(applyLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
@@ -233,7 +235,7 @@ private fun BottomEditorHeader(
 }
 
 @Composable
-fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
+fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
     val state by vm.uiState.collectAsState()
     val context = LocalContext.current
 
@@ -246,7 +248,6 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
     var openAsLayer by remember { mutableStateOf(false) }
     var canvasViewRef by remember { mutableStateOf<VulkanCanvasView?>(null) }
 
-    // Inline bottom-strip adjustment values
     var brightnessVal by remember { mutableFloatStateOf(0f) }
     var contrastVal by remember { mutableFloatStateOf(0f) }
     var hueVal by remember { mutableFloatStateOf(0f) }
@@ -281,7 +282,6 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Unobstructed full-screen Vulkan canvas
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -361,7 +361,7 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                             "png" to "PNG Resim (.png)",
                             "jpg" to "JPEG Resim (.jpg)",
                             "psd" to "Photoshop Katmanlı (.psd)",
-                            "pcraft" to "StonbridgeCraft Proje (.pcraft)",
+                            "pcraft" to "StonebridgeCraft Proje (.pcraft)",
                             "webp" to "WebP (.webp)"
                         ).forEach { (ext, label) ->
                             DropdownMenuItem(
@@ -369,7 +369,7 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                                 onClick = {
                                     showExportMenu = false
                                     pendingExportFormat = ext
-                                    exportDocLauncher.launch("stonbridgecraft.$ext")
+                                    exportDocLauncher.launch("stonebridgecraft.$ext")
                                 }
                             )
                         }
@@ -547,13 +547,13 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // Status pill positioned cleanly above the bottom dock
+        // Status pill above bottom dock
         state.statusMessage?.let { msg ->
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(bottom = if (activePanel == BottomPanel.DOCK) 108.dp else 188.dp)
+                    .padding(bottom = if (activePanel == BottomPanel.DOCK) 114.dp else 198.dp)
                     .clickable { vm.clearStatus() },
                 shape = RoundedCornerShape(20.dp),
                 color = Color(0xEE111217),
@@ -572,7 +572,7 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
             }
         }
 
-        // COMPACT BOTTOM DOCK & INLINE TOOL STRIP (Never covers the photo!)
+        // GROUPED 4-CATEGORY BOTTOM CIRCULAR DOCK & COMPACT SUB-MENUS
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -589,213 +589,259 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
             }
 
             when (activePanel) {
+                // Main Dock: ONLY 4 clean category buttons!
                 BottomPanel.DOCK -> {
-                    LazyRow(
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        item {
+                        CircularDockButton(
+                            icon = Icons.Default.Brush,
+                            label = "Çizim",
+                            selected = state.activeTool != ActiveTool.NONE,
+                            accentDot = if (state.activeTool == ActiveTool.BRUSH) activeColor else null,
+                            onClick = { activePanel = BottomPanel.DRAW_MENU }
+                        )
+                        CircularDockButton(
+                            icon = Icons.Default.Tune,
+                            label = "Ayarla",
+                            onClick = {
+                                vm.setTool(ActiveTool.NONE)
+                                activePanel = BottomPanel.ADJUST_MENU
+                            }
+                        )
+                        CircularDockButton(
+                            icon = Icons.Default.BlurOn,
+                            label = "Filtre",
+                            onClick = {
+                                vm.setTool(ActiveTool.NONE)
+                                activePanel = BottomPanel.FILTER_MENU
+                            }
+                        )
+                        CircularDockButton(
+                            icon = Icons.Default.AutoAwesome,
+                            label = "Efekt",
+                            selected = state.bwLayerId != null || state.invertLayerId != null,
+                            onClick = {
+                                vm.setTool(ActiveTool.NONE)
+                                activePanel = BottomPanel.EFFECT_MENU
+                            }
+                        )
+                    }
+                }
+
+                // Category 1: Çizim (Fırça + Silgi + Bırak, all in one compact strip)
+                BottomPanel.DRAW_MENU -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Çizim Araçları",
+                            subtitle = if (state.activeTool == ActiveTool.NONE) "Çizmek için Fırça veya Silgi seç" else "Aktif araçla tuvale çizebilirsin",
+                            onClose = { activePanel = BottomPanel.DOCK }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
                             CircularDockButton(
                                 icon = Icons.Default.Brush,
                                 label = "Fırça",
                                 selected = state.activeTool == ActiveTool.BRUSH,
                                 accentDot = activeColor,
                                 onClick = {
-                                    if (state.activeTool == ActiveTool.BRUSH) {
-                                        activePanel = BottomPanel.BRUSH_EDIT
-                                    } else {
-                                        vm.setTool(ActiveTool.BRUSH)
-                                    }
+                                    vm.setTool(if (state.activeTool == ActiveTool.BRUSH) ActiveTool.NONE else ActiveTool.BRUSH)
                                 }
                             )
-                        }
-                        item {
                             CircularDockButton(
                                 icon = Icons.Default.AutoFixNormal,
                                 label = "Silgi",
                                 selected = state.activeTool == ActiveTool.ERASER,
                                 onClick = {
-                                    if (state.activeTool == ActiveTool.ERASER) {
-                                        activePanel = BottomPanel.ERASER_EDIT
-                                    } else {
-                                        vm.setTool(ActiveTool.ERASER)
-                                    }
+                                    vm.setTool(if (state.activeTool == ActiveTool.ERASER) ActiveTool.NONE else ActiveTool.ERASER)
                                 }
                             )
-                        }
-                        item {
                             CircularDockButton(
-                                icon = Icons.Default.Brightness6,
-                                label = "Işık",
-                                onClick = { activePanel = BottomPanel.LIGHT_EDIT }
+                                icon = Icons.Default.Block,
+                                label = "Bırak",
+                                selected = state.activeTool == ActiveTool.NONE,
+                                onClick = { vm.setTool(ActiveTool.NONE) }
                             )
                         }
-                        item {
-                            CircularDockButton(
-                                icon = Icons.Default.Palette,
-                                label = "Renk",
-                                onClick = { activePanel = BottomPanel.COLOR_EDIT }
+
+                        if (state.activeTool == ActiveTool.BRUSH) {
+                            val palette = listOf(
+                                "#FF4D4F", "#FFA940", "#FFEC3D", "#52C41A",
+                                "#13C2C2", "#1677FF", "#722ED1", "#FFFFFF", "#000000"
                             )
-                        }
-                        item {
-                            CircularDockButton(
-                                icon = Icons.Default.BlurOn,
-                                label = "Bulanık",
-                                onClick = { activePanel = BottomPanel.BLUR_EDIT }
-                            )
-                        }
-                        item {
-                            CircularDockButton(
-                                icon = Icons.Default.Details,
-                                label = "Keskin",
-                                onClick = { activePanel = BottomPanel.SHARPEN_EDIT }
-                            )
-                        }
-                        item {
-                            CircularDockButton(
-                                icon = Icons.Default.FilterBAndW,
-                                label = "S&B",
-                                onClick = {
-                                    vm.applyEffectCommand("layer.newAdjustmentLayer.blackWhite", "{}", "Siyah-Beyaz")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                palette.forEach { hex ->
+                                    val c = Color(android.graphics.Color.parseColor(hex))
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(c)
+                                            .border(
+                                                width = if (state.colorHex == hex) 2.5.dp else 1.dp,
+                                                color = if (state.colorHex == hex) MaterialTheme.colorScheme.primary else Color.Gray,
+                                                shape = CircleShape
+                                            )
+                                            .clickable { vm.updateBrush(colorHex = hex) }
+                                    )
                                 }
-                            )
-                        }
-                        item {
-                            CircularDockButton(
-                                icon = Icons.Default.InvertColors,
-                                label = "Negatif",
-                                onClick = {
-                                    vm.applyEffectCommand("layer.newAdjustmentLayer.invert", "{}", "Ters Çevir")
-                                }
-                            )
+                            }
+                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 2f..250f) {
+                                vm.updateBrush(size = it)
+                            }
+                            CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f) {
+                                vm.updateBrush(opacity = it)
+                            }
+                            CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f) {
+                                vm.updateBrush(hardness = it)
+                            }
+                        } else if (state.activeTool == ActiveTool.ERASER) {
+                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 4f..250f) {
+                                vm.updateBrush(size = it)
+                            }
+                            CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f) {
+                                vm.updateBrush(hardness = it)
+                            }
                         }
                     }
                 }
 
-                BottomPanel.BRUSH_EDIT -> {
+                // Category 2: Ayarla -> Sub-buttons [Işık] [Renk]
+                BottomPanel.ADJUST_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         BottomEditorHeader(
-                            title = "Fırça Ayarları",
-                            subtitle = "Renk, boyut ve yumuşaklık",
+                            title = "Ayarla",
+                            subtitle = "Canlı önizlemeli ışık ve renk ayarları",
                             onClose = { activePanel = BottomPanel.DOCK }
-                        )
-                        val palette = listOf(
-                            "#FF4D4F", "#FFA940", "#FFEC3D", "#52C41A",
-                            "#13C2C2", "#1677FF", "#722ED1", "#FFFFFF", "#000000"
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
-                            palette.forEach { hex ->
-                                val c = Color(android.graphics.Color.parseColor(hex))
-                                Box(
-                                    modifier = Modifier
-                                        .size(26.dp)
-                                        .clip(CircleShape)
-                                        .background(c)
-                                        .border(
-                                            width = if (state.colorHex == hex) 2.5.dp else 1.dp,
-                                            color = if (state.colorHex == hex) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            shape = CircleShape
-                                        )
-                                        .clickable { vm.updateBrush(colorHex = hex) }
-                                )
-                            }
-                        }
-                        CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 2f..250f) {
-                            vm.updateBrush(size = it)
-                        }
-                        CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f) {
-                            vm.updateBrush(opacity = it)
-                        }
-                        CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f) {
-                            vm.updateBrush(hardness = it)
+                            CircularDockButton(
+                                icon = Icons.Default.Brightness6,
+                                label = "Işık",
+                                onClick = {
+                                    brightnessVal = 0f
+                                    contrastVal = 0f
+                                    vm.beginLiveAdjustment("brightnessContrast", """{"brightness":0,"contrast":0}""")
+                                    activePanel = BottomPanel.LIGHT_LIVE
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Palette,
+                                label = "Renk",
+                                onClick = {
+                                    hueVal = 0f
+                                    saturationVal = 0f
+                                    vm.beginLiveAdjustment("hueSaturation", """{"hue":0,"saturation":0,"lightness":0}""")
+                                    activePanel = BottomPanel.COLOR_LIVE
+                                }
+                            )
                         }
                     }
                 }
 
-                BottomPanel.ERASER_EDIT -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Silgi Ayarları",
-                            subtitle = "Silgi boyutu ve kenar yumuşaklığı",
-                            onClose = { activePanel = BottomPanel.DOCK }
-                        )
-                        CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 4f..250f) {
-                            vm.updateBrush(size = it)
-                        }
-                        CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f) {
-                            vm.updateBrush(hardness = it)
-                        }
-                    }
-                }
-
-                BottomPanel.LIGHT_EDIT -> {
+                // Live Preview: Işık & Kontrast
+                BottomPanel.LIGHT_LIVE -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         BottomEditorHeader(
                             title = "Işık & Kontrast",
-                            subtitle = "Fotoğrafı bozmadan ayar katmanı ekler",
+                            subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
                             applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.DOCK },
+                            onClose = {
+                                vm.cancelLiveAdjustment()
+                                activePanel = BottomPanel.ADJUST_MENU
+                            },
                             onApply = {
-                                vm.applyEffectCommand(
-                                    "layer.newAdjustmentLayer.brightnessContrast",
-                                    """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""",
-                                    "Işık & Kontrast"
-                                )
-                                brightnessVal = 0f
-                                contrastVal = 0f
+                                vm.commitLiveAdjustment("Işık & Kontrast")
                                 activePanel = BottomPanel.DOCK
                             }
                         )
                         CompactSliderRow("Parlaklık", "${brightnessVal.roundToInt()}", brightnessVal, -100f..100f) {
                             brightnessVal = it
+                            vm.updateLiveAdjustment("""{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
                         }
                         CompactSliderRow("Kontrast", "${contrastVal.roundToInt()}", contrastVal, -50f..100f) {
                             contrastVal = it
+                            vm.updateLiveAdjustment("""{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
                         }
                     }
                 }
 
-                BottomPanel.COLOR_EDIT -> {
+                // Live Preview: Renk & Canlılık
+                BottomPanel.COLOR_LIVE -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         BottomEditorHeader(
                             title = "Renk & Canlılık",
-                            subtitle = "Renk tonu ve doygunluğu ayarlar",
+                            subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
                             applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.DOCK },
+                            onClose = {
+                                vm.cancelLiveAdjustment()
+                                activePanel = BottomPanel.ADJUST_MENU
+                            },
                             onApply = {
-                                vm.applyEffectCommand(
-                                    "layer.newAdjustmentLayer.hueSaturation",
-                                    """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""",
-                                    "Renk & Canlılık"
-                                )
-                                hueVal = 0f
-                                saturationVal = 0f
+                                vm.commitLiveAdjustment("Renk & Canlılık")
                                 activePanel = BottomPanel.DOCK
                             }
                         )
                         CompactSliderRow("Canlılık", "${saturationVal.roundToInt()}", saturationVal, -100f..100f) {
                             saturationVal = it
+                            vm.updateLiveAdjustment("""{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
                         }
                         CompactSliderRow("Renk Tonu", "${hueVal.roundToInt()}°", hueVal, -180f..180f) {
                             hueVal = it
+                            vm.updateLiveAdjustment("""{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
+                        }
+                    }
+                }
+
+                // Category 3: Filtre -> Sub-buttons [Bulanık] [Keskin]
+                BottomPanel.FILTER_MENU -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Filtreler",
+                            subtitle = "Fotoğraf katmanına doğrudan uygulanır",
+                            onClose = { activePanel = BottomPanel.DOCK }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            CircularDockButton(
+                                icon = Icons.Default.BlurOn,
+                                label = "Bulanık",
+                                onClick = { activePanel = BottomPanel.BLUR_EDIT }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Details,
+                                label = "Keskin",
+                                onClick = { activePanel = BottomPanel.SHARPEN_EDIT }
+                            )
                         }
                     }
                 }
@@ -807,16 +853,11 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                     ) {
                         BottomEditorHeader(
                             title = "Bulanıklaştır",
-                            subtitle = "Seçili katmanı yumuşatır (Gaussian Blur)",
+                            subtitle = "Gaussian Blur ile fotoğrafı yumuşatır",
                             applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.DOCK },
+                            onClose = { activePanel = BottomPanel.FILTER_MENU },
                             onApply = {
-                                vm.applyEffectCommand(
-                                    "filter.blur.gaussianBlur",
-                                    """{"radius":${blurRadiusVal}}""",
-                                    "Bulanıklaştırma",
-                                    needsUnlockedLayer = true
-                                )
+                                vm.applyPixelFilter("filter.blur.gaussianBlur", """{"radius":${blurRadiusVal}}""", "Bulanıklaştırma")
                                 activePanel = BottomPanel.DOCK
                             }
                         )
@@ -835,19 +876,45 @@ fun StonbridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                             title = "Keskinleştir",
                             subtitle = "Detay ve kenarları belirginleştirir",
                             applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.DOCK },
+                            onClose = { activePanel = BottomPanel.FILTER_MENU },
                             onApply = {
-                                vm.applyEffectCommand(
-                                    "filter.sharpen.unsharpMask",
-                                    """{"amount":${sharpenAmountVal},"radius":1.2,"threshold":0.0}""",
-                                    "Keskinleştirme",
-                                    needsUnlockedLayer = true
-                                )
+                                vm.applyPixelFilter("filter.sharpen.unsharpMask", """{"amount":${sharpenAmountVal},"radius":1.2,"threshold":0.0}""", "Keskinleştirme")
                                 activePanel = BottomPanel.DOCK
                             }
                         )
                         CompactSliderRow("Güç", "%${sharpenAmountVal.roundToInt()}", sharpenAmountVal, 20f..250f) {
                             sharpenAmountVal = it
+                        }
+                    }
+                }
+
+                // Category 4: Efekt -> Sub-buttons [Siyah-Beyaz (Aç/Kapat)] [Negatif (Aç/Kapat)]
+                BottomPanel.EFFECT_MENU -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Hızlı Efektler",
+                            subtitle = "Tek dokunuşla aç, tekrar basınca geri kapat",
+                            onClose = { activePanel = BottomPanel.DOCK }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            CircularDockButton(
+                                icon = Icons.Default.FilterBAndW,
+                                label = "Siyah-Beyaz",
+                                selected = state.bwLayerId != null,
+                                onClick = { vm.toggleBlackAndWhite() }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.InvertColors,
+                                label = "Negatif",
+                                selected = state.invertLayerId != null,
+                                onClick = { vm.toggleInvert() }
+                            )
                         }
                     }
                 }
