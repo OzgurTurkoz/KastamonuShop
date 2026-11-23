@@ -20,6 +20,8 @@ struct ViewportUniforms {
     color_bal: vec4<f32>,
     // [has_selection (0/1), sel_tex_w, sel_tex_h, 0.0]
     sel_info: vec4<f32>,
+    // [shadow_y (0..1), mid_y (0..1), high_y (0..1), enabled (0/1)]
+    curve_pts: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -38,6 +40,31 @@ struct VertexOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) screen_px: vec2<f32>,
 };
+
+fn eval_curve_1d(x: f32, y1: f32, y2: f32, y3: f32) -> f32 {
+    let xc = clamp(x, 0.0, 1.0);
+    // Piecewise smooth Hermite interpolation over 5 knots: (0,0), (0.25,y1), (0.5,y2), (0.75,y3), (1,1)
+    let m0 = (y1 - 0.0) * 4.0;
+    let m1 = (y2 - 0.0) * 2.0;
+    let m2 = (y3 - y1) * 2.0;
+    let m3 = (1.0 - y2) * 2.0;
+    let m4 = (1.0 - y3) * 4.0;
+    var p0 = 0.0; var p1 = y1; var t0 = m0; var t1 = m1; var t = xc * 4.0;
+    if (xc >= 0.75) {
+        p0 = y3; p1 = 1.0; t0 = m3; t1 = m4; t = (xc - 0.75) * 4.0;
+    } else if (xc >= 0.50) {
+        p0 = y2; p1 = y3; t0 = m2; t1 = m3; t = (xc - 0.50) * 4.0;
+    } else if (xc >= 0.25) {
+        p0 = y1; p1 = y2; t0 = m1; t1 = m2; t = (xc - 0.25) * 4.0;
+    }
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    return clamp(h00 * p0 + h10 * (t0 * 0.25) + h01 * p1 + h11 * (t1 * 0.25), 0.0, 1.0);
+}
 
 fn ping_pong_01(v: f32) -> f32 {
     let period = 2.0;
@@ -196,6 +223,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let shift = u.color_bal.xyz * 0.35;
         let mid_w = 1.0 - abs(col * 2.0 - vec3<f32>(1.0));
         col = clamp(col + shift * mid_w, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
+    // 60 FPS GPU Tone Curve (Curves) preview
+    if (u.curve_pts.w > 0.5) {
+        col = vec3<f32>(
+            eval_curve_1d(col.r, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z),
+            eval_curve_1d(col.g, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z),
+            eval_curve_1d(col.b, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z)
+        );
     }
 
     var rgb = mix(checker, col, sampled.a);

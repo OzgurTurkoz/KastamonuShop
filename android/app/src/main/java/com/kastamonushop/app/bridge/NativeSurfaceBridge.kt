@@ -28,5 +28,11 @@ object NativeSurfaceBridge {
         cbMagentaGreen: Float,
         cbYellowBlue: Float
     )
+    external fun nativeSetCurvePreview(
+        shadowY: Float,
+        midY: Float,
+        highY: Float,
+        enabled: Boolean
+    )
     external fun nativeRenderFrame(): Boolean
 }

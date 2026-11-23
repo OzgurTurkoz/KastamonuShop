@@ -48,6 +48,12 @@ jobs:
       - name: Apply KastamonuShop Android compatibility patches
         run: bash scripts/apply-patches.sh
 
+      - name: Run StonebridgeCraft Automated Engine Tests (v0.8)
+        working-directory: rust/kastamonushop-ffi
+        env:
+          CRAFT_I18N_DIR: ${{ github.workspace }}/third_party/craft-i18n
+        run: cargo test --lib -- --nocapture
+
       - name: Build libkastamonushop_ffi.so (arm64-v8a) & Generate Kotlin UniFFI Bindings
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}

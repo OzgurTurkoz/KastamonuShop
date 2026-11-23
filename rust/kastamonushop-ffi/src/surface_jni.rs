@@ -190,6 +190,24 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nativeSetCurvePreview(
+    _env: JNIEnv,
+    _class: JClass,
+    shadow_y: jfloat,
+    mid_y: jfloat,
+    high_y: jfloat,
+    enabled: jboolean,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let mut p = runtime().preview.lock();
+        p.curve_shadow = shadow_y.clamp(0.0, 1.0);
+        p.curve_mid = mid_y.clamp(0.0, 1.0);
+        p.curve_high = high_y.clamp(0.0, 1.0);
+        p.curve_enabled = enabled != JNI_FALSE;
+    }));
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nativeRenderFrame(
     _env: JNIEnv,
     _class: JClass,

@@ -665,6 +665,44 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+    /// Perspective Crop (`image.perspectiveCrop`): warps a 4-corner convex quad (TL, TR, BR, BL)
+    /// into a flat upright rectangle in one undo step.
+    pub fn perspective_crop(
+        &self,
+        tl_x: f32,
+        tl_y: f32,
+        tr_x: f32,
+        tr_y: f32,
+        br_x: f32,
+        br_y: f32,
+        bl_x: f32,
+        bl_y: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_clone = None;
+        guard.live_adjustment = None;
+        guard.live_filter = None;
+        guard
+            .session
+            .execute(
+                "image.perspectiveCrop",
+                json!({
+                    "corners": [
+                        [tl_x as f64, tl_y as f64],
+                        [tr_x as f64, tr_y as f64],
+                        [br_x as f64, br_y as f64],
+                        [bl_x as f64, bl_y as f64]
+                    ],
+                    "interpolation": "bicubic"
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     pub fn crop_canvas(&self, x: i32, y: i32, width: i32, height: i32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -2022,6 +2060,46 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+    /// Content-Aware Object Removal (`edit.deleteAndFillSelection`): seamlessly removes the
+    /// selected object and fills the region from surrounding photo context.
+    pub fn content_aware_remove(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_clone = None;
+        let (target_id, was_locked, has_sel) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let has_sel = ds.doc().selection.as_ref().is_some_and(|s| !s.content_bounds().is_empty());
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).ok_or_else(|| {
+                EngineError::CommandFailed { detail: "Nesne silinecek fotoğraf katmanı bulunamadı".into() }
+            })?;
+            (id, locked, has_sel)
+        };
+        if !has_sel {
+            return Err(EngineError::CommandFailed {
+                detail: "Önce silmek istediğin nesneyi seç".into(),
+            });
+        }
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let res = guard.session.execute("edit.deleteAndFillSelection", json!({}));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let _ = guard.session.execute("select.deselect", json!({}));
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     pub fn reveal_selection_mask(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         let target_id = {
@@ -2198,5 +2276,90 @@ impl KastamonuEngine {
             can_redo: guard.session.is_enabled("edit.redo"),
             dirty: ds.is_dirty(),
         })
+    }
+}
+
+#[cfg(test)]
+mod v08_automated_tests {
+    use super::*;
+
+    fn test_engine() -> KastamonuEngine {
+        KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())))
+    }
+
+    #[test]
+    fn test_v08_content_aware_remove_replaces_selected_object() {
+        let eng = test_engine();
+        let w = 160u32;
+        let h = 120u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        // Green background with a red 20x20 object in the center
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let in_blob = (70..90).contains(&x) && (50..70).contains(&y);
+                rgba[i] = if in_blob { 220 } else { 40 };
+                rgba[i + 1] = if in_blob { 30 } else { 180 };
+                rgba[i + 2] = 40;
+                rgba[i + 3] = 255;
+            }
+        }
+        eng.open_rgba_bytes("test.png".into(), w, h, rgba).expect("open_rgba_bytes");
+        let sel = eng
+            .select_rect(68, 48, 24, 24, false, "replace".into())
+            .expect("select_rect");
+        assert!(sel.is_some());
+        let info = eng.content_aware_remove().expect("content_aware_remove");
+        assert_eq!(info.width, w);
+        assert!(eng.get_selection_bounds().is_none(), "selection cleared after remove");
+    }
+
+    #[test]
+    fn test_v08_perspective_crop_rectifies_quad() {
+        let eng = test_engine();
+        eng.new_document("persp".into(), 320, 240).expect("new_document");
+        let info = eng
+            .perspective_crop(40.0, 30.0, 280.0, 45.0, 295.0, 210.0, 25.0, 200.0)
+            .expect("perspective_crop");
+        assert!(info.width > 50 && info.height > 50, "rectified dimensions valid");
+        let undone = eng.undo().expect("undo perspective crop");
+        assert_eq!((undone.width, undone.height), (320, 240));
+    }
+
+    #[test]
+    fn test_v08_curves_adjustment_layer_and_thumbnail() {
+        let eng = test_engine();
+        eng.new_document("curves".into(), 128, 128).expect("new_document");
+        let before = eng.get_layers().expect("layers").len();
+        let info = eng
+            .apply_adjustment_once(
+                "curves".into(),
+                r#"{"points":[[0,0],[64,48],[128,128],[192,210],[255,255]]}"#.into(),
+            )
+            .expect("curves adjustment");
+        assert_eq!(info.layer_count as usize, before + 1);
+
+        let layers = eng.get_layers().expect("layers");
+        let bg = layers.iter().find(|l| l.is_background).expect("bg layer");
+        let thumb = eng
+            .get_layer_thumbnail(bg.id, 64)
+            .expect("thumbnail")
+            .expect("raster thumb");
+        assert_eq!(thumb.width, 64);
+        assert_eq!(thumb.rgba.len(), (thumb.width * thumb.height * 4) as usize);
+    }
+
+    #[test]
+    fn test_v07_manual_selection_paint_and_erase() {
+        let eng = test_engine();
+        eng.new_document("sel".into(), 128, 128).expect("new_document");
+        let pts = vec![
+            StrokeSample { x: 40.0, y: 40.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 80.0, y: 40.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        let added = eng.paint_selection_stroke(pts.clone(), 24.0, false).expect("paint add");
+        assert!(added.is_some());
+        let erased = eng.paint_selection_stroke(pts, 40.0, true).expect("paint erase");
+        assert!(erased.is_none(), "full erase clears selection");
     }
 }

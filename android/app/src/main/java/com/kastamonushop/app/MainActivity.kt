@@ -16,6 +16,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -43,11 +44,13 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -89,8 +92,10 @@ private enum class BottomPanel {
     COLOR_LIVE,
     LEVELS_LIVE,
     COLOR_BAL_LIVE,
+    CURVES_LIVE,
     CROP_MENU,
     CROP_RATIO_EDIT,
+    PERSPECTIVE_CROP_EDIT,
     FILTER_MENU,
     BLUR_EDIT,
     SHARPEN_EDIT,
@@ -265,7 +270,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.7.3",
+                    text = "v0.8.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -661,6 +666,16 @@ fun StonebridgeStudioScreen(
     var cbCyanRedVal by remember { mutableFloatStateOf(0f) }
     var cbMagentaGreenVal by remember { mutableFloatStateOf(0f) }
     var cbYellowBlueVal by remember { mutableFloatStateOf(0f) }
+    var curveShadowVal by remember { mutableFloatStateOf(0.25f) }
+    var curveMidVal by remember { mutableFloatStateOf(0.50f) }
+    var curveHighVal by remember { mutableFloatStateOf(0.75f) }
+
+    // 4 normalized corners (TL, TR, BR, BL) in document space (0..1) for 60 FPS Perspective Crop
+    var pTl by remember { mutableStateOf(Offset(0.12f, 0.12f)) }
+    var pTr by remember { mutableStateOf(Offset(0.88f, 0.12f)) }
+    var pBr by remember { mutableStateOf(Offset(0.88f, 0.88f)) }
+    var pBl by remember { mutableStateOf(Offset(0.12f, 0.88f)) }
+    var draggingCornerIdx by remember { mutableIntStateOf(-1) }
     var showExitSaveDialog by remember { mutableStateOf(false) }
 
     // Live draggable Text layer editor state
@@ -710,12 +725,14 @@ fun StonebridgeStudioScreen(
         NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
         NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
         NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
+        NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
         canvasViewRef?.fitToDocument(0)
     }
 
     fun clearAdjustGpuPreviewOnly() {
         NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
         NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
+        NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
         NativeSurfaceBridge.nativeRenderFrame()
     }
 
@@ -726,7 +743,7 @@ fun StonebridgeStudioScreen(
 
     fun dismissLivePanelIfActive() {
         when (activePanel) {
-            BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE -> {
+            BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE -> {
                 clearAdjustGpuPreviewOnly()
                 activePanel = BottomPanel.DOCK
             }
@@ -753,7 +770,7 @@ fun StonebridgeStudioScreen(
             showLayers = false
         } else if (activePanel != BottomPanel.DOCK) {
             when (activePanel) {
-                BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE -> {
+                BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE -> {
                     clearAdjustGpuPreviewOnly()
                     activePanel = BottomPanel.ADJUST_MENU
                 }
@@ -771,7 +788,7 @@ fun StonebridgeStudioScreen(
                     }
                     activePanel = BottomPanel.DOCK
                 }
-                BottomPanel.CROP_RATIO_EDIT -> activePanel = BottomPanel.CROP_MENU
+                BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> activePanel = BottomPanel.CROP_MENU
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
@@ -1081,6 +1098,92 @@ fun StonebridgeStudioScreen(
         }
 
         // 60 FPS Live Draggable Text Preview overlay
+        // Interactive 60 FPS 4-Corner Perspective Crop Overlay
+        if (activePanel == BottomPanel.PERSPECTIVE_CROP_EDIT) {
+            val view = canvasViewRef
+            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+            if (view != null) {
+                val _tick = cameraTick
+                fun toScreen(n: Offset): Offset {
+                    val (sx, sy) = view.docToScreen(n.x * docW, n.y * docH)
+                    return Offset(sx, sy)
+                }
+                val sTl = toScreen(pTl)
+                val sTr = toScreen(pTr)
+                val sBr = toScreen(pBr)
+                val sBl = toScreen(pBl)
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(docW, docH, _tick) {
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    val pts = listOf(toScreen(pTl), toScreen(pTr), toScreen(pBr), toScreen(pBl))
+                                    var bestIdx = -1
+                                    var bestDist = 96f
+                                    pts.forEachIndexed { i, pt ->
+                                        val d = kotlin.math.hypot((pos.x - pt.x).toDouble(), (pos.y - pt.y).toDouble()).toFloat()
+                                        if (d < bestDist) {
+                                            bestDist = d
+                                            bestIdx = i
+                                        }
+                                    }
+                                    draggingCornerIdx = bestIdx
+                                },
+                                onDragEnd = { draggingCornerIdx = -1 },
+                                onDragCancel = { draggingCornerIdx = -1 },
+                                onDrag = { change, dragAmount ->
+                                    if (draggingCornerIdx in 0..3) {
+                                        change.consume()
+                                        val z = view.getCurrentZoom().coerceAtLeast(0.05f)
+                                        val dnX = dragAmount.x / (docW * z)
+                                        val dnY = dragAmount.y / (docH * z)
+                                        when (draggingCornerIdx) {
+                                            0 -> pTl = Offset((pTl.x + dnX).coerceIn(0f, 1f), (pTl.y + dnY).coerceIn(0f, 1f))
+                                            1 -> pTr = Offset((pTr.x + dnX).coerceIn(0f, 1f), (pTr.y + dnY).coerceIn(0f, 1f))
+                                            2 -> pBr = Offset((pBr.x + dnX).coerceIn(0f, 1f), (pBr.y + dnY).coerceIn(0f, 1f))
+                                            3 -> pBl = Offset((pBl.x + dnX).coerceIn(0f, 1f), (pBl.y + dnY).coerceIn(0f, 1f))
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val quad = Path().apply {
+                            moveTo(sTl.x, sTl.y)
+                            lineTo(sTr.x, sTr.y)
+                            lineTo(sBr.x, sBr.y)
+                            lineTo(sBl.x, sBl.y)
+                            close()
+                        }
+                        drawPath(quad, color = Color(0xFF4F9CFF), style = Stroke(width = 4f))
+                        // 3x3 perspective grid inside the quad
+                        for (k in 1..2) {
+                            val t = k / 3f
+                            val topPt = Offset(sTl.x + (sTr.x - sTl.x) * t, sTl.y + (sTr.y - sTl.y) * t)
+                            val botPt = Offset(sBl.x + (sBr.x - sBl.x) * t, sBl.y + (sBr.y - sBl.y) * t)
+                            drawLine(Color(0x88FFFFFF), topPt, botPt, strokeWidth = 1.5f)
+                            val leftPt = Offset(sTl.x + (sBl.x - sTl.x) * t, sTl.y + (sBl.y - sTl.y) * t)
+                            val rightPt = Offset(sTr.x + (sBr.x - sTr.x) * t, sTr.y + (sBr.y - sTr.y) * t)
+                            drawLine(Color(0x88FFFFFF), leftPt, rightPt, strokeWidth = 1.5f)
+                        }
+                        listOf(sTl, sTr, sBr, sBl).forEachIndexed { i, pt ->
+                            val active = draggingCornerIdx == i
+                            drawCircle(
+                                color = if (active) Color(0xFF2ED573) else Color(0xFF4F9CFF),
+                                radius = if (active) 24f else 18f,
+                                center = pt
+                            )
+                            drawCircle(color = Color.White, radius = 8f, center = pt)
+                        }
+                    }
+                }
+            }
+        }
+
         if (activePanel == BottomPanel.TEXT_EDIT) {
             val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
             val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
@@ -1906,6 +2009,11 @@ fun StonebridgeStudioScreen(
                             )
                             if (state.selectionBounds != null) {
                                 CircularDockButton(
+                                    icon = Icons.Default.CleaningServices,
+                                    label = "Nesne Sil",
+                                    onClick = { vm.contentAwareRemove() }
+                                )
+                                CircularDockButton(
                                     icon = Icons.Default.SwapHoriz,
                                     label = "Tersine",
                                     onClick = { vm.selectInverse() }
@@ -2059,8 +2167,10 @@ fun StonebridgeStudioScreen(
                             onClose = { activePanel = BottomPanel.DOCK }
                         )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
                                 icon = Icons.Default.Brightness6,
@@ -2102,6 +2212,17 @@ fun StonebridgeStudioScreen(
                                     cbYellowBlueVal = 0f
                                     NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
                                     activePanel = BottomPanel.COLOR_BAL_LIVE
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.ShowChart,
+                                label = "Eğriler",
+                                onClick = {
+                                    curveShadowVal = 0.25f
+                                    curveMidVal = 0.50f
+                                    curveHighVal = 0.75f
+                                    NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
+                                    activePanel = BottomPanel.CURVES_LIVE
                                 }
                             )
                         }
@@ -2280,6 +2401,140 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
+                BottomPanel.CURVES_LIVE -> {
+                    fun pushCurve(sy: Float, my: Float, hy: Float) {
+                        val active = abs(sy - 0.25f) > 0.005f || abs(my - 0.50f) > 0.005f || abs(hy - 0.75f) > 0.005f
+                        NativeSurfaceBridge.nativeSetCurvePreview(sy, my, hy, active)
+                        NativeSurfaceBridge.nativeRenderFrame()
+                    }
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Eğriler (Curves)",
+                            subtitle = "60 FPS canlı ton eğrisi — Uygula ile katman ekle",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                clearAdjustGpuPreviewOnly()
+                                activePanel = BottomPanel.ADJUST_MENU
+                            },
+                            onApply = {
+                                val isDefault = abs(curveShadowVal - 0.25f) < 0.01f &&
+                                    abs(curveMidVal - 0.50f) < 0.01f &&
+                                    abs(curveHighVal - 0.75f) < 0.01f
+                                if (isDefault) {
+                                    clearAdjustGpuPreviewOnly()
+                                } else {
+                                    val sy = (curveShadowVal * 255f).roundToInt().coerceIn(0, 255)
+                                    val my = (curveMidVal * 255f).roundToInt().coerceIn(0, 255)
+                                    val hy = (curveHighVal * 255f).roundToInt().coerceIn(0, 255)
+                                    vm.applyAdjustmentOnce(
+                                        "curves",
+                                        """{"points":[[0,0],[64,$sy],[128,$my],[192,$hy],[255,255]]}""",
+                                        "Eğriler"
+                                    )
+                                }
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Live Mini Tone Curve Graph
+                            Box(
+                                modifier = Modifier
+                                    .size(74.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFF141720))
+                                    .border(1.dp, Color(0xFF343A4C), RoundedCornerShape(8.dp))
+                            ) {
+                                Canvas(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                                    val w = size.width
+                                    val h = size.height
+                                    // Grid + diagonal reference
+                                    drawLine(Color(0x33FFFFFF), Offset(w * 0.5f, 0f), Offset(w * 0.5f, h), 1f)
+                                    drawLine(Color(0x33FFFFFF), Offset(0f, h * 0.5f), Offset(w, h * 0.5f), 1f)
+                                    drawLine(Color(0x44FFFFFF), Offset(0f, h), Offset(w, 0f), 1f)
+                                    val pts = listOf(
+                                        Offset(0f, h),
+                                        Offset(w * 0.25f, h * (1f - curveShadowVal)),
+                                        Offset(w * 0.50f, h * (1f - curveMidVal)),
+                                        Offset(w * 0.75f, h * (1f - curveHighVal)),
+                                        Offset(w, 0f)
+                                    )
+                                    val path = Path().apply {
+                                        moveTo(pts[0].x, pts[0].y)
+                                        for (i in 1 until pts.size) {
+                                            lineTo(pts[i].x, pts[i].y)
+                                        }
+                                    }
+                                    drawPath(path, Color(0xFF4F9CFF), style = Stroke(width = 2.5f))
+                                    pts.subList(1, 4).forEach { pt ->
+                                        drawCircle(Color.White, radius = 3.5f, center = pt)
+                                    }
+                                }
+                            }
+                            // 1-tap Pro Presets
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = {
+                                            curveShadowVal = 0.17f; curveMidVal = 0.50f; curveHighVal = 0.84f
+                                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                                        },
+                                        label = { Text("S-Kontrast", fontSize = 10.sp) }
+                                    )
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = {
+                                            curveShadowVal = 0.34f; curveMidVal = 0.52f; curveHighVal = 0.72f
+                                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                                        },
+                                        label = { Text("Mat Film", fontSize = 10.sp) }
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = {
+                                            curveShadowVal = 0.33f; curveMidVal = 0.62f; curveHighVal = 0.85f
+                                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                                        },
+                                        label = { Text("Aydınlık", fontSize = 10.sp) }
+                                    )
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = {
+                                            curveShadowVal = 0.25f; curveMidVal = 0.50f; curveHighVal = 0.75f
+                                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                                        },
+                                        label = { Text("Sıfırla", fontSize = 10.sp) }
+                                    )
+                                }
+                            }
+                        }
+                        CompactSliderRow("Gölgeler", "${(curveShadowVal * 255f).roundToInt()}", curveShadowVal, 0.02f..0.60f, defaultValue = 0.25f) {
+                            curveShadowVal = it
+                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                        }
+                        CompactSliderRow("Orta Ton", "${(curveMidVal * 255f).roundToInt()}", curveMidVal, 0.15f..0.85f, defaultValue = 0.50f) {
+                            curveMidVal = it
+                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                        }
+                        CompactSliderRow("Parlaklar", "${(curveHighVal * 255f).roundToInt()}", curveHighVal, 0.40f..0.98f, defaultValue = 0.75f) {
+                            curveHighVal = it
+                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                        }
+                    }
+                }
+
                 // Category 3: Kırp & Çevir — 0 ms Instant GPU Preview for 90° Rotate & Flip!
                 BottomPanel.CROP_MENU -> {
                     val hasPendingTransform = pendingQuarterTurns != 0 || pendingFlipH || pendingFlipV
@@ -2309,8 +2564,10 @@ fun StonebridgeStudioScreen(
                             } else null
                         )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
                                 icon = Icons.Default.Crop,
@@ -2320,6 +2577,19 @@ fun StonebridgeStudioScreen(
                                     canvasViewRef?.fitToDocument(0)
                                     cropScale = 0.90f
                                     activePanel = BottomPanel.CROP_RATIO_EDIT
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Transform,
+                                label = "Perspektif",
+                                onClick = {
+                                    if (hasPendingTransform) clearGpuPreview()
+                                    canvasViewRef?.fitToDocument(0)
+                                    pTl = Offset(0.12f, 0.12f)
+                                    pTr = Offset(0.88f, 0.12f)
+                                    pBr = Offset(0.88f, 0.88f)
+                                    pBl = Offset(0.12f, 0.88f)
+                                    activePanel = BottomPanel.PERSPECTIVE_CROP_EDIT
                                 }
                             )
                             CircularDockButton(
@@ -2394,6 +2664,50 @@ fun StonebridgeStudioScreen(
                         }
                         CompactSliderRow("Alan", "%${(cropScale * 100).roundToInt()}", cropScale, 0.40f..1.0f, defaultValue = 1.0f) {
                             cropScale = it
+                        }
+                    }
+                }
+
+                BottomPanel.PERSPECTIVE_CROP_EDIT -> {
+                    val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                    val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Perspektif Kırpma",
+                            subtitle = "4 mavi köşeyi belge/nesne köşelerine sürükle, Uygula de",
+                            applyLabel = "Uygula",
+                            onClose = { activePanel = BottomPanel.CROP_MENU },
+                            onApply = {
+                                vm.perspectiveCrop(
+                                    pTl.x * docW, pTl.y * docH,
+                                    pTr.x * docW, pTr.y * docH,
+                                    pBr.x * docW, pBr.y * docH,
+                                    pBl.x * docW, pBl.y * docH
+                                )
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Eğik belge, tablo veya bina cephesini düzleştirir.",
+                                color = Color(0xFFB4B9CB),
+                                fontSize = 11.sp
+                            )
+                            TextButton(onClick = {
+                                pTl = Offset(0.12f, 0.12f)
+                                pTr = Offset(0.88f, 0.12f)
+                                pBr = Offset(0.88f, 0.88f)
+                                pBl = Offset(0.12f, 0.88f)
+                            }) {
+                                Text("Sıfırla", fontSize = 11.sp)
+                            }
                         }
                     }
                 }

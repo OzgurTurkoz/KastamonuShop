@@ -401,6 +401,50 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun contentAwareRemove() {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.contentAwareRemove()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, selectionBounds = null, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Nesne içeriğe duyarlı olarak silindi", 2200L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Nesne silme hatası: ${err.message}", 3800L)
+            }
+        }
+    }
+
+    fun perspectiveCrop(
+        tlX: Float, tlY: Float,
+        trX: Float, trY: Float,
+        brX: Float, brY: Float,
+        blX: Float, blY: Float
+    ) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.perspectiveCrop(tlX, tlY, trX, trY, brX, brY, blX, blY)
+                val layers = engine.getLayers()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        selectionBounds = null,
+                        isBusy = false,
+                        fitCameraSignal = it.fitCameraSignal + 1
+                    )
+                }
+                showStatus("Perspektif düzeltildi (${info.width}×${info.height})", 2200L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Perspektif hatası: ${err.message}", 4200L)
+            }
+        }
+    }
+
     fun toggleRuler() {
         val next = !_uiState.value.rulerEnabled
         _uiState.update { it.copy(rulerEnabled = next) }
@@ -790,12 +834,14 @@ class EditorViewModel : ViewModel() {
                 val layers = engine.getLayers()
                 NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
                 NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
+                NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus("$labelTr uygulandı", 2000L)
             }.onFailure { err ->
                 NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
                 NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
+                NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("$labelTr hatası: ${err.message}", 3500L)
             }
