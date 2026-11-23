@@ -9,6 +9,8 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.provider.OpenableColumns
 import java.nio.ByteBuffer
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kastamonushop.app.bridge.NativeSurfaceBridge
@@ -111,6 +113,14 @@ class EditorViewModel : ViewModel() {
     // Prevents rapid Spot Healing swipes from piling up on paintExecutor
     private val spotHealInFlight = AtomicBoolean(false)
 
+    @Volatile
+    private var currentSavedPhotoId: String? = null
+    @Volatile
+    private var currentSavedDisplayName: String? = null
+
+    private val _layerThumbnails = MutableStateFlow<Map<ULong, ImageBitmap>>(emptyMap())
+    val layerThumbnails: StateFlow<Map<ULong, ImageBitmap>> = _layerThumbnails.asStateFlow()
+
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
     )
@@ -162,6 +172,26 @@ class EditorViewModel : ViewModel() {
                 getLastGpuError()?.let { gpuErr -> showStatus(gpuErr, 6000L) }
             }.onFailure { err ->
                 showStatus(err.message ?: "Bilinmeyen hata")
+            }
+        }
+    }
+
+    fun refreshLayerThumbnails() {
+        paintExecutor.execute {
+            runCatching {
+                val layers = engine.getLayers()
+                val out = LinkedHashMap<ULong, ImageBitmap>(layers.size)
+                for (layer in layers) {
+                    val thumb = runCatching { engine.getLayerThumbnail(layer.id, 88u) }.getOrNull() ?: continue
+                    val w = thumb.width.toInt()
+                    val h = thumb.height.toInt()
+                    if (w > 0 && h > 0 && thumb.rgba.size >= w * h * 4) {
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(thumb.rgba))
+                        out[layer.id] = bmp.asImageBitmap()
+                    }
+                }
+                _layerThumbnails.value = out
             }
         }
     }
@@ -658,15 +688,17 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 val bytes = engine.exportDocumentBytes("png")
                 val doc = _uiState.value.docInfo
-                val updated = SavedGalleryStore.recordSavedPhoto(
+                val (savedId, updated) = SavedGalleryStore.recordSavedPhoto(
                     context = context,
-                    displayName = doc?.name ?: "StonebridgeCraft",
+                    displayName = currentSavedDisplayName ?: doc?.name ?: "StonebridgeCraft",
                     formatExt = "png",
                     exportedBytes = bytes,
                     previewPngBytes = null,
                     width = doc?.width?.toInt() ?: 0,
-                    height = doc?.height?.toInt() ?: 0
+                    height = doc?.height?.toInt() ?: 0,
+                    existingId = currentSavedPhotoId
                 )
+                currentSavedPhotoId = savedId
                 _uiState.update { it.copy(isBusy = false, savedPhotos = updated) }
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
@@ -1142,6 +1174,8 @@ class EditorViewModel : ViewModel() {
     }
 
     fun newBlankCanvas() {
+        currentSavedPhotoId = null
+        currentSavedDisplayName = null
         paintExecutor.execute {
             runCatching {
                 val info = engine.newDocument("StonebridgeCraft Canvas", 2048u, 2048u)
@@ -1163,6 +1197,8 @@ class EditorViewModel : ViewModel() {
     }
 
     fun openSavedPhoto(item: SavedPhotoItem) {
+        currentSavedPhotoId = item.id
+        currentSavedDisplayName = item.displayName
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {
@@ -1268,6 +1304,10 @@ class EditorViewModel : ViewModel() {
     }
 
     fun openDocumentFromUri(resolver: ContentResolver, uri: Uri, asLayer: Boolean = false) {
+        if (!asLayer) {
+            currentSavedPhotoId = null
+            currentSavedDisplayName = null
+        }
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {
@@ -1337,15 +1377,17 @@ class EditorViewModel : ViewModel() {
                 } else {
                     runCatching { engine.exportDocumentBytes("jpg") }.getOrNull()
                 }
-                val updatedGallery = SavedGalleryStore.recordSavedPhoto(
+                val (savedId, updatedGallery) = SavedGalleryStore.recordSavedPhoto(
                     context = context,
-                    displayName = doc?.name ?: "StonebridgeCraft",
+                    displayName = currentSavedDisplayName ?: doc?.name ?: "StonebridgeCraft",
                     formatExt = formatExt,
                     exportedBytes = bytes,
                     previewPngBytes = previewBytes,
                     width = doc?.width?.toInt() ?: 0,
-                    height = doc?.height?.toInt() ?: 0
+                    height = doc?.height?.toInt() ?: 0,
+                    existingId = currentSavedPhotoId
                 )
+                currentSavedPhotoId = savedId
                 _uiState.update { it.copy(isBusy = false, savedPhotos = updatedGallery) }
                 showStatus("Kaydedildi (${bytes.size / 1024} KB)")
             }.onFailure { err ->

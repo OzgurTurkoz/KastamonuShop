@@ -1,5 +1,7 @@
 package com.kastamonushop.app
 
+import android.app.Activity
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
 import android.os.Bundle
@@ -192,8 +194,9 @@ fun StonebridgeAppRoot(vm: EditorViewModel = viewModel()) {
     }
 
     val homePhotoLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        val uri = if (res.resultCode == Activity.RESULT_OK) res.data?.data else null
         if (uri != null) {
             vm.openDocumentFromUri(context.contentResolver, uri, asLayer = false)
             isHomeScreen = false
@@ -204,7 +207,11 @@ fun StonebridgeAppRoot(vm: EditorViewModel = viewModel()) {
         StonebridgeHomeScreen(
             savedPhotos = state.savedPhotos,
             onPickPhoto = {
-                homePhotoLauncher.launch(arrayOf("image/*", "application/octet-stream", "*/*"))
+                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
+                    type = "image/*"
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                }
+                homePhotoLauncher.launch(Intent.createChooser(pick, "Fotoğraf Seç"))
             },
             onNewBlankCanvas = {
                 vm.newBlankCanvas()
@@ -258,7 +265,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.7.2",
+                    text = "v0.7.3",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -632,6 +639,7 @@ fun StonebridgeStudioScreen(
     onGoHome: () -> Unit = {}
 ) {
     val state by vm.uiState.collectAsState()
+    val layerThumbs by vm.layerThumbnails.collectAsState()
     val context = LocalContext.current
 
     var showLayers by remember { mutableStateOf(false) }
@@ -780,6 +788,16 @@ fun StonebridgeStudioScreen(
     val openDocLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
+        if (uri != null) {
+            dismissLivePanelIfActive()
+            vm.openDocumentFromUri(context.contentResolver, uri, asLayer = openAsLayer)
+        }
+    }
+
+    val imageChooserLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        val uri = if (res.resultCode == Activity.RESULT_OK) res.data?.data else null
         if (uri != null) {
             dismissLivePanelIfActive()
             vm.openDocumentFromUri(context.contentResolver, uri, asLayer = openAsLayer)
@@ -1172,11 +1190,15 @@ fun StonebridgeStudioScreen(
                         onDismissRequest = { showOpenMenu = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Fotoğraf / PSD Aç (Yeni Proje)") },
+                            text = { Text("Fotoğraf Aç (Galeri / Uygulamalar)") },
                             onClick = {
                                 showOpenMenu = false
                                 openAsLayer = false
-                                openDocLauncher.launch(arrayOf("image/*", "application/octet-stream", "*/*"))
+                                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
+                                    type = "image/*"
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                }
+                                imageChooserLauncher.launch(Intent.createChooser(pick, "Fotoğraf Seç"))
                             }
                         )
                         DropdownMenuItem(
@@ -1184,7 +1206,19 @@ fun StonebridgeStudioScreen(
                             onClick = {
                                 showOpenMenu = false
                                 openAsLayer = true
-                                openDocLauncher.launch(arrayOf("image/*"))
+                                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
+                                    type = "image/*"
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                }
+                                imageChooserLauncher.launch(Intent.createChooser(pick, "Katman İçin Fotoğraf Seç"))
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Proje Aç (.psd / .pcraft)") },
+                            onClick = {
+                                showOpenMenu = false
+                                openAsLayer = false
+                                openDocLauncher.launch(arrayOf("*/*"))
                             }
                         )
                     }
@@ -1251,6 +1285,12 @@ fun StonebridgeStudioScreen(
                     selected = showLayers,
                     onClick = { showLayers = !showLayers }
                 )
+            }
+        }
+
+        LaunchedEffect(showLayers, state.layers, state.docInfo) {
+            if (showLayers) {
+                vm.refreshLayerThumbnails()
             }
         }
 
@@ -1378,12 +1418,53 @@ fun StonebridgeStudioScreen(
                                 if (layer.isBackground) {
                                     IconButton(
                                         onClick = { vm.toggleLayerLocked(layer.id, !layer.locked) },
-                                        modifier = Modifier.size(28.dp)
+                                        modifier = Modifier.size(26.dp)
                                     ) {
                                         Icon(
                                             if (layer.locked) Icons.Default.Lock else Icons.Default.LockOpen,
                                             contentDescription = if (layer.locked) "Fotoğraf Kilitli" else "Fotoğraf Kilidi Açık",
                                             tint = if (layer.locked) Color(0xFFFFB74D) else Color(0xFF8E93A6),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                // Mini layer preview box (checkerboard + layer content thumbnail)
+                                val thumb = layerThumbs[layer.id]
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(RoundedCornerShape(7.dp))
+                                        .border(1.dp, Color(0xFF454A5C), RoundedCornerShape(7.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Canvas(modifier = Modifier.fillMaxSize()) {
+                                        val cell = 6.dp.toPx()
+                                        val cols = (size.width / cell).toInt() + 1
+                                        val rows = (size.height / cell).toInt() + 1
+                                        for (ry in 0 until rows) {
+                                            for (rx in 0 until cols) {
+                                                val light = ((rx + ry) and 1) == 0
+                                                drawRect(
+                                                    color = if (light) Color(0xFFD6D8E0) else Color(0xFFA8ACB8),
+                                                    topLeft = Offset(rx * cell, ry * cell),
+                                                    size = Size(cell, cell)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (thumb != null) {
+                                        Image(
+                                            bitmap = thumb,
+                                            contentDescription = "${layer.name} önizleme",
+                                            contentScale = ContentScale.Fit,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Tune,
+                                            contentDescription = null,
+                                            tint = Color(0xFF2B2F3D),
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }

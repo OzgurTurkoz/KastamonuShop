@@ -54,6 +54,13 @@ pub struct LayerSummary {
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
+pub struct LayerThumbnail {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
 pub struct SelectionBounds {
     pub x0: i32,
     pub y0: i32,
@@ -1249,6 +1256,63 @@ impl KastamonuEngine {
             });
         }
         Ok(layers)
+    }
+
+    /// Generates a lightweight RGBA8 mini-thumbnail (<= max_dim px) for a single layer
+    /// so the user can visually see what is painted on each layer in the Layers panel.
+    pub fn get_layer_thumbnail(&self, layer_id: u64, max_dim: u32) -> Result<Option<LayerThumbnail>, EngineError> {
+        let guard = self.core.lock();
+        let doc = guard.active_document().ok_or(EngineError::NoActiveDocument)?;
+        let Some(layer) = doc.layers.iter().find(|l| l.id.0 == layer_id) else {
+            return Ok(None);
+        };
+        let LayerContent::Raster(surf) = &layer.content else {
+            return Ok(None);
+        };
+        let doc_w = doc.size.width.max(1);
+        let doc_h = doc.size.height.max(1);
+        let cap = max_dim.clamp(16, 128);
+        let scale = (cap as f32 / doc_w.max(doc_h) as f32).min(1.0);
+        let tw = ((doc_w as f32 * scale).round() as u32).clamp(1, cap);
+        let th = ((doc_h as f32 * scale).round() as u32).clamp(1, cap);
+
+        let mut rgba = vec![0u8; (tw as usize) * (th as usize) * 4];
+        let content_bounds = surf.content_bounds();
+        if content_bounds.is_empty() {
+            return Ok(Some(LayerThumbnail { width: tw, height: th, rgba }));
+        }
+
+        let sx_step = doc_w as f32 / tw as f32;
+        let sy_step = doc_h as f32 / th as f32;
+        let mask_ref = layer.mask.as_ref().filter(|m| m.enabled);
+
+        for y in 0..th {
+            let dy = ((y as f32 + 0.5) * sy_step) as i32;
+            if dy < content_bounds.y0 || dy >= content_bounds.y1 {
+                continue;
+            }
+            for x in 0..tw {
+                let dx = ((x as f32 + 0.5) * sx_step) as i32;
+                if dx < content_bounds.x0 || dx >= content_bounds.x1 {
+                    continue;
+                }
+                let p = surf.rgba(dx, dy);
+                let mut a = p[3].clamp(0.0, 1.0);
+                if let Some(m) = mask_ref {
+                    a *= m.value(dx, dy).clamp(0.0, 1.0);
+                }
+                if a <= 0.002 {
+                    continue;
+                }
+                let idx = ((y as usize) * (tw as usize) + (x as usize)) * 4;
+                rgba[idx] = (p[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[idx + 1] = (p[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[idx + 2] = (p[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[idx + 3] = (a * 255.0).round() as u8;
+            }
+        }
+
+        Ok(Some(LayerThumbnail { width: tw, height: th, rgba }))
     }
 
     pub fn add_layer(&self, name: String) -> Result<Vec<LayerSummary>, EngineError> {

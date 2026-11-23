@@ -64,16 +64,22 @@ object SavedGalleryStore {
         exportedBytes: ByteArray,
         previewPngBytes: ByteArray?,
         width: Int,
-        height: Int
-    ): List<SavedPhotoItem> {
+        height: Int,
+        existingId: String? = null
+    ): Pair<String, List<SavedPhotoItem>> {
         val dir = galleryDir(context)
         val ts = System.currentTimeMillis()
-        val id = "sb_$ts"
+        val current = list(context).toMutableList()
+        val prevItem = if (!existingId.isNullOrBlank()) current.firstOrNull { it.id == existingId } else null
+        val id = prevItem?.id ?: "sb_$ts"
+        val finalName = prevItem?.displayName?.ifBlank { displayName } ?: displayName
+
         val cleanExt = formatExt.trimStart('.').lowercase().ifBlank { "png" }
         val file = File(dir, "$id.$cleanExt")
         file.writeBytes(exportedBytes)
 
-        val thumbFile = File(dir, "${id}_thumb.jpg")
+        // Use a fresh thumb filename on overwrite so Compose never displays a stale cached thumbnail
+        val thumbFile = File(dir, "${id}_thumb_$ts.jpg")
         val thumbSource = previewPngBytes ?: exportedBytes
         runCatching {
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -92,12 +98,20 @@ object SavedGalleryStore {
             }
         }
 
-        val current = list(context).toMutableList()
+        if (prevItem != null) {
+            if (prevItem.filePath != file.absolutePath) {
+                runCatching { File(prevItem.filePath).delete() }
+            }
+            if (prevItem.thumbPath != thumbFile.absolutePath && prevItem.thumbPath != file.absolutePath) {
+                runCatching { File(prevItem.thumbPath).delete() }
+            }
+            current.removeAll { it.id == id }
+        }
         current.add(
             0,
             SavedPhotoItem(
                 id = id,
-                displayName = displayName,
+                displayName = finalName,
                 filePath = file.absolutePath,
                 thumbPath = if (thumbFile.exists()) thumbFile.absolutePath else file.absolutePath,
                 width = width,
@@ -114,7 +128,7 @@ object SavedGalleryStore {
         }
         val trimmed = current.take(MAX_ITEMS)
         saveIndex(context, trimmed)
-        return trimmed
+        return id to trimmed
     }
 
     fun delete(context: Context, id: String): List<SavedPhotoItem> {
