@@ -238,29 +238,49 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    private fun isLiveDabTool(tool: ActiveTool): Boolean =
+        tool == ActiveTool.SMUDGE || tool == ActiveTool.DODGE || tool == ActiveTool.BURN
+
+    private fun dabToolKey(tool: ActiveTool): String = when (tool) {
+        ActiveTool.SMUDGE -> "smudge"
+        ActiveTool.DODGE -> "dodge"
+        ActiveTool.BURN -> "burn"
+        else -> ""
+    }
+
     fun beginLiveStroke(sample: StrokeSample) {
         val s = _uiState.value
-        if (s.activeTool != ActiveTool.BRUSH && s.activeTool != ActiveTool.ERASER) return
-        val activeLayer = s.layers.firstOrNull { it.isActive }
-        if (activeLayer?.locked == true) {
-            showStatus("Orijinal fotoğraf kilitli — düzenlemek için Katman panelinden kilidi açabilirsin", 3200L)
-            return
+        val isBrushOrEraser = s.activeTool == ActiveTool.BRUSH || s.activeTool == ActiveTool.ERASER
+        val isDab = isLiveDabTool(s.activeTool)
+        if (!isBrushOrEraser && !isDab) return
+
+        if (isBrushOrEraser) {
+            val activeLayer = s.layers.firstOrNull { it.isActive }
+            if (activeLayer?.locked == true) {
+                showStatus("Orijinal fotoğraf kilitli — düzenlemek için Katman panelinden kilidi açabilirsin", 3200L)
+                return
+            }
         }
-        val isEraser = s.activeTool == ActiveTool.ERASER
+
         synchronized(pendingLock) { pendingSamples.clear() }
         paintExecutor.execute {
             runCatching {
-                engine.beginLiveStroke(sample, s.colorHex, isEraser)
+                if (isDab) {
+                    engine.beginLiveDab(dabToolKey(s.activeTool), sample, s.brushSize, s.brushHardness, s.retouchStrength)
+                } else {
+                    engine.beginLiveStroke(sample, s.colorHex, s.activeTool == ActiveTool.ERASER)
+                }
                 NativeSurfaceBridge.nativeRenderFrame()
             }.onFailure { err ->
-                showStatus("Çizim hatası: ${err.message}")
+                showStatus("Araç hatası: ${err.message}")
             }
         }
     }
 
     fun pushLiveStroke(samples: List<StrokeSample>) {
         val tool = _uiState.value.activeTool
-        if ((tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER) || samples.isEmpty()) return
+        val ok = tool == ActiveTool.BRUSH || tool == ActiveTool.ERASER || isLiveDabTool(tool)
+        if (!ok || samples.isEmpty()) return
         synchronized(pendingLock) {
             pendingSamples.addAll(samples)
         }
@@ -280,8 +300,13 @@ class EditorViewModel : ViewModel() {
                 batch = ArrayList(pendingSamples)
                 pendingSamples.clear()
             }
+            val isDab = isLiveDabTool(_uiState.value.activeTool)
             runCatching {
-                engine.pushLiveStroke(batch)
+                if (isDab) {
+                    engine.pushLiveDab(batch)
+                } else {
+                    engine.pushLiveStroke(batch)
+                }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }
@@ -289,15 +314,16 @@ class EditorViewModel : ViewModel() {
 
     fun finishLiveStroke() {
         val tool = _uiState.value.activeTool
-        if (tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER) return
+        val isDab = isLiveDabTool(tool)
+        if (tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER && !isDab) return
         paintExecutor.execute {
             drainPendingSamples()
             runCatching {
-                val info = engine.finishLiveStroke()
+                val info = if (isDab) engine.finishLiveDab() else engine.finishLiveStroke()
                 _uiState.update { it.copy(docInfo = info) }
                 NativeSurfaceBridge.nativeRenderFrame()
             }.onFailure { err ->
-                showStatus("Çizim kayıt hatası: ${err.message}")
+                showStatus("Kayıt hatası: ${err.message}")
             }
         }
     }
@@ -331,6 +357,7 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 engine.cancelLiveStroke()
+                engine.cancelLiveDab()
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }

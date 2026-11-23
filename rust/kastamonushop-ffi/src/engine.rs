@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_engine::brush_cmds::LiveStroke;
+use photocraft_engine::retouch_cmds::LiveDab;
 use photocraft_engine::Session;
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::Surface;
@@ -80,12 +81,23 @@ struct LiveFilterSession {
     has_applied_preview: bool,
 }
 
+struct ActiveLiveDab {
+    live: LiveDab,
+    cmd: String,
+    base_params: Value,
+    points_json: Vec<Value>,
+    target_id: LayerId,
+    prev_active: Option<LayerId>,
+    was_locked: bool,
+}
+
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
     pub pending_dirty: Option<Rect>,
     pub force_full_redraw: bool,
     live_stroke: Option<ActiveLiveStroke>,
+    live_dab: Option<ActiveLiveDab>,
     live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
 }
@@ -110,6 +122,7 @@ impl EngineCore {
             pending_dirty: None,
             force_full_redraw: true,
             live_stroke: None,
+            live_dab: None,
             live_adjustment: None,
             live_filter: None,
         }
@@ -118,6 +131,9 @@ impl EngineCore {
     pub fn active_document(&self) -> Option<Arc<Document>> {
         if let Some(active_live) = &self.live_stroke {
             return Some(Arc::clone(&active_live.live.doc));
+        }
+        if let Some(active_dab) = &self.live_dab {
+            return Some(Arc::clone(&active_dab.live.doc));
         }
         self.session.active().map(|ds| Arc::clone(ds.doc()))
     }
@@ -199,6 +215,7 @@ impl KastamonuEngine {
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_dab = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
         while guard.session.close(0).is_some() {}
@@ -234,6 +251,7 @@ impl KastamonuEngine {
         };
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_dab = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
         while guard.session.close(0).is_some() {}
@@ -276,6 +294,7 @@ impl KastamonuEngine {
 
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_dab = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
         while guard.session.close(0).is_some() {}
@@ -289,6 +308,7 @@ impl KastamonuEngine {
     pub fn place_image_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_dab = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
         photocraft_engine::file_cmds::place_bytes(&mut guard.session, &file_name, bytes, None, &json!({}))
@@ -507,7 +527,24 @@ impl KastamonuEngine {
         }
 
         res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        let pad = (clamped_size * 1.4).ceil() as i32;
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut max_y = i32::MIN;
+        for s in &samples {
+            let sx = s.x.round() as i32;
+            let sy = s.y.round() as i32;
+            min_x = min_x.min(sx - pad);
+            min_y = min_y.min(sy - pad);
+            max_x = max_x.max(sx + pad);
+            max_y = max_y.max(sy + pad);
+        }
+        if min_x < max_x && min_y < max_y {
+            guard.mark_region_dirty(Rect::new(min_x, min_y, max_x, max_y));
+        } else {
+            guard.mark_full_dirty();
+        }
         self.info_from_locked(&guard)
     }
 
@@ -554,6 +591,7 @@ impl KastamonuEngine {
         let turns = ((quarter_turns_cw % 4) + 4) % 4;
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_dab = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
 
@@ -598,6 +636,7 @@ impl KastamonuEngine {
     pub fn crop_canvas(&self, x: i32, y: i32, width: i32, height: i32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_dab = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
         guard
@@ -1131,6 +1170,7 @@ impl KastamonuEngine {
     pub fn undo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_dab = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
         guard
@@ -1144,6 +1184,7 @@ impl KastamonuEngine {
     pub fn redo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_dab = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
         guard
@@ -1367,6 +1408,180 @@ impl KastamonuEngine {
         let mut guard = self.core.lock();
         if let Some(active) = guard.live_stroke.take() {
             let bounds = active.live.bounds();
+            guard.mark_region_dirty(bounds);
+        }
+    }
+
+    /// Real-time 60 FPS incremental retouching (`smudge`, `dodge`, `burn`) using PhotoCraft's native `LiveDab` + dirty-rect compositing.
+    pub fn begin_live_dab(
+        &self,
+        tool: String,
+        sample: StrokeSample,
+        size: f32,
+        hardness: f32,
+        strength: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Rötuş uygulanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        let clamped_size = size.clamp(4.0, 400.0);
+        let clamped_hard = (hardness.clamp(0.0, 1.0) * 100.0).round();
+        let clamped_str = strength.clamp(5.0, 100.0);
+        let adaptive_spacing = if clamped_size > 160.0 {
+            28.0
+        } else if clamped_size > 90.0 {
+            22.0
+        } else {
+            15.0
+        };
+        let pt_json = json!([sample.x as f64, sample.y as f64, sample.pressure.clamp(0.05, 1.0) as f64]);
+
+        let (cmd, mut base_params) = match tool.as_str() {
+            "smudge" => (
+                "paint.smudge".to_string(),
+                json!({
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "spacing": adaptive_spacing,
+                    "strength": clamped_str,
+                    "sampleAllLayers": false
+                }),
+            ),
+            "dodge" => (
+                "paint.dodge".to_string(),
+                json!({
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "spacing": adaptive_spacing,
+                    "range": "midtones",
+                    "exposure": clamped_str,
+                    "protectTones": true
+                }),
+            ),
+            "burn" => (
+                "paint.burn".to_string(),
+                json!({
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "spacing": adaptive_spacing,
+                    "range": "midtones",
+                    "exposure": clamped_str,
+                    "protectTones": true
+                }),
+            ),
+            other => {
+                return Err(EngineError::InvalidParams {
+                    detail: format!("Canlı rötuş desteklenmeyen araç: {other}"),
+                })
+            }
+        };
+        base_params["points"] = json!([pt_json.clone()]);
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+
+        let live = match LiveDab::begin(&guard.session, &cmd, &base_params) {
+            Ok(l) => l,
+            Err(e) => {
+                if was_locked {
+                    let _ = guard.session.execute("edit.undo", json!({}));
+                }
+                if prev_active.is_some() {
+                    guard.session.set_active_layer(prev_active);
+                }
+                return Err(EngineError::CommandFailed { detail: e.to_string() });
+            }
+        };
+
+        let dmg = live.bounds();
+        guard.live_dab = Some(ActiveLiveDab {
+            live,
+            cmd,
+            base_params,
+            points_json: vec![pt_json],
+            target_id,
+            prev_active,
+            was_locked,
+        });
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
+    pub fn push_live_dab(&self, samples: Vec<StrokeSample>) -> Result<(), EngineError> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let mut guard = self.core.lock();
+        let Some(active) = guard.live_dab.as_mut() else {
+            return Ok(());
+        };
+        let pts: Vec<StrokePoint> = samples.iter().map(sample_to_stroke_point).collect();
+        let dmg = active
+            .live
+            .push(&pts)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        for s in &samples {
+            active
+                .points_json
+                .push(json!([s.x as f64, s.y as f64, s.pressure.clamp(0.05, 1.0) as f64]));
+        }
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
+    pub fn finish_live_dab(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(active) = guard.live_dab.take() else {
+            return self.info_from_locked(&guard);
+        };
+        let bounds = active.live.bounds();
+        let mut params = active.base_params;
+        params["points"] = Value::Array(active.points_json);
+
+        let _ = guard.session.offer_live_dab(active.live);
+        let res = guard.session.execute(&active.cmd, params);
+
+        if active.was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": active.target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if active.prev_active.is_some() {
+            guard.session.set_active_layer(active.prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_region_dirty(bounds);
+        self.info_from_locked(&guard)
+    }
+
+    pub fn cancel_live_dab(&self) {
+        let mut guard = self.core.lock();
+        if let Some(active) = guard.live_dab.take() {
+            let bounds = active.live.bounds();
+            if active.was_locked {
+                let _ = guard.session.execute("edit.undo", json!({}));
+            }
+            if active.prev_active.is_some() {
+                guard.session.set_active_layer(active.prev_active);
+            }
             guard.mark_region_dirty(bounds);
         }
     }

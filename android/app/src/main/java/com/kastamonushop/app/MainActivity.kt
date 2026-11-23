@@ -255,7 +255,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.6.2",
+                    text = "v0.6.3",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -803,11 +803,11 @@ fun StonebridgeStudioScreen(
                     getBrushSize = { vm.uiState.value.brushSize },
                     isDrawingActive = {
                         val t = vm.uiState.value.activeTool
-                        t == ActiveTool.BRUSH || t == ActiveTool.ERASER
+                        t == ActiveTool.BRUSH || t == ActiveTool.ERASER ||
+                            t == ActiveTool.SMUDGE || t == ActiveTool.DODGE || t == ActiveTool.BURN
                     },
                     isRetouchActive = {
-                        val t = vm.uiState.value.activeTool
-                        t == ActiveTool.SPOT_HEAL || t == ActiveTool.SMUDGE || t == ActiveTool.DODGE || t == ActiveTool.BURN
+                        vm.uiState.value.activeTool == ActiveTool.SPOT_HEAL
                     },
                     isEyedropperActive = { vm.uiState.value.activeTool == ActiveTool.EYEDROPPER },
                     isRulerEnabled = { vm.uiState.value.rulerEnabled },
