@@ -174,23 +174,29 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
 ) -> jboolean {
     let res = catch_unwind(AssertUnwindSafe(|| {
         let rt = runtime();
-        let mut r_guard = rt.renderer.lock();
+        let Some(mut r_guard) = rt.renderer.try_lock() else {
+            return JNI_TRUE;
+        };
         let Some(renderer) = r_guard.as_mut() else {
             return JNI_FALSE;
-        };
-
-        let (doc, render_gen, force_full, dirty_rect) = {
-            let mut guard = rt.engine.lock();
-            let Some(doc) = guard.active_document() else {
-                return JNI_FALSE;
-            };
-            let (full, rect) = guard.take_dirty_state();
-            (doc, guard.render_generation, full, rect)
         };
         let camera = *rt.camera.lock();
         let preview = *rt.preview.lock();
 
-        match renderer.render_frame(&doc, render_gen, force_full, dirty_rect, camera, preview) {
+        // Non-blocking try_lock on engine: if a background CPU job is running, still blit the cached GPU texture at 60 FPS!
+        let doc_state = rt.engine.try_lock().and_then(|mut guard| {
+            let doc = guard.active_document()?;
+            let (full, rect) = guard.take_dirty_state();
+            Some((doc, guard.render_generation, full, rect))
+        });
+
+        let result = if let Some((doc, render_gen, force_full, dirty_rect)) = doc_state {
+            renderer.render_frame(&doc, render_gen, force_full, dirty_rect, camera, preview)
+        } else {
+            renderer.present_cached_only(camera, preview)
+        };
+
+        match result {
             Ok(()) => JNI_TRUE,
             Err(e) => {
                 set_gpu_error(format!("render_frame error: {e}"));

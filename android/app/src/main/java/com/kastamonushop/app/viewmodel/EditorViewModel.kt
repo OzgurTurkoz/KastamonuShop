@@ -93,6 +93,9 @@ class EditorViewModel : ViewModel() {
     private val pendingSamplePt = AtomicReference<Pair<Float, Float>?>(null)
     private val sampleDrainScheduled = AtomicBoolean(false)
 
+    // Prevents rapid Spot Healing swipes from piling up on paintExecutor
+    private val spotHealInFlight = AtomicBoolean(false)
+
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
     )
@@ -398,14 +401,23 @@ class EditorViewModel : ViewModel() {
             else -> return
         }
         if (samples.isEmpty()) return
+        if (toolKey == "spot_heal" && !spotHealInFlight.compareAndSet(false, true)) {
+            return
+        }
         paintExecutor.execute {
-            runCatching {
-                val info = engine.applyRetouchStroke(toolKey, samples, s.brushSize, s.brushHardness, s.retouchStrength)
-                val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers) }
-                NativeSurfaceBridge.nativeRenderFrame()
-            }.onFailure { err ->
-                showStatus("Rötuş hatası: ${err.message}", 3500L)
+            try {
+                runCatching {
+                    val info = engine.applyRetouchStroke(toolKey, samples, s.brushSize, s.brushHardness, s.retouchStrength)
+                    val layers = engine.getLayers()
+                    _uiState.update { it.copy(docInfo = info, layers = layers) }
+                    NativeSurfaceBridge.nativeRenderFrame()
+                }.onFailure { err ->
+                    showStatus("Rötuş hatası: ${err.message}", 3500L)
+                }
+            } finally {
+                if (toolKey == "spot_heal") {
+                    spotHealInFlight.set(false)
+                }
             }
         }
     }

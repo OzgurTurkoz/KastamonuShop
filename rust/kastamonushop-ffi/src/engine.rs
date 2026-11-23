@@ -104,6 +104,10 @@ pub(crate) struct EngineCore {
 
 impl EngineCore {
     pub fn new() -> Self {
+        // System-wide mobile RAM guardrails (desktop defaults are 2 GB scratch / 8 GB transform)
+        photocraft_raster::scratch::set_budget(64 << 20);
+        photocraft_engine::transform_cmds::set_budget(256 << 20);
+
         let mut session = Session::new();
         let _ = session.execute(
             "file.new",
@@ -452,7 +456,11 @@ impl KastamonuEngine {
             .iter()
             .map(|pt| json!([pt.x as f64, pt.y as f64, pt.pressure.clamp(0.05, 1.0) as f64]))
             .collect();
-        let clamped_size = size.clamp(4.0, 400.0);
+        let clamped_size = if tool == "spot_heal" {
+            size.clamp(4.0, 140.0)
+        } else {
+            size.clamp(4.0, 400.0)
+        };
         let clamped_hard = (hardness.clamp(0.0, 1.0) * 100.0).round();
         let clamped_str = strength.clamp(5.0, 100.0);
 
@@ -660,14 +668,10 @@ impl KastamonuEngine {
     pub fn apply_photo_mirror(&self, mode: String, axis_ratio: f32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
-        let target_id = {
-            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
-            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
-                .map(|(id, _)| id)
-                .ok_or_else(|| EngineError::CommandFailed {
-                    detail: "Ayna efekti uygulanacak fotoğraf katmanı bulunamadı".into(),
-                })?
-        };
+        guard.live_dab = None;
+        if guard.session.active().is_none() {
+            return Err(EngineError::NoActiveDocument);
+        }
         let ratio = axis_ratio.clamp(0.05, 0.95);
         guard
             .session
@@ -676,18 +680,6 @@ impl KastamonuEngine {
                 let w = doc.size.width as usize;
                 let h = doc.size.height as usize;
                 if w < 2 || h < 2 {
-                    return Ok(());
-                }
-                let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
-                    return Ok(());
-                };
-                let LayerContent::Raster(surf) = &mut layer.content else {
-                    return Ok(());
-                };
-                let ch = surf.format().channels();
-                let mut data = surf.read_region(bounds);
-                let row_stride = w * ch;
-                if data.len() < row_stride * h {
                     return Ok(());
                 }
 
@@ -704,7 +696,6 @@ impl KastamonuEngine {
                     idx.clamp(0, len - 1) as usize
                 };
 
-                let src_snap = data.clone();
                 let mirror_x_right = match mode.as_str() {
                     "enine_auto" | "left_to_right" => ratio >= 0.5,
                     "enine_flip" | "right_to_left" => ratio < 0.5,
@@ -726,45 +717,63 @@ impl KastamonuEngine {
                     _ => false,
                 };
 
-                if mirror_x_right {
-                    for y in 0..h {
-                        let base = y * row_stride;
-                        for x in (ax as usize)..w {
-                            let sx = ping_pong(2 * ax - 1 - x as isize, w as isize);
-                            let dst = base + x * ch;
-                            let src = base + sx * ch;
-                            data[dst..(dst + ch)].copy_from_slice(&src_snap[src..(src + ch)]);
-                        }
+                // Mirror EVERY visible raster layer (Background + Çizim Katmanı + any photo layers)
+                // so the baked result matches the 60 FPS GPU composite preview 100% WYSIWYG.
+                for layer in &mut doc.layers {
+                    if !layer.visible {
+                        continue;
                     }
-                } else if mirror_x_left {
-                    for y in 0..h {
-                        let base = y * row_stride;
-                        for x in 0..(ax as usize) {
-                            let sx = ping_pong(2 * ax - 1 - x as isize, w as isize);
-                            let dst = base + x * ch;
-                            let src = base + sx * ch;
-                            data[dst..(dst + ch)].copy_from_slice(&src_snap[src..(src + ch)]);
-                        }
+                    let LayerContent::Raster(surf) = &mut layer.content else {
+                        continue;
+                    };
+                    let ch = surf.format().channels();
+                    let mut data = surf.read_region(bounds);
+                    let row_stride = w * ch;
+                    if data.len() < row_stride * h {
+                        continue;
                     }
-                } else if mirror_y_bottom {
-                    for y in (ay as usize)..h {
-                        let sy = ping_pong(2 * ay - 1 - y as isize, h as isize);
-                        let src_start = sy * row_stride;
-                        let dst_start = y * row_stride;
-                        data[dst_start..(dst_start + row_stride)]
-                            .copy_from_slice(&src_snap[src_start..(src_start + row_stride)]);
-                    }
-                } else if mirror_y_top {
-                    for y in 0..(ay as usize) {
-                        let sy = ping_pong(2 * ay - 1 - y as isize, h as isize);
-                        let src_start = sy * row_stride;
-                        let dst_start = y * row_stride;
-                        data[dst_start..(dst_start + row_stride)]
-                            .copy_from_slice(&src_snap[src_start..(src_start + row_stride)]);
-                    }
-                }
+                    let src_snap = data.clone();
 
-                surf.write_region_par(bounds, &data);
+                    if mirror_x_right {
+                        for y in 0..h {
+                            let base = y * row_stride;
+                            for x in (ax as usize)..w {
+                                let sx = ping_pong(2 * ax - 1 - x as isize, w as isize);
+                                let dst = base + x * ch;
+                                let src = base + sx * ch;
+                                data[dst..(dst + ch)].copy_from_slice(&src_snap[src..(src + ch)]);
+                            }
+                        }
+                    } else if mirror_x_left {
+                        for y in 0..h {
+                            let base = y * row_stride;
+                            for x in 0..(ax as usize) {
+                                let sx = ping_pong(2 * ax - 1 - x as isize, w as isize);
+                                let dst = base + x * ch;
+                                let src = base + sx * ch;
+                                data[dst..(dst + ch)].copy_from_slice(&src_snap[src..(src + ch)]);
+                            }
+                        }
+                    } else if mirror_y_bottom {
+                        for y in (ay as usize)..h {
+                            let sy = ping_pong(2 * ay - 1 - y as isize, h as isize);
+                            let src_start = sy * row_stride;
+                            let dst_start = y * row_stride;
+                            data[dst_start..(dst_start + row_stride)]
+                                .copy_from_slice(&src_snap[src_start..(src_start + row_stride)]);
+                        }
+                    } else if mirror_y_top {
+                        for y in 0..(ay as usize) {
+                            let sy = ping_pong(2 * ay - 1 - y as isize, h as isize);
+                            let src_start = sy * row_stride;
+                            let dst_start = y * row_stride;
+                            data[dst_start..(dst_start + row_stride)]
+                                .copy_from_slice(&src_snap[src_start..(src_start + row_stride)]);
+                        }
+                    }
+
+                    surf.write_region_par(bounds, &data);
+                }
                 Ok(())
             })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -1440,11 +1449,11 @@ impl KastamonuEngine {
         let clamped_hard = (hardness.clamp(0.0, 1.0) * 100.0).round();
         let clamped_str = strength.clamp(5.0, 100.0);
         let adaptive_spacing = if clamped_size > 160.0 {
+            38.0
+        } else if clamped_size > 100.0 {
             28.0
-        } else if clamped_size > 90.0 {
-            22.0
         } else {
-            15.0
+            18.0
         };
         let pt_json = json!([sample.x as f64, sample.y as f64, sample.pressure.clamp(0.05, 1.0) as f64]);
 

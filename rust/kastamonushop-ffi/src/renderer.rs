@@ -1,6 +1,6 @@
 //! Zero-copy Vulkan (GLES fallback) GPU Renderer binding `photocraft_gpu::Compositor`
 //! directly to an Android `SurfaceView` (`ANativeWindow`) with incremental dirty-rect updates,
-//! zero per-frame BindGroup allocations, and 60 FPS GPU preview uniforms (Mirror, Flip, Adjust, Filter).
+//! mobile-tuned 128 MB GPU memory budget, non-blocking cached-texture present, and 60 FPS GPU previews.
 
 use bytemuck::{Pod, Zeroable};
 use photocraft_doc::Document;
@@ -153,8 +153,10 @@ impl VulkanRenderer {
         surface.configure(&device, &config);
 
         let acc_format = Compositor::preferred_acc_format(&adapter);
-        let compositor = Compositor::try_new_with_format(&device, acc_format)
+        let mut compositor = Compositor::try_new_with_format(&device, acc_format)
             .map_err(|e| format!("Compositor init failed ({acc_format:?}): {e:?}"))?;
+        // Mobile-safe GPU cache budget (128 MB instead of desktop 1+ GB) to prevent Android LMK crashes
+        compositor.set_memory_budget(128 << 20);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("stonebridgecraft_blit_wgsl"),
@@ -276,6 +278,95 @@ impl VulkanRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
+    /// Blits the already-cached GPU `doc_texture` with updated camera/preview uniforms in <0.2ms,
+    /// without touching the CPU engine (prevents UI-thread freezes/ANRs during heavy background work).
+    pub fn present_cached_only(
+        &mut self,
+        camera: ViewportCamera,
+        preview: GpuPreviewState,
+    ) -> Result<(), String> {
+        let Some(bind_group) = &self.cached_blit_bg else {
+            return Ok(());
+        };
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            other => return Err(format!("Swapchain error: {other:?}")),
+        };
+
+        let uniforms = ViewportUniforms {
+            dims: [
+                self.config.width as f32,
+                self.config.height as f32,
+                self.doc_tex_size.0 as f32,
+                self.doc_tex_size.1 as f32,
+            ],
+            camera: [camera.pan_x, camera.pan_y, camera.zoom, camera.rotation_rad],
+            style: [16.0, 0.10, 0.10, 0.12],
+            preview: [
+                preview.mirror_mode as f32,
+                preview.mirror_axis.clamp(0.05, 0.95),
+                if preview.flip_x { 1.0 } else { 0.0 },
+                if preview.flip_y { 1.0 } else { 0.0 },
+            ],
+            adjust: [
+                preview.brightness,
+                preview.contrast,
+                preview.saturation,
+                preview.hue,
+            ],
+            filter_p: [preview.blur_radius, preview.sharpen_amount, 0.0, 0.0],
+        };
+        self.queue
+            .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        let swap_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("stonebridgecraft_present"),
+            });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("stonebridgecraft_blit_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &swap_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.10,
+                            g: 0.10,
+                            b: 0.12,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rpass.set_pipeline(&self.blit_pipeline);
+            rpass.set_bind_group(0, bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(frame);
+        Ok(())
+    }
+
     pub fn render_frame(
         &mut self,
         doc: &Document,
@@ -290,7 +381,7 @@ impl VulkanRenderer {
         let mut need_full = force_full || self.doc_texture.is_none();
 
         if self.doc_tex_size != (doc_w, doc_h) || self.doc_texture.is_none() {
-            let max_dim = self.device.limits().max_texture_dimension_2d;
+            let max_dim = self.device.limits().max_texture_dimension_2d.min(4096);
             let tex_w = doc_w.min(max_dim);
             let tex_h = doc_h.min(max_dim);
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -391,91 +482,6 @@ impl VulkanRenderer {
             }
         }
 
-        let Some(bind_group) = &self.cached_blit_bg else {
-            return Ok(());
-        };
-
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface.configure(&self.device, &self.config);
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(());
-            }
-            other => return Err(format!("Swapchain error: {other:?}")),
-        };
-
-        let uniforms = ViewportUniforms {
-            dims: [
-                self.config.width as f32,
-                self.config.height as f32,
-                self.doc_tex_size.0 as f32,
-                self.doc_tex_size.1 as f32,
-            ],
-            camera: [camera.pan_x, camera.pan_y, camera.zoom, camera.rotation_rad],
-            style: [16.0, 0.10, 0.10, 0.12],
-            preview: [
-                preview.mirror_mode as f32,
-                preview.mirror_axis.clamp(0.05, 0.95),
-                if preview.flip_x { 1.0 } else { 0.0 },
-                if preview.flip_y { 1.0 } else { 0.0 },
-            ],
-            adjust: [
-                preview.brightness,
-                preview.contrast,
-                preview.saturation,
-                preview.hue,
-            ],
-            filter_p: [
-                preview.blur_radius,
-                preview.sharpen_amount,
-                0.0,
-                0.0,
-            ],
-        };
-        self.queue
-            .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-
-        let swap_view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("stonebridgecraft_present"),
-            });
-        {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("stonebridgecraft_blit_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &swap_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.10,
-                            g: 0.10,
-                            b: 0.12,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            rpass.set_pipeline(&self.blit_pipeline);
-            rpass.set_bind_group(0, bind_group, &[]);
-            rpass.draw(0..3, 0..1);
-        }
-
-        self.queue.submit([encoder.finish()]);
-        self.queue.present(frame);
-        Ok(())
+        self.present_cached_only(camera, preview)
     }
 }
