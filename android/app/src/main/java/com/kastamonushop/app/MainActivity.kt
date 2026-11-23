@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -35,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kastamonushop.app.ui.canvas.VulkanCanvasView
 import com.kastamonushop.app.viewmodel.ActiveTool
 import com.kastamonushop.app.viewmodel.EditorViewModel
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private val StudioDarkScheme = darkColorScheme(
@@ -169,8 +171,10 @@ private fun CompactSliderRow(
     valueText: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
+    defaultValue: Float,
     onChange: (Float) -> Unit
 ) {
+    val isModified = abs(value - defaultValue) > ((range.endInclusive - range.start) * 0.004f)
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -179,7 +183,7 @@ private fun CompactSliderRow(
             text = label,
             color = Color(0xFFDCE0EC),
             fontSize = 12.sp,
-            modifier = Modifier.width(72.dp)
+            modifier = Modifier.width(66.dp)
         )
         Slider(
             value = value,
@@ -194,8 +198,27 @@ private fun CompactSliderRow(
             color = Color.White,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.width(42.dp)
+            textAlign = TextAlign.End,
+            modifier = Modifier
+                .width(40.dp)
+                .padding(end = 4.dp)
         )
+        // Tiny one-tap reset/center button so user never struggles to drag back to 0/default
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(if (isModified) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color(0xFF2A2C36))
+                .clickable(enabled = isModified) { onChange(defaultValue) },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.RestartAlt,
+                contentDescription = "Sıfırla",
+                tint = if (isModified) MaterialTheme.colorScheme.primary else Color(0xFF5A5E70),
+                modifier = Modifier.size(15.dp)
+            )
+        }
     }
 }
 
@@ -252,8 +275,8 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
     var contrastVal by remember { mutableFloatStateOf(0f) }
     var hueVal by remember { mutableFloatStateOf(0f) }
     var saturationVal by remember { mutableFloatStateOf(0f) }
-    var blurRadiusVal by remember { mutableFloatStateOf(8f) }
-    var sharpenAmountVal by remember { mutableFloatStateOf(80f) }
+    var blurRadiusVal by remember { mutableFloatStateOf(0f) }
+    var sharpenAmountVal by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(state.fitCameraSignal) {
         if (state.fitCameraSignal > 0) {
@@ -438,17 +461,16 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
 
                     if (activeLayer != null) {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Seçili: ${activeLayer.name} · Opaklık ${(activeLayer.opacity * 100).toInt()}%",
-                            fontSize = 11.sp,
-                            color = Color(0xFFD0D4E0)
-                        )
-                        Slider(
+                        CompactSliderRow(
+                            label = "Opaklık",
+                            valueText = "${(activeLayer.opacity * 100).toInt()}%",
                             value = activeLayer.opacity,
-                            onValueChange = { vm.setLayerOpacity(activeLayer.id, it) },
-                            valueRange = 0f..1f,
-                            modifier = Modifier.height(28.dp)
-                        )
+                            range = 0f..1f,
+                            defaultValue = 1f
+                        ) {
+                            vm.setLayerOpacity(activeLayer.id, it)
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
 
                         Box(modifier = Modifier.fillMaxWidth()) {
                             val currentOpt = BEGINNER_BLEND_MODES.firstOrNull {
@@ -698,20 +720,20 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                                     )
                                 }
                             }
-                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 2f..250f) {
+                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 2f..250f, defaultValue = 28f) {
                                 vm.updateBrush(size = it)
                             }
-                            CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f) {
+                            CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f, defaultValue = 1f) {
                                 vm.updateBrush(opacity = it)
                             }
-                            CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f) {
+                            CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
                                 vm.updateBrush(hardness = it)
                             }
                         } else if (state.activeTool == ActiveTool.ERASER) {
-                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 4f..250f) {
+                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 4f..250f, defaultValue = 28f) {
                                 vm.updateBrush(size = it)
                             }
-                            CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f) {
+                            CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
                                 vm.updateBrush(hardness = it)
                             }
                         }
@@ -776,11 +798,11 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                                 activePanel = BottomPanel.DOCK
                             }
                         )
-                        CompactSliderRow("Parlaklık", "${brightnessVal.roundToInt()}", brightnessVal, -100f..100f) {
+                        CompactSliderRow("Parlaklık", "${brightnessVal.roundToInt()}", brightnessVal, -100f..100f, defaultValue = 0f) {
                             brightnessVal = it
                             vm.updateLiveAdjustment("""{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
                         }
-                        CompactSliderRow("Kontrast", "${contrastVal.roundToInt()}", contrastVal, -50f..100f) {
+                        CompactSliderRow("Kontrast", "${contrastVal.roundToInt()}", contrastVal, -50f..100f, defaultValue = 0f) {
                             contrastVal = it
                             vm.updateLiveAdjustment("""{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
                         }
@@ -806,11 +828,11 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                                 activePanel = BottomPanel.DOCK
                             }
                         )
-                        CompactSliderRow("Canlılık", "${saturationVal.roundToInt()}", saturationVal, -100f..100f) {
+                        CompactSliderRow("Canlılık", "${saturationVal.roundToInt()}", saturationVal, -100f..100f, defaultValue = 0f) {
                             saturationVal = it
                             vm.updateLiveAdjustment("""{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
                         }
-                        CompactSliderRow("Renk Tonu", "${hueVal.roundToInt()}°", hueVal, -180f..180f) {
+                        CompactSliderRow("Renk Tonu", "${hueVal.roundToInt()}°", hueVal, -180f..180f, defaultValue = 0f) {
                             hueVal = it
                             vm.updateLiveAdjustment("""{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
                         }
@@ -825,7 +847,7 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                     ) {
                         BottomEditorHeader(
                             title = "Filtreler",
-                            subtitle = "Fotoğraf katmanına doğrudan uygulanır",
+                            subtitle = "Kaydırdıkça anlık önizleme ile uygulanır",
                             onClose = { activePanel = BottomPanel.DOCK }
                         )
                         Row(
@@ -835,17 +857,26 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                             CircularDockButton(
                                 icon = Icons.Default.BlurOn,
                                 label = "Bulanık",
-                                onClick = { activePanel = BottomPanel.BLUR_EDIT }
+                                onClick = {
+                                    blurRadiusVal = 0f
+                                    vm.beginLiveFilter()
+                                    activePanel = BottomPanel.BLUR_EDIT
+                                }
                             )
                             CircularDockButton(
                                 icon = Icons.Default.Details,
                                 label = "Keskin",
-                                onClick = { activePanel = BottomPanel.SHARPEN_EDIT }
+                                onClick = {
+                                    sharpenAmountVal = 0f
+                                    vm.beginLiveFilter()
+                                    activePanel = BottomPanel.SHARPEN_EDIT
+                                }
                             )
                         }
                     }
                 }
 
+                // Live Preview: Bulanıklaştır
                 BottomPanel.BLUR_EDIT -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -853,20 +884,29 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                     ) {
                         BottomEditorHeader(
                             title = "Bulanıklaştır",
-                            subtitle = "Gaussian Blur ile fotoğrafı yumuşatır",
+                            subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
                             applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.FILTER_MENU },
+                            onClose = {
+                                vm.cancelLiveFilter()
+                                activePanel = BottomPanel.FILTER_MENU
+                            },
                             onApply = {
-                                vm.applyPixelFilter("filter.blur.gaussianBlur", """{"radius":${blurRadiusVal}}""", "Bulanıklaştırma")
+                                vm.commitLiveFilter("Bulanıklaştırma")
                                 activePanel = BottomPanel.DOCK
                             }
                         )
-                        CompactSliderRow("Yarıçap", "${blurRadiusVal.roundToInt()}px", blurRadiusVal, 1f..60f) {
+                        CompactSliderRow("Yarıçap", "${blurRadiusVal.roundToInt()}px", blurRadiusVal, 0f..60f, defaultValue = 0f) {
                             blurRadiusVal = it
+                            if (it < 0.5f) {
+                                vm.updateLiveFilter("", "{}")
+                            } else {
+                                vm.updateLiveFilter("filter.blur.gaussianBlur", """{"radius":${it}}""")
+                            }
                         }
                     }
                 }
 
+                // Live Preview: Keskinleştir
                 BottomPanel.SHARPEN_EDIT -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -874,16 +914,24 @@ fun StonebridgeStudioScreen(vm: EditorViewModel = viewModel()) {
                     ) {
                         BottomEditorHeader(
                             title = "Keskinleştir",
-                            subtitle = "Detay ve kenarları belirginleştirir",
+                            subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
                             applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.FILTER_MENU },
+                            onClose = {
+                                vm.cancelLiveFilter()
+                                activePanel = BottomPanel.FILTER_MENU
+                            },
                             onApply = {
-                                vm.applyPixelFilter("filter.sharpen.unsharpMask", """{"amount":${sharpenAmountVal},"radius":1.2,"threshold":0.0}""", "Keskinleştirme")
+                                vm.commitLiveFilter("Keskinleştirme")
                                 activePanel = BottomPanel.DOCK
                             }
                         )
-                        CompactSliderRow("Güç", "%${sharpenAmountVal.roundToInt()}", sharpenAmountVal, 20f..250f) {
+                        CompactSliderRow("Güç", "%${sharpenAmountVal.roundToInt()}", sharpenAmountVal, 0f..250f, defaultValue = 0f) {
                             sharpenAmountVal = it
+                            if (it < 1f) {
+                                vm.updateLiveFilter("", "{}")
+                            } else {
+                                vm.updateLiveFilter("filter.sharpen.unsharpMask", """{"amount":${it},"radius":1.2,"threshold":0.0}""")
+                            }
                         }
                     }
                 }

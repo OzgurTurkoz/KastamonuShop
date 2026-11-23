@@ -1,7 +1,7 @@
-//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.4.2 — StonebridgeCraft).
-//! - Live real-time adjustment preview (`begin_live_adjustment`, `update_live_adjustment`, `cancel_live_adjustment`)
-//! - Toggleable quick effects (`toggle_quick_adjustment` for B&W / Invert)
-//! - Smart pixel filter targeting (`apply_pixel_filter` auto-targets the photo layer even when an adjustment layer is selected)
+//! PhotoCraft Session wrapper exposed to Kotlin via UniFFI (v0.4.3 — StonebridgeCraft).
+//! - Live real-time adjustment preview (`begin_live_adjustment`, `update_live_adjustment`, `delete_layer_by_id`)
+//! - Live real-time pixel filter preview (`begin_live_filter`, `update_live_filter`, `commit_live_filter`, `cancel_live_filter`)
+//! - Smart pixel filter targeting (auto-targets the photo layer even when an adjustment layer is selected)
 
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -65,12 +65,20 @@ struct ActiveLiveStroke {
     is_eraser: bool,
 }
 
+struct LiveFilterSession {
+    target_id: LayerId,
+    prev_active: Option<LayerId>,
+    was_locked: bool,
+    has_applied_preview: bool,
+}
+
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
     pub pending_dirty: Option<Rect>,
     pub force_full_redraw: bool,
     live_stroke: Option<ActiveLiveStroke>,
+    live_filter: Option<LiveFilterSession>,
 }
 
 impl EngineCore {
@@ -93,6 +101,7 @@ impl EngineCore {
             pending_dirty: None,
             force_full_redraw: true,
             live_stroke: None,
+            live_filter: None,
         }
     }
 
@@ -164,6 +173,7 @@ impl KastamonuEngine {
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_filter = None;
         guard
             .session
             .execute(
@@ -196,6 +206,7 @@ impl KastamonuEngine {
         };
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_filter = None;
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
         if let Some(bg_id) = single_layer_id {
@@ -212,6 +223,7 @@ impl KastamonuEngine {
     pub fn place_image_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_filter = None;
         photocraft_engine::file_cmds::place_bytes(&mut guard.session, &file_name, bytes, None, &json!({}))
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
@@ -298,19 +310,24 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Applies a pixel filter (`filter.blur.gaussianBlur`, `filter.sharpen.unsharpMask`, etc.)
-    /// by automatically targeting the photo/background pixel layer even if an adjustment layer is currently selected.
-    pub fn apply_pixel_filter(&self, command_id: String, params_json: String) -> Result<(), EngineError> {
-        let params: Value = if params_json.trim().is_empty() {
-            json!({})
-        } else {
-            serde_json::from_str(&params_json)
-                .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?
-        };
+    /// Starts a live pixel filter preview session on the photo/raster layer.
+    pub fn begin_live_filter(&self) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
 
-        // Find the best raster pixel layer (prefer Background / bottom raster photo layer if active isn't raster)
+        // If a previous live filter session was somehow left open, cancel it cleanly first.
+        if let Some(old_lf) = guard.live_filter.take() {
+            if old_lf.has_applied_preview {
+                let _ = guard.session.execute("edit.undo", json!({}));
+            }
+            if old_lf.was_locked {
+                let _ = guard.session.execute("edit.undo", json!({}));
+            }
+            if old_lf.prev_active.is_some() {
+                guard.session.set_active_layer(old_lf.prev_active);
+            }
+        }
+
         let (prev_active, target_id, was_locked) = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
             let doc = ds.doc();
@@ -342,26 +359,107 @@ impl KastamonuEngine {
             );
         }
 
-        let res = guard.session.execute(&command_id, params);
+        guard.live_filter = Some(LiveFilterSession {
+            target_id,
+            prev_active,
+            was_locked,
+            has_applied_preview: false,
+        });
+        Ok(())
+    }
 
-        if was_locked {
-            let _ = guard.session.execute(
-                "layer.setProps",
-                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
-            );
-        }
-        if prev_active.is_some() {
-            guard.session.set_active_layer(prev_active);
+    /// Updates the live pixel filter preview in real time as the slider moves.
+    /// Pass empty `command_id` to revert to the clean un-filtered photo (e.g. slider at 0).
+    pub fn update_live_filter(&self, command_id: String, params_json: String) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let Some(mut lf) = guard.live_filter.take() else {
+            return Ok(());
+        };
+
+        if lf.has_applied_preview {
+            let _ = guard.session.execute("edit.undo", json!({}));
+            lf.has_applied_preview = false;
         }
 
-        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let mut err_out: Option<EngineError> = None;
+        if !command_id.trim().is_empty() {
+            match serde_json::from_str::<Value>(&params_json) {
+                Ok(params) => {
+                    guard.session.set_active_layer(Some(lf.target_id));
+                    match guard.session.execute(&command_id, params) {
+                        Ok(_) => lf.has_applied_preview = true,
+                        Err(e) => err_out = Some(EngineError::CommandFailed { detail: e.to_string() }),
+                    }
+                }
+                Err(e) => err_out = Some(EngineError::InvalidParams { detail: e.to_string() }),
+            }
+        }
+
+        guard.live_filter = Some(lf);
+        guard.mark_full_dirty();
+
+        if let Some(err) = err_out {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Commits the current live pixel filter preview and restores lock/selection state.
+    pub fn commit_live_filter(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let Some(lf) = guard.live_filter.take() else {
+            return Ok(());
+        };
+        if lf.was_locked {
+            if lf.has_applied_preview {
+                let _ = guard.session.execute(
+                    "layer.setProps",
+                    json!({ "layer": lf.target_id.0, "locks": { "pixels": true } }),
+                );
+            } else {
+                // No filter was applied; undo the unlock cleanly
+                let _ = guard.session.execute("edit.undo", json!({}));
+            }
+        }
+        if lf.prev_active.is_some() {
+            guard.session.set_active_layer(lf.prev_active);
+        }
         guard.mark_full_dirty();
         Ok(())
+    }
+
+    /// Cancels the live pixel filter preview, restoring the exact original pixels and lock state.
+    pub fn cancel_live_filter(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let Some(lf) = guard.live_filter.take() else {
+            return Ok(());
+        };
+        if lf.has_applied_preview {
+            let _ = guard.session.execute("edit.undo", json!({}));
+        }
+        if lf.was_locked {
+            let _ = guard.session.execute("edit.undo", json!({}));
+        }
+        if lf.prev_active.is_some() {
+            guard.session.set_active_layer(lf.prev_active);
+        }
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// One-shot pixel filter helper (kept for compatibility).
+    pub fn apply_pixel_filter(&self, command_id: String, params_json: String) -> Result<(), EngineError> {
+        self.begin_live_filter()?;
+        let res = self.update_live_filter(command_id, params_json);
+        let _ = self.commit_live_filter();
+        res
     }
 
     pub fn undo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_filter = None;
         guard
             .session
             .execute("edit.undo", json!({}))
@@ -373,6 +471,7 @@ impl KastamonuEngine {
     pub fn redo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.live_filter = None;
         guard
             .session
             .execute("edit.redo", json!({}))

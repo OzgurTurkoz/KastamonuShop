@@ -23,6 +23,7 @@ import uniffi.kastamonushop_ffi.engineVersionInfo
 import uniffi.kastamonushop_ffi.getLastGpuError
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 enum class ActiveTool {
     NONE,
@@ -56,9 +57,15 @@ class EditorViewModel : ViewModel() {
     private val pendingSamples = ArrayList<StrokeSample>(64)
     private val drainScheduled = AtomicBoolean(false)
 
-    // Live adjustment preview state
+    // Coalesced live adjustment preview state
     @Volatile
     private var liveAdjustmentLayerId: ULong? = null
+    private val pendingAdjParams = AtomicReference<String?>(null)
+    private val adjDrainScheduled = AtomicBoolean(false)
+
+    // Coalesced live pixel filter preview state (Gaussian Blur / Sharpen)
+    private val pendingFilterUpdate = AtomicReference<Pair<String, String>?>(null)
+    private val filterDrainScheduled = AtomicBoolean(false)
 
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
@@ -204,8 +211,9 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    // Real-time live adjustment preview while dragging sliders!
+    // Coalesced real-time live adjustment preview while dragging sliders
     fun beginLiveAdjustment(kind: String, initialParamsJson: String) {
+        pendingAdjParams.set(null)
         paintExecutor.execute {
             runCatching {
                 liveAdjustmentLayerId?.let { oldId -> runCatching { engine.deleteLayerById(oldId) } }
@@ -219,18 +227,33 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateLiveAdjustment(paramsJson: String) {
-        val id = liveAdjustmentLayerId ?: return
-        paintExecutor.execute {
+        pendingAdjParams.set(paramsJson)
+        if (adjDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingAdjustments() }
+        }
+    }
+
+    private fun drainPendingAdjustments() {
+        while (true) {
+            val params = pendingAdjParams.getAndSet(null)
+            if (params == null) {
+                adjDrainScheduled.set(false)
+                if (pendingAdjParams.get() == null) return
+                if (!adjDrainScheduled.compareAndSet(false, true)) return
+                continue
+            }
+            val id = liveAdjustmentLayerId ?: continue
             runCatching {
-                engine.updateLiveAdjustment(id, paramsJson)
+                engine.updateLiveAdjustment(id, params)
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }
     }
 
     fun commitLiveAdjustment(labelTr: String) {
-        liveAdjustmentLayerId = null
         paintExecutor.execute {
+            drainPendingAdjustments()
+            liveAdjustmentLayerId = null
             runCatching {
                 val info = engine.getDocumentInfo()
                 val layers = engine.getLayers()
@@ -242,11 +265,78 @@ class EditorViewModel : ViewModel() {
     }
 
     fun cancelLiveAdjustment() {
-        val id = liveAdjustmentLayerId ?: return
-        liveAdjustmentLayerId = null
+        pendingAdjParams.set(null)
         paintExecutor.execute {
+            val id = liveAdjustmentLayerId ?: return@execute
+            liveAdjustmentLayerId = null
             runCatching {
                 engine.deleteLayerById(id)
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    // Coalesced real-time live pixel filter preview (Gaussian Blur / Sharpen)
+    fun beginLiveFilter() {
+        pendingFilterUpdate.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.beginLiveFilter()
+            }.onFailure { err ->
+                showStatus("Filtre başlatılamadı: ${err.message}", 3500L)
+            }
+        }
+    }
+
+    fun updateLiveFilter(commandId: String, paramsJson: String) {
+        pendingFilterUpdate.set(commandId to paramsJson)
+        if (filterDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingFilterUpdates() }
+        }
+    }
+
+    private fun drainPendingFilterUpdates() {
+        while (true) {
+            val next = pendingFilterUpdate.getAndSet(null)
+            if (next == null) {
+                filterDrainScheduled.set(false)
+                if (pendingFilterUpdate.get() == null) return
+                if (!filterDrainScheduled.compareAndSet(false, true)) return
+                continue
+            }
+            runCatching {
+                engine.updateLiveFilter(next.first, next.second)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Filtre önizleme hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun commitLiveFilter(labelTr: String) {
+        paintExecutor.execute {
+            drainPendingFilterUpdates()
+            runCatching {
+                engine.commitLiveFilter()
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("$labelTr uygulandı", 2000L)
+            }.onFailure { err ->
+                showStatus("$labelTr hatası: ${err.message}", 3500L)
+            }
+        }
+    }
+
+    fun cancelLiveFilter() {
+        pendingFilterUpdate.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.cancelLiveFilter()
                 val info = engine.getDocumentInfo()
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
@@ -302,25 +392,6 @@ class EditorViewModel : ViewModel() {
                 }
             }.onFailure { err ->
                 showStatus("Negatif hatası: ${err.message}")
-            }
-        }
-    }
-
-    // Smart pixel filter (Gaussian Blur / Sharpen) that auto-targets the photo layer cleanly
-    fun applyPixelFilter(commandId: String, paramsJson: String, labelTr: String) {
-        _uiState.update { it.copy(isBusy = true) }
-        showStatus("$labelTr uygulanıyor...", 0L)
-        paintExecutor.execute {
-            runCatching {
-                engine.applyPixelFilter(commandId, paramsJson)
-                val info = engine.getDocumentInfo()
-                val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
-                NativeSurfaceBridge.nativeRenderFrame()
-                showStatus("$labelTr uygulandı", 2200L)
-            }.onFailure { err ->
-                _uiState.update { it.copy(isBusy = false) }
-                showStatus("$labelTr hatası: ${err.message}", 4500L)
             }
         }
     }
