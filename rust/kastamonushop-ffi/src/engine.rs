@@ -6,10 +6,12 @@
 
 use std::sync::Arc;
 use parking_lot::Mutex;
-use photocraft_doc::{Document, LayerContent, LayerId};
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_engine::brush_cmds::LiveStroke;
 use photocraft_engine::Session;
-use photocraft_geom::Rect;
+use photocraft_geom::{Rect, Size};
+use photocraft_raster::Surface;
 use photocraft_paint::StrokePoint;
 use serde_json::{Value, json};
 
@@ -199,6 +201,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        while guard.session.close(0).is_some() {}
         guard
             .session
             .execute(
@@ -233,6 +236,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_adjustment = None;
         guard.live_filter = None;
+        while guard.session.close(0).is_some() {}
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
         if let Some(bg_id) = single_layer_id {
@@ -242,6 +246,42 @@ impl KastamonuEngine {
             );
             let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
         }
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Fast zero-reencode path for Android hardware-decoded RGBA8 bitmaps.
+    /// Closes any previous document first so RAM never accumulates across opens.
+    pub fn open_rgba_bytes(
+        &self,
+        file_name: String,
+        width: u32,
+        height: u32,
+        rgba_bytes: Vec<u8>,
+    ) -> Result<DocumentInfo, EngineError> {
+        let w = width.max(1);
+        let h = height.max(1);
+        let expected = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+        if rgba_bytes.len() < expected {
+            return Err(EngineError::InvalidParams {
+                detail: format!("RGBA buffer size mismatch: got {}, expected {}", rgba_bytes.len(), expected),
+            });
+        }
+        let rect = Rect::new(0, 0, w as i32, h as i32);
+        let surf = Surface::from_interleaved(PixelFormat::RGBA8, rect, &rgba_bytes[..expected]);
+        let mut doc = Document::new(file_name, Size::new(w, h), ColorMode::Rgb, SampleType::U8);
+        let mut bg = Layer::new("Background", LayerContent::Raster(surf));
+        bg.locks.pixels = true;
+        doc.layers.push(bg);
+
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_adjustment = None;
+        guard.live_filter = None;
+        while guard.session.close(0).is_some() {}
+        let idx = guard.session.add_document(doc, None);
+        guard.session.set_active(idx);
+        let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }

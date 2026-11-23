@@ -2,8 +2,13 @@ package com.kastamonushop.app.viewmodel
 
 import android.content.ContentResolver
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.provider.OpenableColumns
+import java.nio.ByteBuffer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kastamonushop.app.bridge.NativeSurfaceBridge
@@ -916,18 +921,112 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    private fun decodeHardwareSafeRgba(
+        resolver: ContentResolver,
+        uri: Uri,
+        maxLongEdge: Int = 4096
+    ): Triple<Int, Int, Pair<ByteArray, Boolean>>? {
+        // 1. Read bounds only (0 pixel RAM allocated, ~2 ms)
+        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, boundsOpts) }
+        val origW = boundsOpts.outWidth
+        val origH = boundsOpts.outHeight
+        if (origW <= 0 || origH <= 0) return null
+
+        // 2. Read EXIF orientation so portrait camera photos stay upright
+        val exifOrientation = runCatching {
+            resolver.openInputStream(uri)?.use {
+                ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+
+        // 3. Safe OOM guard: subsample ONLY if photo exceeds 4096px (e.g. 48MP/64MP/108MP camera shots)
+        var sample = 1
+        var curMax = maxOf(origW, origH)
+        while (curMax / sample > maxLongEdge) {
+            sample *= 2
+        }
+        val wasDownscaled = sample > 1
+
+        // 4. Hardware NEON SIMD decode (~90 ms for 12MP!)
+        val decOpts = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            inPremultiplied = false
+        }
+        var bmp = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, decOpts) }
+            ?: return null
+
+        // If still slightly above maxLongEdge (e.g. 4200px), scale cleanly
+        val decodedMax = maxOf(bmp.width, bmp.height)
+        if (decodedMax > maxLongEdge) {
+            val scale = maxLongEdge.toFloat() / decodedMax.toFloat()
+            val nw = (bmp.width * scale).toInt().coerceAtLeast(1)
+            val nh = (bmp.height * scale).toInt().coerceAtLeast(1)
+            val scaled = Bitmap.createScaledBitmap(bmp, nw, nh, true)
+            if (scaled != bmp) {
+                bmp.recycle()
+                bmp = scaled
+            }
+        }
+
+        // Apply EXIF rotation/flip if needed
+        val matrix = Matrix()
+        when (exifOrientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+        }
+        if (!matrix.isIdentity) {
+            val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
+            if (rotated != bmp) {
+                bmp.recycle()
+                bmp = rotated
+            }
+        }
+
+        val finalW = bmp.width
+        val finalH = bmp.height
+        val buf = ByteBuffer.allocate(finalW * finalH * 4)
+        bmp.copyPixelsToBuffer(buf)
+        bmp.recycle()
+        return Triple(finalW, finalH, buf.array() to (wasDownscaled || decodedMax > maxLongEdge))
+    }
+
     fun openDocumentFromUri(resolver: ContentResolver, uri: Uri, asLayer: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {
                 val fileName = resolveDisplayName(resolver, uri) ?: "image.png"
-                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: error("Dosya okunamadı")
-                val info = if (asLayer) {
-                    engine.placeImageBytes(fileName, bytes)
+                val lower = fileName.lowercase()
+                val isComplexFormat = lower.endsWith(".psd") || lower.endsWith(".psb") ||
+                    lower.endsWith(".pcraft") || lower.endsWith(".svg") ||
+                    lower.endsWith(".pdf") || lower.endsWith(".exr") ||
+                    lower.endsWith(".tif") || lower.endsWith(".tiff")
+
+                var downscaledNote = false
+                val info = if (!asLayer && !isComplexFormat) {
+                    val fastDecoded = decodeHardwareSafeRgba(resolver, uri, maxLongEdge = 4096)
+                    if (fastDecoded != null) {
+                        val (w, h, payload) = fastDecoded
+                        downscaledNote = payload.second
+                        engine.openRgbaBytes(fileName, w.toUInt(), h.toUInt(), payload.first)
+                    } else {
+                        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                            ?: error("Dosya okunamadı")
+                        engine.openDocumentBytes(fileName, bytes)
+                    }
                 } else {
-                    engine.openDocumentBytes(fileName, bytes)
+                    val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: error("Dosya okunamadı")
+                    if (asLayer) engine.placeImageBytes(fileName, bytes)
+                    else engine.openDocumentBytes(fileName, bytes)
                 }
+
                 val layers = engine.getLayers()
                 _uiState.update {
                     it.copy(
@@ -945,7 +1044,8 @@ class EditorViewModel : ViewModel() {
                 if (asLayer) {
                     NativeSurfaceBridge.nativeRenderFrame()
                 }
-                showStatus("Açıldı: ${info.name} (${info.width}×${info.height})", 2200L)
+                val suffix = if (downscaledNote) " · bellek koruması" else ""
+                showStatus("Açıldı: ${info.name} (${info.width}×${info.height}$suffix)", 2400L)
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("Açma hatası: ${err.message}", 5000L)
