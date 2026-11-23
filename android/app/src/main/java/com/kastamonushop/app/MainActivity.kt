@@ -111,10 +111,10 @@ private data class MirrorModeOption(
 )
 
 private val MIRROR_MODES = listOf(
-    MirrorModeOption("left_to_right", 1, "Enine (Sol→Sağ)", true),
-    MirrorModeOption("right_to_left", 2, "Enine (Sağ→Sol)", true),
-    MirrorModeOption("top_to_bottom", 3, "Boyuna (Üst→Alt)", false),
-    MirrorModeOption("bottom_to_top", 4, "Boyuna (Alt→Üst)", false)
+    MirrorModeOption("enine_auto", 1, "Enine (Sol→Sağ)", true),
+    MirrorModeOption("enine_flip", 2, "Enine (Sağ→Sol)", true),
+    MirrorModeOption("boyuna_auto", 3, "Boyuna (Üst→Alt)", false),
+    MirrorModeOption("boyuna_flip", 4, "Boyuna (Alt→Üst)", false)
 )
 
 private val CROP_PRESETS = listOf(
@@ -254,7 +254,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.5.2",
+                    text = "v0.5.3",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -1852,9 +1852,9 @@ fun StonebridgeStudioScreen(
                             OutlinedButton(
                                 onClick = {
                                     selectedMirrorMode = when (selectedMirrorMode.id) {
-                                        "left_to_right" -> MIRROR_MODES[1]
-                                        "right_to_left" -> MIRROR_MODES[0]
-                                        "top_to_bottom" -> MIRROR_MODES[3]
+                                        "enine_auto" -> MIRROR_MODES[1]
+                                        "enine_flip" -> MIRROR_MODES[0]
+                                        "boyuna_auto" -> MIRROR_MODES[3]
                                         else -> MIRROR_MODES[2]
                                     }
                                     pushGpuMirrorPreview(selectedMirrorMode, mirrorAxisRatio)

@@ -429,50 +429,74 @@ impl KastamonuEngine {
                 let ax = ((w as f32) * ratio).round().clamp(1.0, (w - 1) as f32) as isize;
                 let ay = ((h as f32) * ratio).round().clamp(1.0, (h - 1) as f32) as isize;
 
-                match mode.as_str() {
-                    "left_to_right" => {
-                        for y in 0..h {
-                            let base = y * row_stride;
-                            for x in (ax as usize)..w {
-                                let sx = (2 * ax - 1 - x as isize).clamp(0, (w - 1) as isize) as usize;
-                                let dst = base + x * ch;
-                                let src = base + sx * ch;
-                                for c in 0..ch {
-                                    data[dst + c] = data[src + c];
-                                }
-                            }
+                let ping_pong = |v: isize, len: isize| -> usize {
+                    if len <= 1 {
+                        return 0;
+                    }
+                    let period = 2 * len;
+                    let m = v.rem_euclid(period);
+                    let idx = if m < len { m } else { period - 1 - m };
+                    idx.clamp(0, len - 1) as usize
+                };
+
+                let src_snap = data.clone();
+                let mirror_x_right = match mode.as_str() {
+                    "enine_auto" | "left_to_right" => ratio >= 0.5,
+                    "enine_flip" | "right_to_left" => ratio < 0.5,
+                    _ => false,
+                };
+                let mirror_x_left = match mode.as_str() {
+                    "enine_auto" | "left_to_right" => ratio < 0.5,
+                    "enine_flip" | "right_to_left" => ratio >= 0.5,
+                    _ => false,
+                };
+                let mirror_y_bottom = match mode.as_str() {
+                    "boyuna_auto" | "top_to_bottom" => ratio >= 0.5,
+                    "boyuna_flip" | "bottom_to_top" => ratio < 0.5,
+                    _ => false,
+                };
+                let mirror_y_top = match mode.as_str() {
+                    "boyuna_auto" | "top_to_bottom" => ratio < 0.5,
+                    "boyuna_flip" | "bottom_to_top" => ratio >= 0.5,
+                    _ => false,
+                };
+
+                if mirror_x_right {
+                    for y in 0..h {
+                        let base = y * row_stride;
+                        for x in (ax as usize)..w {
+                            let sx = ping_pong(2 * ax - 1 - x as isize, w as isize);
+                            let dst = base + x * ch;
+                            let src = base + sx * ch;
+                            data[dst..(dst + ch)].copy_from_slice(&src_snap[src..(src + ch)]);
                         }
                     }
-                    "right_to_left" => {
-                        for y in 0..h {
-                            let base = y * row_stride;
-                            for x in 0..(ax as usize) {
-                                let sx = (2 * ax - 1 - x as isize).clamp(0, (w - 1) as isize) as usize;
-                                let dst = base + x * ch;
-                                let src = base + sx * ch;
-                                for c in 0..ch {
-                                    data[dst + c] = data[src + c];
-                                }
-                            }
+                } else if mirror_x_left {
+                    for y in 0..h {
+                        let base = y * row_stride;
+                        for x in 0..(ax as usize) {
+                            let sx = ping_pong(2 * ax - 1 - x as isize, w as isize);
+                            let dst = base + x * ch;
+                            let src = base + sx * ch;
+                            data[dst..(dst + ch)].copy_from_slice(&src_snap[src..(src + ch)]);
                         }
                     }
-                    "top_to_bottom" => {
-                        for y in (ay as usize)..h {
-                            let sy = (2 * ay - 1 - y as isize).clamp(0, (h - 1) as isize) as usize;
-                            let src_start = sy * row_stride;
-                            let dst_start = y * row_stride;
-                            data.copy_within(src_start..(src_start + row_stride), dst_start);
-                        }
+                } else if mirror_y_bottom {
+                    for y in (ay as usize)..h {
+                        let sy = ping_pong(2 * ay - 1 - y as isize, h as isize);
+                        let src_start = sy * row_stride;
+                        let dst_start = y * row_stride;
+                        data[dst_start..(dst_start + row_stride)]
+                            .copy_from_slice(&src_snap[src_start..(src_start + row_stride)]);
                     }
-                    "bottom_to_top" => {
-                        for y in 0..(ay as usize) {
-                            let sy = (2 * ay - 1 - y as isize).clamp(0, (h - 1) as isize) as usize;
-                            let src_start = sy * row_stride;
-                            let dst_start = y * row_stride;
-                            data.copy_within(src_start..(src_start + row_stride), dst_start);
-                        }
+                } else if mirror_y_top {
+                    for y in 0..(ay as usize) {
+                        let sy = ping_pong(2 * ay - 1 - y as isize, h as isize);
+                        let src_start = sy * row_stride;
+                        let dst_start = y * row_stride;
+                        data[dst_start..(dst_start + row_stride)]
+                            .copy_from_slice(&src_snap[src_start..(src_start + row_stride)]);
                     }
-                    _ => {}
                 }
 
                 surf.write_region_par(bounds, &data);

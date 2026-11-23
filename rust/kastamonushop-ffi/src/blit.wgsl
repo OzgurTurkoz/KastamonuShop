@@ -1,6 +1,6 @@
 // StonebridgeCraft — Hardware-accelerated Canvas Blit & 60 FPS GPU Preview Shader (WGSL)
 // Renders PhotoCraft's GPU-composited RGBA texture onto Android's Vulkan/GLES SurfaceView
-// with smooth pan, zoom, rotation, transparency checkerboard, and zero-lag GPU Mirror & Flip previews.
+// with smooth pan, zoom, rotation, transparency checkerboard, and zero-lag Smart Mirror & Flip previews.
 
 struct ViewportUniforms {
     // [canvas_width, canvas_height, doc_width, doc_height]
@@ -9,7 +9,7 @@ struct ViewportUniforms {
     camera: vec4<f32>,
     // [checker_size_px, bg_r, bg_g, bg_b]
     style: vec4<f32>,
-    // [mirror_mode (0=off, 1=L->R, 2=R->L, 3=T->B, 4=B->T), mirror_axis (0.0..1.0), flip_x (0/1), flip_y (0/1)]
+    // [mirror_mode (0=off, 1=enine_auto, 2=enine_flip, 3=boyuna_auto, 4=boyuna_flip), mirror_axis, flip_x, flip_y]
     preview: vec4<f32>,
 };
 
@@ -26,6 +26,12 @@ struct VertexOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) screen_px: vec2<f32>,
 };
+
+fn ping_pong_01(v: f32) -> f32 {
+    let period = 2.0;
+    let m = v - period * floor(v / period);
+    return select(period - m, m, m <= 1.0);
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
@@ -74,17 +80,33 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         doc_uv.y = 1.0 - doc_uv.y;
     }
 
-    // 60 FPS GPU Mirror preview
+    // 60 FPS Smart GPU Mirror preview (always mirrors from the larger side cleanly; ping-pong prevents streaks in flip mode)
     let mirror_mode = i32(round(u.preview.x));
     let axis = clamp(u.preview.y, 0.05, 0.95);
-    if (mirror_mode == 1 && doc_uv.x > axis) {
-        doc_uv.x = clamp(2.0 * axis - doc_uv.x, 0.0, 1.0);
-    } else if (mirror_mode == 2 && doc_uv.x < axis) {
-        doc_uv.x = clamp(2.0 * axis - doc_uv.x, 0.0, 1.0);
-    } else if (mirror_mode == 3 && doc_uv.y > axis) {
-        doc_uv.y = clamp(2.0 * axis - doc_uv.y, 0.0, 1.0);
-    } else if (mirror_mode == 4 && doc_uv.y < axis) {
-        doc_uv.y = clamp(2.0 * axis - doc_uv.y, 0.0, 1.0);
+    if (mirror_mode == 1) {
+        if (axis >= 0.5 && doc_uv.x > axis) {
+            doc_uv.x = ping_pong_01(2.0 * axis - doc_uv.x);
+        } else if (axis < 0.5 && doc_uv.x < axis) {
+            doc_uv.x = ping_pong_01(2.0 * axis - doc_uv.x);
+        }
+    } else if (mirror_mode == 2) {
+        if (axis >= 0.5 && doc_uv.x < axis) {
+            doc_uv.x = ping_pong_01(2.0 * axis - doc_uv.x);
+        } else if (axis < 0.5 && doc_uv.x > axis) {
+            doc_uv.x = ping_pong_01(2.0 * axis - doc_uv.x);
+        }
+    } else if (mirror_mode == 3) {
+        if (axis >= 0.5 && doc_uv.y > axis) {
+            doc_uv.y = ping_pong_01(2.0 * axis - doc_uv.y);
+        } else if (axis < 0.5 && doc_uv.y < axis) {
+            doc_uv.y = ping_pong_01(2.0 * axis - doc_uv.y);
+        }
+    } else if (mirror_mode == 4) {
+        if (axis >= 0.5 && doc_uv.y < axis) {
+            doc_uv.y = ping_pong_01(2.0 * axis - doc_uv.y);
+        } else if (axis < 0.5 && doc_uv.y > axis) {
+            doc_uv.y = ping_pong_01(2.0 * axis - doc_uv.y);
+        }
     }
 
     let sampled = textureSample(doc_tex, doc_sampler, doc_uv);
