@@ -43,6 +43,9 @@ class VulkanCanvasView(
     private val isMirrorDragActive: () -> Boolean,
     private val isMirrorVerticalAxis: () -> Boolean,
     private val isTextDragActive: () -> Boolean,
+    private val isSelectRectActive: () -> Boolean = { false },
+    private val isSelectWandActive: () -> Boolean = { false },
+    private val isCloneSourcePickActive: () -> Boolean = { false },
     private val onStrokeBegin: (StrokeSample) -> Unit,
     private val onStrokeMove: (List<StrokeSample>) -> Unit,
     private val onStrokeEnd: () -> Unit,
@@ -54,6 +57,10 @@ class VulkanCanvasView(
     private val onEyedropperSample: (Float, Float) -> Unit,
     private val onMirrorAxisDrag: (Float) -> Unit,
     private val onTextPositionDrag: (Float, Float) -> Unit,
+    private val onSelectRectPreview: (FloatArray?) -> Unit = {},
+    private val onSelectRectCommit: (Int, Int, Int, Int) -> Unit = { _, _, _, _ -> },
+    private val onSelectWandTap: (Float, Float) -> Unit = { _, _ -> },
+    private val onCloneSourcePick: (Float, Float) -> Unit = { _, _ -> },
     private val onCameraChanged: () -> Unit = {}
 ) : SurfaceView(context), SurfaceHolder.Callback {
 
@@ -69,6 +76,11 @@ class VulkanCanvasView(
     private var eyedropperActive = false
     private var mirrorDragActive = false
     private var textDragActive = false
+    private var selectDragActive = false
+    private var selectStartScreenX = 0f
+    private var selectStartScreenY = 0f
+    private var selectEndScreenX = 0f
+    private var selectEndScreenY = 0f
 
     private val retouchBuffer = ArrayList<StrokeSample>(64)
 
@@ -255,7 +267,24 @@ class VulkanCanvasView(
                     eyedropperActive = false
                     mirrorDragActive = false
                     textDragActive = false
-                    if (retouchActive) {
+                    if (selectDragActive) {
+                        selectDragActive = false
+                        onSelectRectPreview(null)
+                    }
+                    if (selectDragActive) {
+                    selectDragActive = false
+                    onSelectRectPreview(null)
+                    val (d0x, d0y) = screenToDoc(selectStartScreenX, selectStartScreenY)
+                    val (d1x, d1y) = screenToDoc(selectEndScreenX, selectEndScreenY)
+                    val rx = min(d0x, d1x).roundToInt()
+                    val ry = min(d0y, d1y).roundToInt()
+                    val rw = abs(d1x - d0x).roundToInt()
+                    val rh = abs(d1y - d0y).roundToInt()
+                    if (rw >= 4 && rh >= 4) {
+                        onSelectRectCommit(rx, ry, rw, rh)
+                    }
+                }
+                if (retouchActive) {
                         retouchActive = false
                         retouchBuffer.clear()
                         onRetouchPreview(null)
@@ -309,6 +338,19 @@ class VulkanCanvasView(
                 } else if (isTextDragActive()) {
                     textDragActive = true
                     updateTextPosFromScreen(event.x, event.y)
+                } else if (isCloneSourcePickActive()) {
+                    val (dx, dy) = screenToDoc(event.x, event.y)
+                    onCloneSourcePick(dx, dy)
+                } else if (isSelectWandActive()) {
+                    val (dx, dy) = screenToDoc(event.x, event.y)
+                    onSelectWandTap(dx, dy)
+                } else if (isSelectRectActive()) {
+                    selectDragActive = true
+                    selectStartScreenX = event.x
+                    selectStartScreenY = event.y
+                    selectEndScreenX = event.x
+                    selectEndScreenY = event.y
+                    onSelectRectPreview(floatArrayOf(event.x, event.y, event.x, event.y))
                 } else if (isEyedropperActive()) {
                     eyedropperActive = true
                     val (dx, dy) = screenToDoc(event.x, event.y)
@@ -349,6 +391,12 @@ class VulkanCanvasView(
                 }
                 if (textDragActive) {
                     updateTextPosFromScreen(event.x, event.y)
+                    return true
+                }
+                if (selectDragActive) {
+                    selectEndScreenX = event.x
+                    selectEndScreenY = event.y
+                    onSelectRectPreview(floatArrayOf(selectStartScreenX, selectStartScreenY, event.x, event.y))
                     return true
                 }
                 if (eyedropperActive) {
@@ -407,6 +455,10 @@ class VulkanCanvasView(
             MotionEvent.ACTION_UP -> {
                 mirrorDragActive = false
                 textDragActive = false
+                if (selectDragActive) {
+                    selectDragActive = false
+                    onSelectRectPreview(null)
+                }
                 eyedropperActive = false
                 if (retouchActive) {
                     retouchActive = false

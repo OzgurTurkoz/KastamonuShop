@@ -11,7 +11,7 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 
 pub use engine::{
-    DocumentInfo, EngineError, KastamonuEngine, LayerSummary, StrokeSample,
+    DocumentInfo, EngineError, KastamonuEngine, LayerSummary, SelectionBounds, StrokeSample,
 };
 pub use renderer::{GpuPreviewState, ViewportCamera, VulkanRenderer};
 
@@ -79,7 +79,7 @@ pub fn create_kastamonu_engine() -> Arc<KastamonuEngine> {
 #[uniffi::export]
 pub fn engine_version_info() -> String {
     format!(
-        "StonebridgeCraft 0.6.4 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
+        "StonebridgeCraft 0.7.0 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
         env!("CARGO_PKG_VERSION")
     )
 }

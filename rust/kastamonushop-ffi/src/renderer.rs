@@ -38,6 +38,12 @@ pub struct GpuPreviewState {
     pub hue: f32,
     pub blur_radius: f32,
     pub sharpen_amount: f32,
+    pub levels_black: f32,
+    pub levels_gamma: f32,
+    pub levels_white: f32,
+    pub cb_cr: f32,
+    pub cb_mg: f32,
+    pub cb_yb: f32,
 }
 
 impl Default for GpuPreviewState {
@@ -53,6 +59,12 @@ impl Default for GpuPreviewState {
             hue: 0.0,
             blur_radius: 0.0,
             sharpen_amount: 0.0,
+            levels_black: 0.0,
+            levels_gamma: 1.0,
+            levels_white: 1.0,
+            cb_cr: 0.0,
+            cb_mg: 0.0,
+            cb_yb: 0.0,
         }
     }
 }
@@ -66,6 +78,8 @@ struct ViewportUniforms {
     preview: [f32; 4],
     adjust: [f32; 4],
     filter_p: [f32; 4],
+    levels: [f32; 4],
+    color_bal: [f32; 4],
 }
 
 pub struct VulkanRenderer {
@@ -242,6 +256,8 @@ impl VulkanRenderer {
             preview: [0.0, 0.5, 0.0, 0.0],
             adjust: [0.0, 0.0, 0.0, 0.0],
             filter_p: [0.0, 0.0, 0.0, 0.0],
+            levels: [0.0, 1.0, 1.0, 0.0],
+            color_bal: [0.0, 0.0, 0.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport_uniforms"),
@@ -323,6 +339,18 @@ impl VulkanRenderer {
                 preview.hue,
             ],
             filter_p: [preview.blur_radius, preview.sharpen_amount, 0.0, 0.0],
+            levels: [
+                preview.levels_black,
+                preview.levels_gamma,
+                preview.levels_white,
+                if (preview.levels_black > 0.001 || (preview.levels_gamma - 1.0).abs() > 0.005 || preview.levels_white < 0.999) { 1.0 } else { 0.0 },
+            ],
+            color_bal: [
+                preview.cb_cr,
+                preview.cb_mg,
+                preview.cb_yb,
+                if (preview.cb_cr.abs() > 0.001 || preview.cb_mg.abs() > 0.001 || preview.cb_yb.abs() > 0.001) { 1.0 } else { 0.0 },
+            ],
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));

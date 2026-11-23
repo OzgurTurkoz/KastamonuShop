@@ -168,6 +168,28 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nativeSetTonePreview(
+    _env: JNIEnv,
+    _class: JClass,
+    levels_black: jfloat,
+    levels_gamma: jfloat,
+    levels_white: jfloat,
+    cb_cr: jfloat,
+    cb_mg: jfloat,
+    cb_yb: jfloat,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let mut p = runtime().preview.lock();
+        p.levels_black = levels_black.clamp(0.0, 0.95);
+        p.levels_gamma = levels_gamma.clamp(0.1, 4.0);
+        p.levels_white = levels_white.clamp(0.05, 1.0);
+        p.cb_cr = cb_cr.clamp(-1.0, 1.0);
+        p.cb_mg = cb_mg.clamp(-1.0, 1.0);
+        p.cb_yb = cb_yb.clamp(-1.0, 1.0);
+    }));
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nativeRenderFrame(
     _env: JNIEnv,
     _class: JClass,

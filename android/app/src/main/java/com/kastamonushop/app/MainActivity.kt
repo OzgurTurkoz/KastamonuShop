@@ -80,10 +80,13 @@ private val StudioDarkScheme = darkColorScheme(
 private enum class BottomPanel {
     DOCK,
     DRAW_MENU,
+    SELECT_MENU,
     TEXT_EDIT,
     ADJUST_MENU,
     LIGHT_LIVE,
     COLOR_LIVE,
+    LEVELS_LIVE,
+    COLOR_BAL_LIVE,
     CROP_MENU,
     CROP_RATIO_EDIT,
     FILTER_MENU,
@@ -255,7 +258,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.6.4",
+                    text = "v0.7.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -643,6 +646,13 @@ fun StonebridgeStudioScreen(
 
     var rulerPreview by remember { mutableStateOf<RulerLinePreview?>(null) }
     var retouchCursor by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var selectPreviewRect by remember { mutableStateOf<FloatArray?>(null) }
+    var levelsBlackVal by remember { mutableFloatStateOf(0f) }
+    var levelsGammaVal by remember { mutableFloatStateOf(1f) }
+    var levelsWhiteVal by remember { mutableFloatStateOf(255f) }
+    var cbCyanRedVal by remember { mutableFloatStateOf(0f) }
+    var cbMagentaGreenVal by remember { mutableFloatStateOf(0f) }
+    var cbYellowBlueVal by remember { mutableFloatStateOf(0f) }
     var showExitSaveDialog by remember { mutableStateOf(false) }
 
     // Live draggable Text layer editor state
@@ -691,11 +701,13 @@ fun StonebridgeStudioScreen(
         pendingFlipV = false
         NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
         NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+        NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
         canvasViewRef?.fitToDocument(0)
     }
 
     fun clearAdjustGpuPreviewOnly() {
         NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+        NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
         NativeSurfaceBridge.nativeRenderFrame()
     }
 
@@ -706,7 +718,7 @@ fun StonebridgeStudioScreen(
 
     fun dismissLivePanelIfActive() {
         when (activePanel) {
-            BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE -> {
+            BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE -> {
                 clearAdjustGpuPreviewOnly()
                 activePanel = BottomPanel.DOCK
             }
@@ -733,7 +745,7 @@ fun StonebridgeStudioScreen(
             showLayers = false
         } else if (activePanel != BottomPanel.DOCK) {
             when (activePanel) {
-                BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE -> {
+                BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE -> {
                     clearAdjustGpuPreviewOnly()
                     activePanel = BottomPanel.ADJUST_MENU
                 }
@@ -802,9 +814,11 @@ fun StonebridgeStudioScreen(
                     },
                     getBrushSize = { vm.uiState.value.brushSize },
                     isDrawingActive = {
-                        val t = vm.uiState.value.activeTool
+                        val st = vm.uiState.value
+                        val t = st.activeTool
                         t == ActiveTool.BRUSH || t == ActiveTool.ERASER ||
-                            t == ActiveTool.SMUDGE || t == ActiveTool.DODGE || t == ActiveTool.BURN
+                            t == ActiveTool.SMUDGE || t == ActiveTool.DODGE || t == ActiveTool.BURN ||
+                            (t == ActiveTool.CLONE_STAMP && !st.pickingCloneSource)
                     },
                     isRetouchActive = {
                         vm.uiState.value.activeTool == ActiveTool.SPOT_HEAL
@@ -814,6 +828,12 @@ fun StonebridgeStudioScreen(
                     isMirrorDragActive = { currentPanelState == BottomPanel.MIRROR_EDIT },
                     isMirrorVerticalAxis = { currentMirrorModeState.isVerticalAxis },
                     isTextDragActive = { currentPanelState == BottomPanel.TEXT_EDIT },
+                    isSelectRectActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_RECT },
+                    isSelectWandActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_WAND },
+                    isCloneSourcePickActive = {
+                        val st = vm.uiState.value
+                        st.activeTool == ActiveTool.CLONE_STAMP && st.pickingCloneSource
+                    },
                     onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
                     onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
                     onStrokeEnd = { vm.finishLiveStroke() },
@@ -831,10 +851,74 @@ fun StonebridgeStudioScreen(
                         textNormX = nx
                         textNormY = ny
                     },
+                    onSelectRectPreview = { arr -> selectPreviewRect = arr },
+                    onSelectRectCommit = { rx, ry, rw, rh -> vm.selectRect(rx, ry, rw, rh) },
+                    onSelectWandTap = { dx, dy -> vm.selectMagicWand(dx, dy) },
+                    onCloneSourcePick = { dx, dy -> vm.setCloneSource(dx, dy) },
                     onCameraChanged = { cameraTick++ }
                 ).also { canvasViewRef = it }
             }
         )
+
+        // Live Selection Box & Active Selection Indicator
+        selectPreviewRect?.let { r ->
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val left = min(r[0], r[2])
+                val top = min(r[1], r[3])
+                val w = kotlin.math.abs(r[2] - r[0])
+                val h = kotlin.math.abs(r[3] - r[1])
+                if (state.selectEllipse) {
+                    drawOval(
+                        color = Color(0xFF4F9CFF),
+                        topLeft = Offset(left, top),
+                        size = Size(w, h),
+                        style = Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f)))
+                    )
+                } else {
+                    drawRect(
+                        color = Color(0xFF4F9CFF),
+                        topLeft = Offset(left, top),
+                        size = Size(w, h),
+                        style = Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f)))
+                    )
+                }
+            }
+        }
+        state.selectionBounds?.let { sb ->
+            val view = canvasViewRef
+            if (view != null && selectPreviewRect == null) {
+                val _tick = cameraTick
+                val (sx0, sy0) = view.docToScreen(sb.x0.toFloat(), sb.y0.toFloat())
+                val (sx1, sy1) = view.docToScreen(sb.x1.toFloat(), sb.y1.toFloat())
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val l = min(sx0, sx1)
+                    val t = min(sy0, sy1)
+                    val w = kotlin.math.abs(sx1 - sx0).coerceAtLeast(2f)
+                    val h = kotlin.math.abs(sy1 - sy0).coerceAtLeast(2f)
+                    drawRect(
+                        color = Color.White,
+                        topLeft = Offset(l, t),
+                        size = Size(w, h),
+                        style = Stroke(width = 2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)))
+                    )
+                }
+            }
+        }
+        // Clone Stamp Source Crosshair
+        if (state.activeTool == ActiveTool.CLONE_STAMP) {
+            state.cloneSourceDoc?.let { (cx, cy) ->
+                val view = canvasViewRef
+                if (view != null) {
+                    val _tick = cameraTick
+                    val (sx, sy) = view.docToScreen(cx, cy)
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        drawCircle(color = Color(0xFF2ED573), radius = 14f, center = Offset(sx, sy), style = Stroke(width = 2.5f))
+                        drawLine(Color(0xFF2ED573), Offset(sx - 20f, sy), Offset(sx + 20f, sy), strokeWidth = 2.5f)
+                        drawLine(Color(0xFF2ED573), Offset(sx, sy - 20f), Offset(sx, sy + 20f), strokeWidth = 2.5f)
+                    }
+                }
+            }
+        }
 
         // Live Ruler Straight-Line Guide Overlay
         rulerPreview?.let { line ->
@@ -1370,9 +1454,20 @@ fun StonebridgeStudioScreen(
                         CircularDockButton(
                             icon = Icons.Default.Brush,
                             label = "Çizim",
-                            selected = state.activeTool != ActiveTool.NONE,
+                            selected = state.activeTool != ActiveTool.NONE && state.activeTool != ActiveTool.SELECT_RECT && state.activeTool != ActiveTool.SELECT_WAND,
                             accentDot = if (state.activeTool == ActiveTool.BRUSH || state.activeTool == ActiveTool.EYEDROPPER) activeColor else null,
                             onClick = { activePanel = BottomPanel.DRAW_MENU }
+                        )
+                        CircularDockButton(
+                            icon = Icons.Default.SelectAll,
+                            label = "Seçim",
+                            selected = state.selectionBounds != null || state.activeTool == ActiveTool.SELECT_RECT || state.activeTool == ActiveTool.SELECT_WAND,
+                            onClick = {
+                                if (state.activeTool != ActiveTool.SELECT_RECT && state.activeTool != ActiveTool.SELECT_WAND) {
+                                    vm.setTool(ActiveTool.SELECT_RECT)
+                                }
+                                activePanel = BottomPanel.SELECT_MENU
+                            }
                         )
                         CircularDockButton(
                             icon = Icons.Default.Title,
@@ -1446,6 +1541,9 @@ fun StonebridgeStudioScreen(
                                 ActiveTool.SMUDGE -> "Dağıtma · dokuyu parmağınla yumuşakça yay"
                                 ActiveTool.DODGE -> "Aydınlat · dokunduğun bölgeyi açar"
                                 ActiveTool.BURN -> "Koyulaştır · dokunduğun bölgeyi gölgeler"
+                                ActiveTool.CLONE_STAMP -> if (state.pickingCloneSource) "Klon kaynağı seç: fotoğrafa dokun" else "Klonla · boyamak istediğin yere sürükle"
+                                ActiveTool.SELECT_RECT -> "Dikdörtgen/Elips alan seç"
+                                ActiveTool.SELECT_WAND -> "Sihirli Değnek · renge dokunarak seç"
                                 ActiveTool.NONE -> "Çizim veya Rötuş için bir araç seç"
                             },
                             onClose = { activePanel = BottomPanel.DOCK }
@@ -1524,6 +1622,14 @@ fun StonebridgeStudioScreen(
                                 selected = state.activeTool == ActiveTool.BURN,
                                 onClick = {
                                     vm.setTool(if (state.activeTool == ActiveTool.BURN) ActiveTool.NONE else ActiveTool.BURN)
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.ContentCopy,
+                                label = "Klonla",
+                                selected = state.activeTool == ActiveTool.CLONE_STAMP,
+                                onClick = {
+                                    vm.setTool(if (state.activeTool == ActiveTool.CLONE_STAMP) ActiveTool.NONE else ActiveTool.CLONE_STAMP)
                                 }
                             )
                             CircularDockButton(
@@ -1621,6 +1727,107 @@ fun StonebridgeStudioScreen(
                                 CompactSliderRow("Güç", "%${state.retouchStrength.roundToInt()}", state.retouchStrength, 10f..100f, defaultValue = 55f) {
                                     vm.updateRetouchStrength(it)
                                 }
+                            }
+                        } else if (state.activeTool == ActiveTool.CLONE_STAMP) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = { vm.requestPickCloneSource() },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        if (state.cloneSourceDoc == null) "Kaynak Noktası Seç" else "Kaynağı Değiştir",
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 8f..250f, defaultValue = 48f) {
+                                vm.updateBrush(size = it)
+                            }
+                            CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f, defaultValue = 1f) {
+                                vm.updateBrush(opacity = it)
+                            }
+                        }
+                    }
+                }
+
+                BottomPanel.SELECT_MENU -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Seçim Araçları",
+                            subtitle = when (state.activeTool) {
+                                ActiveTool.SELECT_WAND -> "Seçmek istediğin renge dokun (Tolerans: ${state.wandTolerance.roundToInt()})"
+                                else -> "Parmağınla sürükleyerek alan seç"
+                            },
+                            onClose = {
+                                vm.setTool(ActiveTool.NONE)
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            CircularDockButton(
+                                icon = Icons.Default.CropFree,
+                                label = if (state.selectEllipse) "Elips" else "Dikdörtgen",
+                                selected = state.activeTool == ActiveTool.SELECT_RECT,
+                                onClick = {
+                                    if (state.activeTool == ActiveTool.SELECT_RECT) {
+                                        vm.toggleSelectEllipse()
+                                    } else {
+                                        vm.setTool(ActiveTool.SELECT_RECT)
+                                    }
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.AutoFixHigh,
+                                label = "Sihirli Değnek",
+                                selected = state.activeTool == ActiveTool.SELECT_WAND,
+                                onClick = { vm.setTool(ActiveTool.SELECT_WAND) }
+                            )
+                            if (state.selectionBounds != null) {
+                                CircularDockButton(
+                                    icon = Icons.Default.SwapHoriz,
+                                    label = "Tersine",
+                                    onClick = { vm.selectInverse() }
+                                )
+                                CircularDockButton(
+                                    icon = Icons.Default.Layers,
+                                    label = "Maskele",
+                                    onClick = { vm.revealSelectionMask() }
+                                )
+                                CircularDockButton(
+                                    icon = Icons.Default.FormatColorFill,
+                                    label = "Doldur",
+                                    onClick = { vm.fillSelection() }
+                                )
+                                CircularDockButton(
+                                    icon = Icons.Default.DeleteOutline,
+                                    label = "Sil",
+                                    onClick = { vm.clearSelection() }
+                                )
+                                CircularDockButton(
+                                    icon = Icons.Default.Close,
+                                    label = "Kaldır",
+                                    onClick = { vm.deselect() }
+                                )
+                            }
+                        }
+                        if (state.activeTool == ActiveTool.SELECT_WAND) {
+                            CompactSliderRow("Tolerans", "${state.wandTolerance.roundToInt()}", state.wandTolerance, 0f..120f, defaultValue = 32f) {
+                                vm.updateWandTolerance(it)
                             }
                         }
                     }
@@ -1733,6 +1940,28 @@ fun StonebridgeStudioScreen(
                                     activePanel = BottomPanel.COLOR_LIVE
                                 }
                             )
+                            CircularDockButton(
+                                icon = Icons.Default.Equalizer,
+                                label = "Düzeyler",
+                                onClick = {
+                                    levelsBlackVal = 0f
+                                    levelsGammaVal = 1f
+                                    levelsWhiteVal = 255f
+                                    NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
+                                    activePanel = BottomPanel.LEVELS_LIVE
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.ColorLens,
+                                label = "Renk Dengesi",
+                                onClick = {
+                                    cbCyanRedVal = 0f
+                                    cbMagentaGreenVal = 0f
+                                    cbYellowBlueVal = 0f
+                                    NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
+                                    activePanel = BottomPanel.COLOR_BAL_LIVE
+                                }
+                            )
                         }
                     }
                 }
@@ -1810,6 +2039,100 @@ fun StonebridgeStudioScreen(
                         CompactSliderRow("Renk Tonu", "${hueVal.roundToInt()}°", hueVal, -180f..180f, defaultValue = 0f) {
                             hueVal = it
                             NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, saturationVal, hueVal, 0f, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
+                        }
+                    }
+                }
+
+                BottomPanel.LEVELS_LIVE -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Düzeyler (Levels)",
+                            subtitle = "60 FPS canlı önizleme — Uygula ile katman oluştur",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                clearAdjustGpuPreviewOnly()
+                                activePanel = BottomPanel.ADJUST_MENU
+                            },
+                            onApply = {
+                                val ib = levelsBlackVal.roundToInt().coerceIn(0, 240)
+                                val iw = levelsWhiteVal.roundToInt().coerceIn(ib + 10, 255)
+                                if (ib == 0 && iw == 255 && kotlin.math.abs(levelsGammaVal - 1f) < 0.02f) {
+                                    clearAdjustGpuPreviewOnly()
+                                } else {
+                                    val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal)
+                                    vm.applyAdjustmentOnce(
+                                        "levels",
+                                        "{"inBlack":$ib,"gamma":$gStr,"inWhite":$iw}",
+                                        "Düzeyler"
+                                    )
+                                }
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Siyahlar", "${levelsBlackVal.roundToInt()}", levelsBlackVal, 0f..180f, defaultValue = 0f) {
+                            levelsBlackVal = it.coerceAtMost(levelsWhiteVal - 15f)
+                            NativeSurfaceBridge.nativeSetTonePreview(levelsBlackVal / 255f, levelsGammaVal, levelsWhiteVal / 255f, 0f, 0f, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
+                        }
+                        CompactSliderRow("Orta Ton", String.format(java.util.Locale.US, "%.2f", levelsGammaVal), levelsGammaVal, 0.25f..2.5f, defaultValue = 1f) {
+                            levelsGammaVal = it
+                            NativeSurfaceBridge.nativeSetTonePreview(levelsBlackVal / 255f, levelsGammaVal, levelsWhiteVal / 255f, 0f, 0f, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
+                        }
+                        CompactSliderRow("Beyazlar", "${levelsWhiteVal.roundToInt()}", levelsWhiteVal, 75f..255f, defaultValue = 255f) {
+                            levelsWhiteVal = it.coerceAtLeast(levelsBlackVal + 15f)
+                            NativeSurfaceBridge.nativeSetTonePreview(levelsBlackVal / 255f, levelsGammaVal, levelsWhiteVal / 255f, 0f, 0f, 0f)
+                            NativeSurfaceBridge.nativeRenderFrame()
+                        }
+                    }
+                }
+
+                BottomPanel.COLOR_BAL_LIVE -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Renk Dengesi",
+                            subtitle = "60 FPS canlı önizleme — Uygula ile katman oluştur",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                clearAdjustGpuPreviewOnly()
+                                activePanel = BottomPanel.ADJUST_MENU
+                            },
+                            onApply = {
+                                val cr = cbCyanRedVal.roundToInt()
+                                val mg = cbMagentaGreenVal.roundToInt()
+                                val yb = cbYellowBlueVal.roundToInt()
+                                if (cr == 0 && mg == 0 && yb == 0) {
+                                    clearAdjustGpuPreviewOnly()
+                                } else {
+                                    vm.applyAdjustmentOnce(
+                                        "colorBalance",
+                                        "{"midtones":[$cr,$mg,$yb],"preserveLuminosity":true}",
+                                        "Renk Dengesi"
+                                    )
+                                }
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Camgöbeği / Kırmızı", "${cbCyanRedVal.roundToInt()}", cbCyanRedVal, -100f..100f, defaultValue = 0f) {
+                            cbCyanRedVal = it
+                            NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, cbCyanRedVal / 100f, cbMagentaGreenVal / 100f, cbYellowBlueVal / 100f)
+                            NativeSurfaceBridge.nativeRenderFrame()
+                        }
+                        CompactSliderRow("Macenta / Yeşil", "${cbMagentaGreenVal.roundToInt()}", cbMagentaGreenVal, -100f..100f, defaultValue = 0f) {
+                            cbMagentaGreenVal = it
+                            NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, cbCyanRedVal / 100f, cbMagentaGreenVal / 100f, cbYellowBlueVal / 100f)
+                            NativeSurfaceBridge.nativeRenderFrame()
+                        }
+                        CompactSliderRow("Sarı / Mavi", "${cbYellowBlueVal.roundToInt()}", cbYellowBlueVal, -100f..100f, defaultValue = 0f) {
+                            cbYellowBlueVal = it
+                            NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, cbCyanRedVal / 100f, cbMagentaGreenVal / 100f, cbYellowBlueVal / 100f)
                             NativeSurfaceBridge.nativeRenderFrame()
                         }
                     }

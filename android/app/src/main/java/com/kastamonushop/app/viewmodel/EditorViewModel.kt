@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 import uniffi.kastamonushop_ffi.DocumentInfo
 import uniffi.kastamonushop_ffi.KastamonuEngine
 import uniffi.kastamonushop_ffi.LayerSummary
+import uniffi.kastamonushop_ffi.SelectionBounds
 import uniffi.kastamonushop_ffi.StrokeSample
 import uniffi.kastamonushop_ffi.createKastamonuEngine
 import uniffi.kastamonushop_ffi.engineVersionInfo
@@ -42,7 +43,10 @@ enum class ActiveTool {
     SPOT_HEAL,
     SMUDGE,
     DODGE,
-    BURN
+    BURN,
+    CLONE_STAMP,
+    SELECT_RECT,
+    SELECT_WAND
 }
 
 data class EditorUiState(
@@ -61,6 +65,11 @@ data class EditorUiState(
     val colorHex: String = "#FF4D4F",
     val bwLayerId: ULong? = null,
     val invertLayerId: ULong? = null,
+    val selectionBounds: SelectionBounds? = null,
+    val selectEllipse: Boolean = false,
+    val wandTolerance: Float = 32f,
+    val cloneSourceDoc: Pair<Float, Float>? = null,
+    val pickingCloneSource: Boolean = false,
     val statusMessage: String? = null,
     val isBusy: Boolean = false,
     val fitCameraSignal: Int = 0
@@ -141,7 +150,8 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 val info = engine.getDocumentInfo()
                 val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                val sel = engine.getSelectionBounds()
+                _uiState.update { it.copy(docInfo = info, layers = layers, selectionBounds = sel) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 getLastGpuError()?.let { gpuErr -> showStatus(gpuErr, 6000L) }
             }.onFailure { err ->
@@ -151,7 +161,134 @@ class EditorViewModel : ViewModel() {
     }
 
     fun setTool(tool: ActiveTool) {
-        _uiState.update { it.copy(activeTool = tool) }
+        _uiState.update {
+            it.copy(
+                activeTool = tool,
+                pickingCloneSource = (tool == ActiveTool.CLONE_STAMP && it.cloneSourceDoc == null)
+            )
+        }
+    }
+
+    fun requestPickCloneSource() {
+        _uiState.update { it.copy(activeTool = ActiveTool.CLONE_STAMP, pickingCloneSource = true) }
+        showStatus("Klonlanacak kaynak noktasına dokun", 2400L)
+    }
+
+    fun setCloneSource(docX: Float, docY: Float) {
+        _uiState.update { it.copy(cloneSourceDoc = docX to docY, pickingCloneSource = false) }
+        showStatus("Klon kaynağı seçildi — şimdi boyamak istediğin yere sürükle", 2200L)
+    }
+
+    fun toggleSelectEllipse() {
+        _uiState.update { it.copy(selectEllipse = !it.selectEllipse) }
+    }
+
+    fun updateWandTolerance(tol: Float) {
+        _uiState.update { it.copy(wandTolerance = tol.coerceIn(0f, 150f)) }
+    }
+
+    fun selectRect(x: Int, y: Int, width: Int, height: Int) {
+        val ellipse = _uiState.value.selectEllipse
+        paintExecutor.execute {
+            runCatching {
+                val b = engine.selectRect(x, y, width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt(), ellipse)
+                _uiState.update { it.copy(selectionBounds = b) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (ellipse) "Elips alan seçildi" else "Dikdörtgen alan seçildi", 1800L)
+            }.onFailure { err ->
+                showStatus("Seçim hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun selectMagicWand(docX: Float, docY: Float) {
+        val tol = _uiState.value.wandTolerance.toInt().coerceIn(0, 255).toUInt()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val b = engine.selectMagicWand(docX.toInt(), docY.toInt(), tol, true)
+                _uiState.update { it.copy(selectionBounds = b, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (b != null) "Sihirli Değnek seçimi hazır" else "Seçilecek alan bulunamadı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Sihirli Değnek hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun selectInverse() {
+        paintExecutor.execute {
+            runCatching {
+                val b = engine.selectInverse()
+                _uiState.update { it.copy(selectionBounds = b) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Seçim tersine çevrildi", 1800L)
+            }.onFailure { err ->
+                showStatus("Ters seçim hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun deselect() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.selectDeselect()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = null) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Seçim kaldırıldı", 1500L)
+            }
+        }
+    }
+
+    fun clearSelection() {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.clearSelectionPixels()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Seçili alan silindi", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Silme hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun fillSelection() {
+        val hex = _uiState.value.colorHex
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.fillSelectionPixels(hex)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Seçili alan dolduruldu", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Doldurma hatası: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun revealSelectionMask() {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.revealSelectionMask()
+                val layers = engine.getLayers()
+                val sel = engine.getSelectionBounds()
+                _uiState.update { it.copy(docInfo = info, layers = layers, selectionBounds = sel, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Seçim katman maskesine dönüştürüldü", 2200L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Maske hatası: ${err.message}", 3000L)
+            }
+        }
     }
 
     fun toggleRuler() {
@@ -255,7 +392,8 @@ class EditorViewModel : ViewModel() {
         val s = _uiState.value
         val isBrushOrEraser = s.activeTool == ActiveTool.BRUSH || s.activeTool == ActiveTool.ERASER
         val isDab = isLiveDabTool(s.activeTool)
-        if (!isBrushOrEraser && !isDab) return
+        val isClone = s.activeTool == ActiveTool.CLONE_STAMP && !s.pickingCloneSource
+        if (!isBrushOrEraser && !isDab && !isClone) return
 
         if (isBrushOrEraser) {
             val activeLayer = s.layers.firstOrNull { it.isActive }
@@ -268,7 +406,10 @@ class EditorViewModel : ViewModel() {
         synchronized(pendingLock) { pendingSamples.clear() }
         paintExecutor.execute {
             runCatching {
-                if (isDab) {
+                if (isClone) {
+                    val src = s.cloneSourceDoc ?: (sample.x to sample.y)
+                    engine.beginLiveClone(sample, src.first, src.second, s.brushSize, s.brushHardness, s.brushOpacity)
+                } else if (isDab) {
                     engine.beginLiveDab(dabToolKey(s.activeTool), sample, s.brushSize, s.brushHardness, s.retouchStrength)
                 } else {
                     engine.beginLiveStroke(sample, s.colorHex, s.activeTool == ActiveTool.ERASER)
@@ -282,7 +423,7 @@ class EditorViewModel : ViewModel() {
 
     fun pushLiveStroke(samples: List<StrokeSample>) {
         val tool = _uiState.value.activeTool
-        val ok = tool == ActiveTool.BRUSH || tool == ActiveTool.ERASER || isLiveDabTool(tool)
+        val ok = tool == ActiveTool.BRUSH || tool == ActiveTool.ERASER || isLiveDabTool(tool) || (tool == ActiveTool.CLONE_STAMP && !_uiState.value.pickingCloneSource)
         if (!ok || samples.isEmpty()) return
         synchronized(pendingLock) {
             pendingSamples.addAll(samples)
@@ -303,12 +444,14 @@ class EditorViewModel : ViewModel() {
                 batch = ArrayList(pendingSamples)
                 pendingSamples.clear()
             }
-            val isDab = isLiveDabTool(_uiState.value.activeTool)
+            val curTool = _uiState.value.activeTool
+            val isDab = isLiveDabTool(curTool)
+            val isClone = curTool == ActiveTool.CLONE_STAMP
             runCatching {
-                if (isDab) {
-                    engine.pushLiveDab(batch)
-                } else {
-                    engine.pushLiveStroke(batch)
+                when {
+                    isClone -> engine.pushLiveClone(batch)
+                    isDab -> engine.pushLiveDab(batch)
+                    else -> engine.pushLiveStroke(batch)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
@@ -318,11 +461,16 @@ class EditorViewModel : ViewModel() {
     fun finishLiveStroke() {
         val tool = _uiState.value.activeTool
         val isDab = isLiveDabTool(tool)
-        if (tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER && !isDab) return
+        val isClone = tool == ActiveTool.CLONE_STAMP && !_uiState.value.pickingCloneSource
+        if (tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER && !isDab && !isClone) return
         paintExecutor.execute {
             drainPendingSamples()
             runCatching {
-                val info = if (isDab) engine.finishLiveDab() else engine.finishLiveStroke()
+                val info = when {
+                    isClone -> engine.finishLiveClone()
+                    isDab -> engine.finishLiveDab()
+                    else -> engine.finishLiveStroke()
+                }
                 _uiState.update { it.copy(docInfo = info) }
                 NativeSurfaceBridge.nativeRenderFrame()
             }.onFailure { err ->
@@ -361,6 +509,7 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 engine.cancelLiveStroke()
                 engine.cancelLiveDab()
+                engine.cancelLiveClone()
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }
@@ -528,11 +677,13 @@ class EditorViewModel : ViewModel() {
                 val info = engine.applyAdjustmentOnce(kind, paramsJson)
                 val layers = engine.getLayers()
                 NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus("$labelTr uygulandı", 2000L)
             }.onFailure { err ->
                 NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("$labelTr hatası: ${err.message}", 3500L)
             }

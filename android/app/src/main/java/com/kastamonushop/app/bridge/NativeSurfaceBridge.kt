@@ -20,5 +20,13 @@ object NativeSurfaceBridge {
         blurRadius: Float,
         sharpenAmount: Float
     )
+    external fun nativeSetTonePreview(
+        levelsBlack: Float,
+        levelsGamma: Float,
+        levelsWhite: Float,
+        cbCyanRed: Float,
+        cbMagentaGreen: Float,
+        cbYellowBlue: Float
+    )
     external fun nativeRenderFrame(): Boolean
 }

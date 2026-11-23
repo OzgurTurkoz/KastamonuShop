@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_engine::brush_cmds::LiveStroke;
-use photocraft_engine::retouch_cmds::LiveDab;
+use photocraft_engine::retouch_cmds::{LiveDab, LiveRetouch};
 use photocraft_engine::Session;
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::Surface;
@@ -54,6 +54,14 @@ pub struct LayerSummary {
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
+pub struct SelectionBounds {
+    pub x0: i32,
+    pub y0: i32,
+    pub x1: i32,
+    pub y1: i32,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
 pub struct StrokeSample {
     pub x: f32,
     pub y: f32,
@@ -91,6 +99,15 @@ struct ActiveLiveDab {
     was_locked: bool,
 }
 
+struct ActiveLiveClone {
+    live: LiveRetouch,
+    base_params: Value,
+    points_json: Vec<Value>,
+    target_id: LayerId,
+    prev_active: Option<LayerId>,
+    was_locked: bool,
+}
+
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
@@ -98,6 +115,7 @@ pub(crate) struct EngineCore {
     pub force_full_redraw: bool,
     live_stroke: Option<ActiveLiveStroke>,
     live_dab: Option<ActiveLiveDab>,
+    live_clone: Option<ActiveLiveClone>,
     live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
 }
@@ -127,6 +145,7 @@ impl EngineCore {
             force_full_redraw: true,
             live_stroke: None,
             live_dab: None,
+            live_clone: None,
             live_adjustment: None,
             live_filter: None,
         }
@@ -138,6 +157,9 @@ impl EngineCore {
         }
         if let Some(active_dab) = &self.live_dab {
             return Some(Arc::clone(&active_dab.live.doc));
+        }
+        if let Some(active_clone) = &self.live_clone {
+            return Some(Arc::clone(&active_clone.live.doc));
         }
         self.session.active().map(|ds| Arc::clone(ds.doc()))
     }
@@ -1584,6 +1606,312 @@ impl KastamonuEngine {
     pub fn cancel_live_dab(&self) {
         let mut guard = self.core.lock();
         if let Some(active) = guard.live_dab.take() {
+            let bounds = active.live.bounds();
+            if active.was_locked {
+                let _ = guard.session.execute("edit.undo", json!({}));
+            }
+            if active.prev_active.is_some() {
+                guard.session.set_active_layer(active.prev_active);
+            }
+            guard.mark_region_dirty(bounds);
+        }
+    }
+
+    pub fn get_selection_bounds(&self) -> Option<SelectionBounds> {
+        let guard = self.core.lock();
+        let doc = guard.active_document()?;
+        let sel = doc.selection.as_ref()?;
+        let b = sel.content_bounds();
+        if b.is_empty() {
+            None
+        } else {
+            Some(SelectionBounds {
+                x0: b.x0,
+                y0: b.y0,
+                x1: b.x1,
+                y1: b.y1,
+            })
+        }
+    }
+
+    pub fn select_rect(
+        &self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        ellipse: bool,
+    ) -> Result<Option<SelectionBounds>, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute(
+                "select.rect",
+                json!({
+                    "x": x,
+                    "y": y,
+                    "width": width.max(1),
+                    "height": height.max(1),
+                    "ellipse": ellipse,
+                    "mode": "replace"
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        let b = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
+            .filter(|r| !r.is_empty())
+            .map(|r| SelectionBounds { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+        Ok(b)
+    }
+
+    pub fn select_magic_wand(
+        &self,
+        x: i32,
+        y: i32,
+        tolerance: u32,
+        contiguous: bool,
+    ) -> Result<Option<SelectionBounds>, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute(
+                "select.magicWand",
+                json!({
+                    "x": x,
+                    "y": y,
+                    "tolerance": tolerance.min(255),
+                    "contiguous": contiguous,
+                    "antiAlias": true,
+                    "sampleAllLayers": true,
+                    "mode": "replace"
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        let b = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
+            .filter(|r| !r.is_empty())
+            .map(|r| SelectionBounds { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+        Ok(b)
+    }
+
+    pub fn select_inverse(&self) -> Result<Option<SelectionBounds>, EngineError> {
+        let mut guard = self.core.lock();
+        guard
+            .session
+            .execute("select.inverse", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        let b = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
+            .filter(|r| !r.is_empty())
+            .map(|r| SelectionBounds { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+        Ok(b)
+    }
+
+    pub fn select_deselect(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        let _ = guard.session.execute("select.deselect", json!({}));
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn clear_selection_pixels(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        let (target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let active = ds.active_layer();
+            let chosen = active
+                .and_then(|id| ds.doc().layers.iter().find(|l| l.id == id))
+                .filter(|l| matches!(l.content, LayerContent::Raster(_)));
+            match chosen {
+                Some(l) => (l.id, l.locks.pixels),
+                None => find_primary_photo_raster_layer(ds.doc(), active).ok_or_else(|| {
+                    EngineError::CommandFailed { detail: "Silinecek piksel katmanı bulunamadı".into() }
+                })?,
+            }
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let res = guard.session.execute("edit.clear", json!({}));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn fill_selection_pixels(&self, color_hex: String) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard
+            .session
+            .execute("edit.fill", json!({ "contents": "color", "color": color_hex }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn reveal_selection_mask(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Maske eklenecek fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        guard
+            .session
+            .execute("layer.layerMask.revealSelection", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Real-time 60 FPS Clone Stamp (`paint.cloneStamp`) using PhotoCraft's native `LiveRetouch`.
+    pub fn begin_live_clone(
+        &self,
+        sample: StrokeSample,
+        source_x: f32,
+        source_y: f32,
+        size: f32,
+        hardness: f32,
+        opacity: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_clone = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Klonlanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        let clamped_size = size.clamp(4.0, 400.0);
+        let clamped_hard = (hardness.clamp(0.0, 1.0) * 100.0).round();
+        let clamped_op = (opacity.clamp(0.05, 1.0) * 100.0).round();
+        let pt_json = json!([sample.x as f64, sample.y as f64, sample.pressure.clamp(0.05, 1.0) as f64]);
+
+        let mut base_params = json!({
+            "source": [source_x as f64, source_y as f64],
+            "size": clamped_size,
+            "hardness": clamped_hard,
+            "opacity": clamped_op,
+            "aligned": true,
+            "sampleLayer": "current",
+            "points": [pt_json.clone()]
+        });
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+
+        let live = match LiveRetouch::begin(&guard.session, "paint.cloneStamp", &base_params) {
+            Ok(l) => l,
+            Err(e) => {
+                if was_locked {
+                    let _ = guard.session.execute("edit.undo", json!({}));
+                }
+                if prev_active.is_some() {
+                    guard.session.set_active_layer(prev_active);
+                }
+                return Err(EngineError::CommandFailed { detail: e.to_string() });
+            }
+        };
+
+        let dmg = live.bounds();
+        base_params["points"] = Value::Array(Vec::new());
+        guard.live_clone = Some(ActiveLiveClone {
+            live,
+            base_params,
+            points_json: vec![pt_json],
+            target_id,
+            prev_active,
+            was_locked,
+        });
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
+    pub fn push_live_clone(&self, samples: Vec<StrokeSample>) -> Result<(), EngineError> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let mut guard = self.core.lock();
+        let Some(active) = guard.live_clone.as_mut() else {
+            return Ok(());
+        };
+        let pts: Vec<StrokePoint> = samples.iter().map(sample_to_stroke_point).collect();
+        let dmg = active
+            .live
+            .push(&pts)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        for s in &samples {
+            active
+                .points_json
+                .push(json!([s.x as f64, s.y as f64, s.pressure.clamp(0.05, 1.0) as f64]));
+        }
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
+    pub fn finish_live_clone(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(active) = guard.live_clone.take() else {
+            return self.info_from_locked(&guard);
+        };
+        let bounds = active.live.bounds();
+        let mut params = active.base_params;
+        params["points"] = Value::Array(active.points_json);
+
+        let _ = guard.session.offer_live_retouch(active.live);
+        let res = guard.session.execute("paint.cloneStamp", params);
+
+        if active.was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": active.target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if active.prev_active.is_some() {
+            guard.session.set_active_layer(active.prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_region_dirty(bounds);
+        self.info_from_locked(&guard)
+    }
+
+    pub fn cancel_live_clone(&self) {
+        let mut guard = self.core.lock();
+        if let Some(active) = guard.live_clone.take() {
             let bounds = active.live.bounds();
             if active.was_locked {
                 let _ = guard.session.execute("edit.undo", json!({}));

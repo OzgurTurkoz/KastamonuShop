@@ -14,6 +14,10 @@ struct ViewportUniforms {
     adjust: vec4<f32>,
     // [blur_radius_px (0..60), sharpen_amount (0..250), 0.0, 0.0]
     filter_p: vec4<f32>,
+    // [in_black (0..1), gamma (0.1..4.0), in_white (0..1), enabled (0/1)]
+    levels: vec4<f32>,
+    // [cyan_red (-1..1), magenta_green (-1..1), yellow_blue (-1..1), enabled (0/1)]
+    color_bal: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -173,6 +177,20 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             col = col * cos_a + cross(k, col) * sin_a + k * dot(k, col) * (1.0 - cos_a);
         }
         col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
+    // 60 FPS GPU Levels preview
+    if (u.levels.w > 0.5) {
+        let denom = max(u.levels.z - u.levels.x, 0.004);
+        let norm = clamp((col - vec3<f32>(u.levels.x)) / denom, vec3<f32>(0.0), vec3<f32>(1.0));
+        col = pow(norm, vec3<f32>(1.0 / clamp(u.levels.y, 0.1, 4.0)));
+    }
+
+    // 60 FPS GPU Color Balance preview (midtones)
+    if (u.color_bal.w > 0.5) {
+        let shift = u.color_bal.xyz * 0.35;
+        let mid_w = 1.0 - abs(col * 2.0 - vec3<f32>(1.0));
+        col = clamp(col + shift * mid_w, vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
     let rgb = mix(checker, col, sampled.a);
