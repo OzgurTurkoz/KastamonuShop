@@ -29,26 +29,31 @@ data class RulerLinePreview(
 /**
  * Hardware-accelerated Vulkan/GLES canvas:
  * - Canvas movement (pan, zoom, rotate) is STRICTLY two-finger only.
- * - 1-finger drags the Mirror axis directly on the photo at 60 FPS when Mirror mode is open,
- *   or draws / uses Ruler / samples Eyedropper when those tools are active.
+ * - 1-finger handles: Mirror axis drag (60 FPS), Text placement drag (60 FPS),
+ *   Retouch strokes (Spot Heal / Smudge / Dodge / Burn), Eyedropper, Ruler, and Freehand Brush/Eraser.
  */
 class VulkanCanvasView(
     context: Context,
     private val getDocSize: () -> Pair<Int, Int>,
     private val getBrushSize: () -> Float,
     private val isDrawingActive: () -> Boolean,
+    private val isRetouchActive: () -> Boolean,
     private val isEyedropperActive: () -> Boolean,
     private val isRulerEnabled: () -> Boolean,
     private val isMirrorDragActive: () -> Boolean,
     private val isMirrorVerticalAxis: () -> Boolean,
+    private val isTextDragActive: () -> Boolean,
     private val onStrokeBegin: (StrokeSample) -> Unit,
     private val onStrokeMove: (List<StrokeSample>) -> Unit,
     private val onStrokeEnd: () -> Unit,
     private val onStrokeCancel: () -> Unit,
+    private val onRetouchPreview: (Pair<Float, Float>?) -> Unit,
+    private val onRetouchCommit: (List<StrokeSample>) -> Unit,
     private val onRulerPreview: (RulerLinePreview?) -> Unit,
     private val onRulerStrokeCommit: (List<StrokeSample>) -> Unit,
     private val onEyedropperSample: (Float, Float) -> Unit,
     private val onMirrorAxisDrag: (Float) -> Unit,
+    private val onTextPositionDrag: (Float, Float) -> Unit,
     private val onCameraChanged: () -> Unit = {}
 ) : SurfaceView(context), SurfaceHolder.Callback {
 
@@ -59,9 +64,13 @@ class VulkanCanvasView(
 
     private var isMultiTouch = false
     private var strokeActive = false
+    private var retouchActive = false
     private var rulerActive = false
     private var eyedropperActive = false
     private var mirrorDragActive = false
+    private var textDragActive = false
+
+    private val retouchBuffer = ArrayList<StrokeSample>(64)
 
     private var prevMidX = 0f
     private var prevMidY = 0f
@@ -98,6 +107,8 @@ class VulkanCanvasView(
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         NativeSurfaceBridge.nativeDetachSurface()
     }
+
+    fun getCurrentZoom(): Float = zoom
 
     fun fitToDocument(previewQuarterTurnsCw: Int = 0) {
         val (rawW, rawH) = getDocSize()
@@ -153,6 +164,14 @@ class VulkanCanvasView(
             (dy / docH.coerceAtLeast(1).toFloat()).coerceIn(0.05f, 0.95f)
         }
         onMirrorAxisDrag(ratio)
+    }
+
+    private fun updateTextPosFromScreen(sx: Float, sy: Float) {
+        val (docW, docH) = getDocSize()
+        val (dx, dy) = screenToDoc(sx, sy)
+        val nx = (dx / docW.coerceAtLeast(1).toFloat()).coerceIn(0.04f, 0.96f)
+        val ny = (dy / docH.coerceAtLeast(1).toFloat()).coerceIn(0.06f, 0.94f)
+        onTextPositionDrag(nx, ny)
     }
 
     private fun makeSample(sx: Float, sy: Float, pressure: Float, tilt: Float, orientation: Float): StrokeSample {
@@ -220,7 +239,6 @@ class VulkanCanvasView(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        // Two-finger ONLY pan, zoom, and rotate
         if (event.pointerCount >= 2) {
             val x0 = event.getX(0)
             val y0 = event.getY(0)
@@ -236,6 +254,12 @@ class VulkanCanvasView(
                     isMultiTouch = true
                     eyedropperActive = false
                     mirrorDragActive = false
+                    textDragActive = false
+                    if (retouchActive) {
+                        retouchActive = false
+                        retouchBuffer.clear()
+                        onRetouchPreview(null)
+                    }
                     if (rulerActive) {
                         rulerActive = false
                         onRulerPreview(null)
@@ -282,10 +306,21 @@ class VulkanCanvasView(
                 if (isMirrorDragActive()) {
                     mirrorDragActive = true
                     updateMirrorRatioFromScreen(event.x, event.y)
+                } else if (isTextDragActive()) {
+                    textDragActive = true
+                    updateTextPosFromScreen(event.x, event.y)
                 } else if (isEyedropperActive()) {
                     eyedropperActive = true
                     val (dx, dy) = screenToDoc(event.x, event.y)
                     onEyedropperSample(dx, dy)
+                } else if (isRetouchActive()) {
+                    retouchActive = true
+                    retouchBuffer.clear()
+                    val sample = makeSample(event.x, event.y, event.pressure, 0f, 0f)
+                    lastSampleDocX = sample.x
+                    lastSampleDocY = sample.y
+                    retouchBuffer.add(sample)
+                    onRetouchPreview(event.x to event.y)
                 } else if (isDrawingActive() && isRulerEnabled()) {
                     rulerActive = true
                     rulerStartScreenX = event.x
@@ -312,9 +347,21 @@ class VulkanCanvasView(
                     updateMirrorRatioFromScreen(event.x, event.y)
                     return true
                 }
+                if (textDragActive) {
+                    updateTextPosFromScreen(event.x, event.y)
+                    return true
+                }
                 if (eyedropperActive) {
                     val (dx, dy) = screenToDoc(event.x, event.y)
                     onEyedropperSample(dx, dy)
+                    return true
+                }
+                if (retouchActive) {
+                    val sample = makeSample(event.x, event.y, event.pressure, 0f, 0f)
+                    if (acceptSampleIfMoved(sample)) {
+                        retouchBuffer.add(sample)
+                    }
+                    onRetouchPreview(event.x to event.y)
                     return true
                 }
                 if (rulerActive) {
@@ -359,7 +406,16 @@ class VulkanCanvasView(
             }
             MotionEvent.ACTION_UP -> {
                 mirrorDragActive = false
+                textDragActive = false
                 eyedropperActive = false
+                if (retouchActive) {
+                    retouchActive = false
+                    onRetouchPreview(null)
+                    if (retouchBuffer.isNotEmpty()) {
+                        onRetouchCommit(ArrayList(retouchBuffer))
+                    }
+                    retouchBuffer.clear()
+                }
                 if (rulerActive) {
                     rulerActive = false
                     onRulerPreview(null)
@@ -375,7 +431,13 @@ class VulkanCanvasView(
             }
             MotionEvent.ACTION_CANCEL -> {
                 mirrorDragActive = false
+                textDragActive = false
                 eyedropperActive = false
+                if (retouchActive) {
+                    retouchActive = false
+                    retouchBuffer.clear()
+                    onRetouchPreview(null)
+                }
                 if (rulerActive) {
                     rulerActive = false
                     onRulerPreview(null)

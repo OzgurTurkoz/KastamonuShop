@@ -285,6 +285,188 @@ impl KastamonuEngine {
         Ok(out.to_string())
     }
 
+    /// Creates a real PhotoCraft text layer using Android system fonts (`/system/fonts`).
+    /// Converts desired pixel height `size_px` into exact document points via `doc.resolution_dpi`.
+    pub fn add_text_layer(
+        &self,
+        text: String,
+        x: f32,
+        y: f32,
+        size_px: f32,
+        color_hex: String,
+        align: String,
+    ) -> Result<DocumentInfo, EngineError> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Metin boş olamaz".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let dpi = guard
+            .session
+            .active()
+            .map(|ds| ds.doc().resolution_dpi.max(1.0))
+            .unwrap_or(72.0);
+        let size_pt = (size_px.max(8.0) * 72.0 / dpi).clamp(6.0, 1296.0);
+
+        // Pick Roboto if available in /system/fonts, else first discovered font family
+        let mut chosen_font: Option<String> = None;
+        if let Ok(fonts_val) = guard.session.execute("type.fonts", json!({})) {
+            let list = fonts_val
+                .get("fonts")
+                .and_then(Value::as_array)
+                .or_else(|| fonts_val.as_array());
+            if let Some(arr) = list {
+                let mut first_name: Option<String> = None;
+                for item in arr {
+                    let name = item
+                        .as_str()
+                        .or_else(|| item.get("family").and_then(Value::as_str))
+                        .or_else(|| item.get("name").and_then(Value::as_str));
+                    if let Some(n) = name {
+                        if first_name.is_none() {
+                            first_name = Some(n.to_string());
+                        }
+                        if n.eq_ignore_ascii_case("Roboto") || n.eq_ignore_ascii_case("Noto Sans") {
+                            chosen_font = Some(n.to_string());
+                            break;
+                        }
+                    }
+                }
+                if chosen_font.is_none() {
+                    chosen_font = first_name;
+                }
+            }
+        }
+
+        let mut params = json!({
+            "x": x as f64,
+            "y": y as f64,
+            "text": trimmed,
+            "size": size_pt,
+            "color": color_hex,
+            "align": align,
+        });
+        if let Some(f) = chosen_font {
+            params["font"] = json!(f);
+        }
+
+        guard
+            .session
+            .execute("type.create", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Applies a native PhotoCraft retouch stroke (`spot_heal`, `smudge`, `dodge`, `burn`)
+    /// by automatically targeting the primary photo raster layer and restoring its lock afterward.
+    pub fn apply_retouch_stroke(
+        &self,
+        tool: String,
+        samples: Vec<StrokeSample>,
+        size: f32,
+        hardness: f32,
+        strength: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        if samples.is_empty() {
+            let guard = self.core.lock();
+            return self.info_from_locked(&guard);
+        }
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Rötuş uygulanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        let pts_json: Vec<Value> = samples.iter().map(sample_to_json).collect();
+        let clamped_size = size.clamp(4.0, 400.0);
+        let clamped_hard = hardness.clamp(0.0, 1.0);
+        let clamped_str = strength.clamp(5.0, 100.0);
+
+        let (cmd, params) = match tool.as_str() {
+            "spot_heal" => (
+                "paint.spotHealing",
+                json!({
+                    "points": pts_json,
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "type": "proximityMatch",
+                    "sampleAllLayers": false
+                }),
+            ),
+            "smudge" => (
+                "paint.smudge",
+                json!({
+                    "points": pts_json,
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "strength": clamped_str,
+                    "sampleAllLayers": false
+                }),
+            ),
+            "dodge" => (
+                "paint.dodge",
+                json!({
+                    "points": pts_json,
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "range": "midtones",
+                    "exposure": clamped_str,
+                    "protectTones": true
+                }),
+            ),
+            "burn" => (
+                "paint.burn",
+                json!({
+                    "points": pts_json,
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "range": "midtones",
+                    "exposure": clamped_str,
+                    "protectTones": true
+                }),
+            ),
+            other => {
+                return Err(EngineError::InvalidParams {
+                    detail: format!("Bilinmeyen rötuş aracı: {other}"),
+                })
+            }
+        };
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+
+        let res = guard.session.execute(cmd, params);
+
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     pub fn sample_color_hex(&self, x: f32, y: f32) -> Result<String, EngineError> {
         let mut guard = self.core.lock();
         let out = guard

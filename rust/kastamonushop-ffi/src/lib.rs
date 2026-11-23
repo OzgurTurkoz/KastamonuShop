@@ -38,11 +38,19 @@ static RUNTIME: OnceLock<SharedRuntime> = OnceLock::new();
 pub(crate) fn runtime() -> &'static SharedRuntime {
     RUNTIME.get_or_init(|| {
         #[cfg(target_os = "android")]
-        android_logger::init_once(
-            android_logger::Config::default()
-                .with_max_level(log::LevelFilter::Info)
-                .with_tag("StonebridgeCraft"),
-        );
+        {
+            android_logger::init_once(
+                android_logger::Config::default()
+                    .with_max_level(log::LevelFilter::Info)
+                    .with_tag("StonebridgeCraft"),
+            );
+            // Point craft-font-catalog to Android's system font directory so type.create renders real fonts
+            if std::env::var_os("CRAFT_FONT_STORE").is_none() {
+                unsafe {
+                    std::env::set_var("CRAFT_FONT_STORE", "/system/fonts");
+                }
+            }
+        }
 
         SharedRuntime {
             engine: Arc::new(Mutex::new(engine::EngineCore::new())),
@@ -71,7 +79,7 @@ pub fn create_kastamonu_engine() -> Arc<KastamonuEngine> {
 #[uniffi::export]
 pub fn engine_version_info() -> String {
     format!(
-        "StonebridgeCraft 0.5.4 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
+        "StonebridgeCraft 0.6.0 (PhotoCraft Core {} + wgpu 30 Vulkan/GLES)",
         env!("CARGO_PKG_VERSION")
     )
 }

@@ -33,7 +33,11 @@ enum class ActiveTool {
     NONE,
     BRUSH,
     ERASER,
-    EYEDROPPER
+    EYEDROPPER,
+    SPOT_HEAL,
+    SMUDGE,
+    DODGE,
+    BURN
 }
 
 data class EditorUiState(
@@ -48,6 +52,7 @@ data class EditorUiState(
     val brushHardness: Float = 0.85f,
     val brushOpacity: Float = 1.0f,
     val brushFlow: Float = 1.0f,
+    val retouchStrength: Float = 55f,
     val colorHex: String = "#FF4D4F",
     val bwLayerId: ULong? = null,
     val invertLayerId: ULong? = null,
@@ -327,6 +332,79 @@ class EditorViewModel : ViewModel() {
     }
 
     // One-shot CPU bake after 60 FPS GPU Mirror preview
+    fun updateRetouchStrength(strength: Float) {
+        _uiState.update { it.copy(retouchStrength = strength.coerceIn(5f, 100f)) }
+    }
+
+    fun addTextLayer(text: String, x: Float, y: Float, sizePx: Float, colorHex: String, align: String) {
+        if (text.trim().isEmpty()) {
+            showStatus("Lütfen eklenecek metni yaz", 2000L)
+            return
+        }
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.addTextLayer(text, x, y, sizePx, colorHex, align)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Metin katmanı eklendi", 2000L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Metin hatası: ${err.message}", 4000L)
+            }
+        }
+    }
+
+    fun applyRetouchStroke(samples: List<StrokeSample>) {
+        val s = _uiState.value
+        val toolKey = when (s.activeTool) {
+            ActiveTool.SPOT_HEAL -> "spot_heal"
+            ActiveTool.SMUDGE -> "smudge"
+            ActiveTool.DODGE -> "dodge"
+            ActiveTool.BURN -> "burn"
+            else -> return
+        }
+        if (samples.isEmpty()) return
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyRetouchStroke(toolKey, samples, s.brushSize, s.brushHardness, s.retouchStrength)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Rötuş hatası: ${err.message}", 3500L)
+            }
+        }
+    }
+
+    /** Quick-saves the current document straight into the Home screen's Saved Photos gallery. */
+    fun quickSaveToGallery(context: Context, onSaved: () -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isBusy = true) }
+            runCatching {
+                val bytes = engine.exportDocumentBytes("png")
+                val doc = _uiState.value.docInfo
+                val updated = SavedGalleryStore.recordSavedPhoto(
+                    context = context,
+                    displayName = doc?.name ?: "StonebridgeCraft",
+                    formatExt = "png",
+                    exportedBytes = bytes,
+                    previewPngBytes = null,
+                    width = doc?.width?.toInt() ?: 0,
+                    height = doc?.height?.toInt() ?: 0
+                )
+                _uiState.update { it.copy(isBusy = false, savedPhotos = updated) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Kaydetme hatası: ${err.message}", 3500L)
+            }
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                onSaved()
+            }
+        }
+    }
+
     fun applyPhotoMirror(mode: String, axisRatio: Float) {
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {

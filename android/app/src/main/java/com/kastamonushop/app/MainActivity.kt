@@ -80,6 +80,7 @@ private val StudioDarkScheme = darkColorScheme(
 private enum class BottomPanel {
     DOCK,
     DRAW_MENU,
+    TEXT_EDIT,
     ADJUST_MENU,
     LIGHT_LIVE,
     COLOR_LIVE,
@@ -254,7 +255,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.5.4",
+                    text = "v0.6.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -641,6 +642,16 @@ fun StonebridgeStudioScreen(
     var canvasViewRef by remember { mutableStateOf<VulkanCanvasView?>(null) }
 
     var rulerPreview by remember { mutableStateOf<RulerLinePreview?>(null) }
+    var retouchCursor by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var showExitSaveDialog by remember { mutableStateOf(false) }
+
+    // Live draggable Text layer editor state
+    var textDraft by remember { mutableStateOf("StonebridgeCraft") }
+    var textNormX by remember { mutableFloatStateOf(0.50f) }
+    var textNormY by remember { mutableFloatStateOf(0.50f) }
+    var textSizePx by remember { mutableFloatStateOf(140f) }
+    var textColorHex by remember { mutableStateOf("#FFFFFF") }
+    var textAlign by remember { mutableStateOf("center") }
     var cameraTick by remember { mutableIntStateOf(0) }
 
     var brightnessVal by remember { mutableFloatStateOf(0f) }
@@ -744,8 +755,7 @@ fun StonebridgeStudioScreen(
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
-            clearGpuPreview()
-            onGoHome()
+            showExitSaveDialog = true
         }
     }
 
@@ -795,20 +805,31 @@ fun StonebridgeStudioScreen(
                         val t = vm.uiState.value.activeTool
                         t == ActiveTool.BRUSH || t == ActiveTool.ERASER
                     },
+                    isRetouchActive = {
+                        val t = vm.uiState.value.activeTool
+                        t == ActiveTool.SPOT_HEAL || t == ActiveTool.SMUDGE || t == ActiveTool.DODGE || t == ActiveTool.BURN
+                    },
                     isEyedropperActive = { vm.uiState.value.activeTool == ActiveTool.EYEDROPPER },
                     isRulerEnabled = { vm.uiState.value.rulerEnabled },
                     isMirrorDragActive = { currentPanelState == BottomPanel.MIRROR_EDIT },
                     isMirrorVerticalAxis = { currentMirrorModeState.isVerticalAxis },
+                    isTextDragActive = { currentPanelState == BottomPanel.TEXT_EDIT },
                     onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
                     onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
                     onStrokeEnd = { vm.finishLiveStroke() },
                     onStrokeCancel = { vm.cancelLiveStroke() },
+                    onRetouchPreview = { pos -> retouchCursor = pos },
+                    onRetouchCommit = { samples -> vm.applyRetouchStroke(samples) },
                     onRulerPreview = { preview -> rulerPreview = preview },
                     onRulerStrokeCommit = { samples -> vm.commitRulerStroke(samples) },
                     onEyedropperSample = { dx, dy -> vm.sampleColorAt(dx, dy) },
                     onMirrorAxisDrag = { ratio ->
                         mirrorAxisRatio = ratio
                         pushGpuMirrorPreview(currentMirrorModeState, ratio)
+                    },
+                    onTextPositionDrag = { nx, ny ->
+                        textNormX = nx
+                        textNormY = ny
                     },
                     onCameraChanged = { cameraTick++ }
                 ).also { canvasViewRef = it }
@@ -955,6 +976,88 @@ fun StonebridgeStudioScreen(
             }
         }
 
+        // Live Retouch brush ring indicator while dragging
+        retouchCursor?.let { (cx, cy) ->
+            val zoom = canvasViewRef?.getCurrentZoom() ?: 1f
+            val rPx = (state.brushSize * 0.5f * zoom).coerceIn(10f, 180f)
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawCircle(color = Color(0x88000000), radius = rPx + 2f, center = Offset(cx, cy), style = Stroke(width = 4f))
+                drawCircle(color = Color.White, radius = rPx, center = Offset(cx, cy), style = Stroke(width = 2.5f))
+            }
+        }
+
+        // 60 FPS Live Draggable Text Preview overlay
+        if (activePanel == BottomPanel.TEXT_EDIT) {
+            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+            val viewRef = canvasViewRef
+            val tick = cameraTick
+            if (viewRef != null && tick >= 0) {
+                val (sx, sy) = viewRef.docToScreen(docW * textNormX, docH * textNormY)
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                val previewSp = ((textSizePx * viewRef.getCurrentZoom()) / density.fontScale / density.density).coerceIn(10f, 72f)
+                val previewColor = remember(textColorHex) {
+                    runCatching { Color(AndroidColor.parseColor(textColorHex)) }.getOrDefault(Color.White)
+                }
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            androidx.compose.ui.unit.IntOffset(
+                                (sx - 120f).roundToInt(),
+                                (sy - 40f).roundToInt()
+                            )
+                        }
+                        .border(1.5.dp, Color(0xAA4F9CFF), RoundedCornerShape(8.dp))
+                        .background(Color(0x44111217), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = textDraft.ifBlank { "Metin..." },
+                        color = previewColor,
+                        fontSize = previewSp.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 3
+                    )
+                }
+            }
+        }
+
+        // Exit Save Confirmation Dialog ("Bu fotoğrafı kaydetmek istiyor musun?")
+        if (showExitSaveDialog) {
+            AlertDialog(
+                onDismissRequest = { showExitSaveDialog = false },
+                containerColor = Color(0xFF232530),
+                titleContentColor = Color.White,
+                textContentColor = Color(0xFFD8DCE8),
+                title = { Text("Fotoğrafı Kaydet", fontWeight = FontWeight.SemiBold) },
+                text = { Text("Bu fotoğrafı kaydetmek istiyor musun? Evet dersen Kaydedilen Fotoğraflar bölümüne eklenir.") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showExitSaveDialog = false
+                            clearGpuPreview()
+                            vm.quickSaveToGallery(context) {
+                                onGoHome()
+                            }
+                        }
+                    ) {
+                        Text("Evet")
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(
+                        onClick = {
+                            showExitSaveDialog = false
+                            clearGpuPreview()
+                            onGoHome()
+                        }
+                    ) {
+                        Text("Hayır", color = Color.White)
+                    }
+                }
+            )
+        }
+
         // Slim Top Bar
         Surface(
             modifier = Modifier
@@ -978,7 +1081,7 @@ fun StonebridgeStudioScreen(
                     label = "Ana",
                     onClick = {
                         dismissLivePanelIfActive()
-                        onGoHome()
+                        showExitSaveDialog = true
                     }
                 )
 
@@ -1259,8 +1362,9 @@ fun StonebridgeStudioScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
                             .padding(horizontal = 8.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         CircularDockButton(
@@ -1269,6 +1373,18 @@ fun StonebridgeStudioScreen(
                             selected = state.activeTool != ActiveTool.NONE,
                             accentDot = if (state.activeTool == ActiveTool.BRUSH || state.activeTool == ActiveTool.EYEDROPPER) activeColor else null,
                             onClick = { activePanel = BottomPanel.DRAW_MENU }
+                        )
+                        CircularDockButton(
+                            icon = Icons.Default.Title,
+                            label = "Metin",
+                            onClick = {
+                                vm.setTool(ActiveTool.NONE)
+                                val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                                textSizePx = (docW * 0.08f).coerceIn(36f, 260f)
+                                textNormX = 0.50f
+                                textNormY = 0.50f
+                                activePanel = BottomPanel.TEXT_EDIT
+                            }
                         )
                         CircularDockButton(
                             icon = Icons.Default.Tune,
@@ -1326,7 +1442,11 @@ fun StonebridgeStudioScreen(
                                 ActiveTool.BRUSH -> if (state.rulerEnabled) "Cetvel açık · düz çizgi çek" else "Fırça aktif · iki parmakla kaydır/yakınlaştır"
                                 ActiveTool.ERASER -> if (state.rulerEnabled) "Silgi + Cetvel açık" else "Silgi aktif"
                                 ActiveTool.EYEDROPPER -> "Fotoğrafa dokunarak renk al (${state.colorHex})"
-                                ActiveTool.NONE -> "Çizmek için Fırça veya Silgi seç"
+                                ActiveTool.SPOT_HEAL -> "Leke Giderme · kusurun üzerinden parmağınla geç"
+                                ActiveTool.SMUDGE -> "Dağıtma · dokuyu parmağınla yumuşakça yay"
+                                ActiveTool.DODGE -> "Aydınlat · dokunduğun bölgeyi açar"
+                                ActiveTool.BURN -> "Koyulaştır · dokunduğun bölgeyi gölgeler"
+                                ActiveTool.NONE -> "Çizim veya Rötuş için bir araç seç"
                             },
                             onClose = { activePanel = BottomPanel.DOCK }
                         )
@@ -1373,6 +1493,38 @@ fun StonebridgeStudioScreen(
                                 label = symLabel,
                                 selected = state.symmetryMode != "off",
                                 onClick = { vm.cycleSymmetry() }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Healing,
+                                label = "Leke",
+                                selected = state.activeTool == ActiveTool.SPOT_HEAL,
+                                onClick = {
+                                    vm.setTool(if (state.activeTool == ActiveTool.SPOT_HEAL) ActiveTool.NONE else ActiveTool.SPOT_HEAL)
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Gesture,
+                                label = "Dağıt",
+                                selected = state.activeTool == ActiveTool.SMUDGE,
+                                onClick = {
+                                    vm.setTool(if (state.activeTool == ActiveTool.SMUDGE) ActiveTool.NONE else ActiveTool.SMUDGE)
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.WbSunny,
+                                label = "Aydınlat",
+                                selected = state.activeTool == ActiveTool.DODGE,
+                                onClick = {
+                                    vm.setTool(if (state.activeTool == ActiveTool.DODGE) ActiveTool.NONE else ActiveTool.DODGE)
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.NightsStay,
+                                label = "Koyulaştır",
+                                selected = state.activeTool == ActiveTool.BURN,
+                                onClick = {
+                                    vm.setTool(if (state.activeTool == ActiveTool.BURN) ActiveTool.NONE else ActiveTool.BURN)
+                                }
                             )
                             CircularDockButton(
                                 icon = Icons.Default.Block,
@@ -1456,6 +1608,93 @@ fun StonebridgeStudioScreen(
                             CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
                                 vm.updateBrush(hardness = it)
                             }
+                        } else if (
+                            state.activeTool == ActiveTool.SPOT_HEAL ||
+                            state.activeTool == ActiveTool.SMUDGE ||
+                            state.activeTool == ActiveTool.DODGE ||
+                            state.activeTool == ActiveTool.BURN
+                        ) {
+                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 8f..250f, defaultValue = 48f) {
+                                vm.updateBrush(size = it)
+                            }
+                            if (state.activeTool != ActiveTool.SPOT_HEAL) {
+                                CompactSliderRow("Güç", "%${state.retouchStrength.roundToInt()}", state.retouchStrength, 10f..100f, defaultValue = 55f) {
+                                    vm.updateRetouchStrength(it)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                BottomPanel.TEXT_EDIT -> {
+                    val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                    val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Metin Ekle",
+                            subtitle = "Fotoğrafa dokunarak yazıyı konumlandır, sonra Uygula de",
+                            applyLabel = "Uygula",
+                            onClose = { activePanel = BottomPanel.DOCK },
+                            onApply = {
+                                vm.addTextLayer(
+                                    text = textDraft,
+                                    x = docW * textNormX,
+                                    y = docH * textNormY,
+                                    sizePx = textSizePx,
+                                    colorHex = textColorHex,
+                                    align = textAlign
+                                )
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        OutlinedTextField(
+                            value = textDraft,
+                            onValueChange = { textDraft = it },
+                            singleLine = true,
+                            placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            listOf("#FFFFFF", "#000000", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB").forEach { hex ->
+                                val c = Color(AndroidColor.parseColor(hex))
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(c)
+                                        .border(
+                                            width = if (textColorHex.equals(hex, true)) 2.5.dp else 1.dp,
+                                            color = if (textColorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
+                                            shape = CircleShape
+                                        )
+                                        .clickable { textColorHex = hex }
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf("left" to "Sol", "center" to "Orta", "right" to "Sağ").forEach { (id, lbl) ->
+                                    FilterChip(
+                                        selected = textAlign == id,
+                                        onClick = { textAlign = id },
+                                        label = { Text(lbl, fontSize = 10.sp) }
+                                    )
+                                }
+                            }
+                        }
+                        CompactSliderRow(
+                            label = "Boyut",
+                            valueText = "${textSizePx.roundToInt()}px",
+                            value = textSizePx,
+                            range = 24f..420f,
+                            defaultValue = (docW * 0.08f).coerceIn(36f, 260f)
+                        ) {
+                            textSizePx = it
                         }
                     }
                 }
