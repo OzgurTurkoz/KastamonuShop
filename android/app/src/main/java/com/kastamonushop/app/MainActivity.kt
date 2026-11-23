@@ -2066,7 +2066,7 @@ fun StonebridgeStudioScreen(
                                     val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal)
                                     vm.applyAdjustmentOnce(
                                         "levels",
-                                        "{"inBlack":$ib,"gamma":$gStr,"inWhite":$iw}",
+                                        """{"inBlack":$ib,"gamma":$gStr,"inWhite":$iw}""",
                                         "Düzeyler"
                                     )
                                 }
@@ -2113,7 +2113,7 @@ fun StonebridgeStudioScreen(
                                 } else {
                                     vm.applyAdjustmentOnce(
                                         "colorBalance",
-                                        "{"midtones":[$cr,$mg,$yb],"preserveLuminosity":true}",
+                                        """{"midtones":[$cr,$mg,$yb],"preserveLuminosity":true}""",
                                         "Renk Dengesi"
                                     )
                                 }
