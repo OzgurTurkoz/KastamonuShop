@@ -16,7 +16,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -1846,8 +1845,9 @@ fun StonebridgeStudioScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(liquifyTool, liquifySize, liquifyPressure) {
-                            androidx.compose.foundation.gestures.awaitEachGesture {
-                                val firstDown = awaitFirstDown(requireUnconsumed = false)
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val firstDown = awaitFirstDown(requireUnconsumed = false)
                                 var singleStrokeActive = false
                                 var pinchActive = false
                                 var prevDist = 0f
@@ -1902,6 +1902,7 @@ fun StonebridgeStudioScreen(
                                             vm.onLiquifyMove(dx, dy)
                                         }
                                     }
+                                }
                                 }
                             }
                         }
