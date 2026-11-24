@@ -73,6 +73,7 @@ data class EditorUiState(
     val selectionBounds: SelectionBounds? = null,
     val selectEllipse: Boolean = false,
     val wandTolerance: Float = 32f,
+    val wandSmartMode: Boolean = true,
     val wandContiguous: Boolean = true,
     val selectAddMode: Boolean = false,
     val selectSubtractMode: Boolean = false,
@@ -121,6 +122,11 @@ class EditorViewModel : ViewModel() {
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
+
+    @Volatile
+    private var lastWandTapDoc: Pair<Float, Float>? = null
+    private val pendingWandTol = AtomicReference<Float?>(null)
+    private val wandTolDrainScheduled = AtomicBoolean(false)
 
     private val _activeLayerPreview = MutableStateFlow<Pair<SelectionBounds, ImageBitmap?>?>(null)
     val activeLayerPreview: StateFlow<Pair<SelectionBounds, ImageBitmap?>?> = _activeLayerPreview.asStateFlow()
@@ -231,8 +237,44 @@ class EditorViewModel : ViewModel() {
         _uiState.update { it.copy(selectEllipse = !it.selectEllipse) }
     }
 
+    fun toggleWandSmartMode() {
+        val next = !_uiState.value.wandSmartMode
+        _uiState.update { it.copy(wandSmartMode = next) }
+        showStatus(
+            if (next) "Akıllı Nesne Değneği açık: dokunduğun bütün nesneyi kenarlarıyla seçer"
+            else "Renk Değneği açık: toleransa göre benzer renkleri seçer",
+            2200L
+        )
+    }
+
     fun updateWandTolerance(tol: Float) {
-        _uiState.update { it.copy(wandTolerance = tol.coerceIn(0f, 150f)) }
+        val clamped = tol.coerceIn(0f, 150f)
+        _uiState.update { it.copy(wandTolerance = clamped) }
+        if (!_uiState.value.wandSmartMode && lastWandTapDoc != null) {
+            pendingWandTol.set(clamped)
+            if (wandTolDrainScheduled.compareAndSet(false, true)) {
+                paintExecutor.execute { drainPendingWandTolerance() }
+            }
+        }
+    }
+
+    private fun drainPendingWandTolerance() {
+        while (true) {
+            val nextTol = pendingWandTol.getAndSet(null)
+            if (nextTol == null) {
+                wandTolDrainScheduled.set(false)
+                if (pendingWandTol.get() == null) return
+                if (!wandTolDrainScheduled.compareAndSet(false, true)) return
+                continue
+            }
+            val pt = lastWandTapDoc ?: continue
+            val s = _uiState.value
+            runCatching {
+                val b = engine.selectMagicWand(pt.first.toInt(), pt.second.toInt(), nextTol.toInt().toUInt(), s.wandContiguous, "replace")
+                _uiState.update { it.copy(selectionBounds = b) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
     }
 
     fun toggleWandContiguous() {
@@ -322,19 +364,29 @@ class EditorViewModel : ViewModel() {
     }
 
     fun selectMagicWand(docX: Float, docY: Float) {
+        lastWandTapDoc = docX to docY
         val s = _uiState.value
         val tol = s.wandTolerance.toInt().coerceIn(0, 255).toUInt()
         val mode = when { s.selectSubtractMode -> "subtract"; s.selectAddMode -> "add"; else -> "replace" }
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
-                val b = engine.selectMagicWand(docX.toInt(), docY.toInt(), tol, s.wandContiguous, mode)
+                val b = if (s.wandSmartMode) {
+                    engine.selectObjectAtPoint(docX.toInt(), docY.toInt(), mode)
+                } else {
+                    engine.selectMagicWand(docX.toInt(), docY.toInt(), tol, s.wandContiguous, mode)
+                }
                 _uiState.update { it.copy(selectionBounds = b, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
-                showStatus(if (b != null) "Sihirli Değnek seçimi hazır" else "Seçilecek alan bulunamadı", 1600L)
+                showStatus(
+                    if (b != null) {
+                        if (s.wandSmartMode) "Nesne seçildi" else "Renk alanı seçildi"
+                    } else "Seçilecek alan bulunamadı",
+                    1600L
+                )
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
-                showStatus("Sihirli Değnek hatası: ${err.message}", 3000L)
+                showStatus("Değnek hatası: ${err.message}", 3000L)
             }
         }
     }
@@ -527,7 +579,7 @@ class EditorViewModel : ViewModel() {
                 val active = engine.getLayers().firstOrNull { it.isActive }
                 var bmpImg: ImageBitmap? = null
                 if (active != null) {
-                    val thumb = runCatching { engine.getLayerThumbnail(active.id, 128u) }.getOrNull()
+                    val thumb = runCatching { engine.getLayerThumbnail(active.id, 512u) }.getOrNull()
                     if (thumb != null) {
                         val w = thumb.width.toInt()
                         val h = thumb.height.toInt()
@@ -537,6 +589,9 @@ class EditorViewModel : ViewModel() {
                             bmpImg = bmp.asImageBitmap()
                         }
                     }
+                    // Hide stationary original layer while dragging its crisp floating copy (zero ghost duplicate!)
+                    engine.setTransformHiddenLayer(active.id)
+                    NativeSurfaceBridge.nativeRenderFrame()
                 }
                 if (bounds != null) {
                     _activeLayerPreview.value = bounds to bmpImg
@@ -549,6 +604,12 @@ class EditorViewModel : ViewModel() {
 
     fun clearActiveLayerPreview() {
         _activeLayerPreview.value = null
+        paintExecutor.execute {
+            runCatching {
+                engine.setTransformHiddenLayer(null)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
     }
 
     fun transformActiveLayer(dx: Float, dy: Float, scalePct: Float, rotateDeg: Float) {

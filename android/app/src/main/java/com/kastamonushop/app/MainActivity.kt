@@ -17,6 +17,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -273,7 +274,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.8.2",
+                    text = "v0.8.3",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -857,6 +858,7 @@ fun StonebridgeStudioScreen(
                     activePanel = BottomPanel.DOCK
                 }
                 BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> activePanel = BottomPanel.CROP_MENU
+                BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); activePanel = BottomPanel.DOCK }
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
@@ -1407,10 +1409,16 @@ fun StonebridgeStudioScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(z) {
-                            detectDragGestures { change, dragAmount ->
-                                change.consume()
-                                layerDx += dragAmount.x / z
-                                layerDy += dragAmount.y / z
+                            detectTransformGestures { _, pan, zoomChange, rotationChange ->
+                                layerDx += pan.x / z
+                                layerDy += pan.y / z
+                                if (zoomChange != 1f) {
+                                    layerScalePct = (layerScalePct * zoomChange).coerceIn(15f, 300f)
+                                }
+                                if (rotationChange != 0f) {
+                                    val nextRot = layerRotDeg + rotationChange
+                                    layerRotDeg = ((nextRot + 180f) % 360f + 360f) % 360f - 180f
+                                }
                             }
                         }
                 ) {
@@ -1431,9 +1439,9 @@ fun StonebridgeStudioScreen(
                         prev.second?.let { bmp ->
                             Image(
                                 bitmap = bmp,
-                                contentDescription = "Aktif katman önizleme",
+                                contentDescription = "Aktif katman",
                                 contentScale = ContentScale.FillBounds,
-                                alpha = 0.72f,
+                                alpha = 1.0f,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -2222,7 +2230,7 @@ fun StonebridgeStudioScreen(
                                 ActiveTool.SELECT_QUICK -> if (state.selectSubtractMode) "Akıllı Fırça (-) · kenar algılayarak çıkar" else "Akıllı Fırça (+) · nesne üzerinden parmağınla geç"
                                 ActiveTool.SELECT_BRUSH_ADD -> "Elle Ekle (+) · parmağınla boyayarak seçime ekle"
                                 ActiveTool.SELECT_BRUSH_SUB -> "Elle Sil (-) · yanlış seçilen yerleri parmağınla sil"
-                                ActiveTool.SELECT_WAND -> "Değnek · renge dokun (Tolerans: ${state.wandTolerance.roundToInt()})"
+                                ActiveTool.SELECT_WAND -> if (state.wandSmartMode) "Akıllı Değnek · seçmek istediğin nesneye dokun" else "Renk Değneği · dokun ve Tolerans ile ayarla (${state.wandTolerance.roundToInt()})"
                                 else -> "Parmağınla sürükleyerek alan seç"
                             },
                             onClose = {
@@ -2330,14 +2338,21 @@ fun StonebridgeStudioScreen(
                                 )
                                 if (state.activeTool == ActiveTool.SELECT_WAND) {
                                     FilterChip(
-                                        selected = state.wandContiguous,
-                                        onClick = { vm.toggleWandContiguous() },
-                                        label = { Text(if (state.wandContiguous) "Bitişik ✓" else "Tüm Renk", fontSize = 11.sp) }
+                                        selected = state.wandSmartMode,
+                                        onClick = { vm.toggleWandSmartMode() },
+                                        label = { Text(if (state.wandSmartMode) "Akıllı Nesne ✓" else "Renk Modu", fontSize = 11.sp) }
                                     )
+                                    if (!state.wandSmartMode) {
+                                        FilterChip(
+                                            selected = state.wandContiguous,
+                                            onClick = { vm.toggleWandContiguous() },
+                                            label = { Text(if (state.wandContiguous) "Bitişik ✓" else "Tüm Renk", fontSize = 11.sp) }
+                                        )
+                                    }
                                 }
                             }
                         }
-                        if (state.activeTool == ActiveTool.SELECT_WAND) {
+                        if (state.activeTool == ActiveTool.SELECT_WAND && !state.wandSmartMode) {
                             CompactSliderRow("Tolerans", "${state.wandTolerance.roundToInt()}", state.wandTolerance, 0f..120f, defaultValue = 32f) {
                                 vm.updateWandTolerance(it)
                             }
@@ -3202,7 +3217,7 @@ fun StonebridgeStudioScreen(
                     ) {
                         BottomEditorHeader(
                             title = "Katmanı Taşı: $activeName",
-                            subtitle = "Tek parmakla taşı · Boyut ve Döndür ile hizala",
+                            subtitle = "1 parmak taşı · 2 parmak büyüt/küçült ve döndür",
                             applyLabel = "Uygula",
                             onClose = {
                                 vm.clearActiveLayerPreview()

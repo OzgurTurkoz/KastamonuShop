@@ -133,6 +133,7 @@ pub(crate) struct EngineCore {
     live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
     proxy_preview: Option<ProxyPreviewSession>,
+    transform_hidden_layer: Option<LayerId>,
 }
 
 impl EngineCore {
@@ -164,6 +165,7 @@ impl EngineCore {
             live_adjustment: None,
             live_filter: None,
             proxy_preview: None,
+            transform_hidden_layer: None,
         }
     }
 
@@ -188,6 +190,13 @@ impl EngineCore {
         }
         let doc = self.active_document()?;
         let sz = (doc.size.width.max(1), doc.size.height.max(1));
+        if let Some(hid) = self.transform_hidden_layer {
+            let mut cloned = (*doc).clone();
+            if let Some(l) = cloned.layers.iter_mut().find(|l| l.id == hid) {
+                l.visible = false;
+            }
+            return Some((Arc::new(cloned), sz));
+        }
         Some((doc, sz))
     }
 
@@ -1263,6 +1272,13 @@ impl KastamonuEngine {
         }
     }
 
+    /// Temporarily hides a layer in the GPU composite while dragging its floating preview (zero undo steps).
+    pub fn set_transform_hidden_layer(&self, layer_id: Option<u64>) {
+        let mut guard = self.core.lock();
+        guard.transform_hidden_layer = layer_id.map(LayerId);
+        guard.mark_full_dirty();
+    }
+
     /// Independently moves, scales (%), and rotates (deg) ONLY the currently active layer (`edit.transform`).
     pub fn transform_active_layer(
         &self,
@@ -1276,6 +1292,7 @@ impl KastamonuEngine {
         guard.live_dab = None;
         guard.live_clone = None;
         guard.proxy_preview = None;
+        guard.transform_hidden_layer = None;
 
         let (active_id, was_locked) = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
@@ -1630,7 +1647,7 @@ impl KastamonuEngine {
         };
         let doc_w = doc.size.width.max(1);
         let doc_h = doc.size.height.max(1);
-        let cap = max_dim.clamp(16, 128);
+        let cap = max_dim.clamp(16, 512);
         let scale = (cap as f32 / doc_w.max(doc_h) as f32).min(1.0);
         let tw = ((doc_w as f32 * scale).round() as u32).clamp(1, cap);
         let th = ((doc_h as f32 * scale).round() as u32).clamp(1, cap);
@@ -2087,6 +2104,55 @@ impl KastamonuEngine {
         Ok(b)
     }
 
+    /// Smart Object-Aware Wand: taps an object (`select.object` point mode) to detect its real
+    /// boundary instead of raw RGB flood-fill, falling back to edge-aware `select.quick` if needed.
+    pub fn select_object_at_point(
+        &self,
+        x: i32,
+        y: i32,
+        mode: String,
+    ) -> Result<Option<SelectionBounds>, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let m = if mode.is_empty() { "replace" } else { mode.as_str() };
+        let obj_res = guard.session.execute(
+            "select.object",
+            json!({
+                "point": [x as f64, y as f64],
+                "sampleAllLayers": true,
+                "hardEdge": false,
+                "mode": m
+            }),
+        );
+        let has_sel = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| !s.content_bounds().is_empty()))
+            .unwrap_or(false);
+        if obj_res.is_err() || !has_sel {
+            let quick_mode = if m == "subtract" { "subtract" } else if m == "add" { "add" } else { "replace" };
+            guard
+                .session
+                .execute(
+                    "select.quick",
+                    json!({
+                        "points": [[x as f64, y as f64]],
+                        "size": 44.0,
+                        "mode": quick_mode,
+                        "sampleAllLayers": true,
+                        "enhanceEdge": true
+                    }),
+                )
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        }
+        guard.mark_full_dirty();
+        let b = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
+            .filter(|r| !r.is_empty())
+            .map(|r| SelectionBounds { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+        Ok(b)
+    }
+
     pub fn select_magic_wand(
         &self,
         x: i32,
@@ -2113,6 +2179,8 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        // Smooth tiny 1px jagged speckles for cleaner selection edges
+        let _ = guard.session.execute("select.modify.smooth", json!({ "radius": 2 }));
         guard.mark_full_dirty();
         let b = guard
             .active_document()
@@ -2709,5 +2777,31 @@ mod v08_automated_tests {
         assert!(bounds.x1 > bounds.x0);
         let _ = eng.transform_active_layer(25.0, -15.0, 75.0, 15.0).expect("transform_active_layer");
         let _ = eng.undo().expect("undo transform");
+    }
+
+    #[test]
+    fn test_v083_smart_object_wand_and_hidden_transform_layer() {
+        let eng = test_engine();
+        let w = 160u32;
+        let h = 160u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let in_obj = (45..115).contains(&x) && (45..115).contains(&y);
+                rgba[i] = if in_obj { 210 } else { 30 };
+                rgba[i + 1] = if in_obj { 50 } else { 140 };
+                rgba[i + 2] = if in_obj { 60 } else { 210 };
+                rgba[i + 3] = 255;
+            }
+        }
+        eng.open_rgba_bytes("obj.png".into(), w, h, rgba).expect("open");
+        let sel = eng.select_object_at_point(80, 80, "replace".into()).expect("smart object wand");
+        assert!(sel.is_some(), "smart object wand should select the center object");
+
+        let layers = eng.get_layers().expect("layers");
+        let bg_id = layers.iter().find(|l| l.is_background).unwrap().id;
+        eng.set_transform_hidden_layer(Some(bg_id));
+        eng.set_transform_hidden_layer(None);
     }
 }
