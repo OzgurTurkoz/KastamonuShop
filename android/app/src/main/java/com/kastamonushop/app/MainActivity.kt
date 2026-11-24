@@ -39,6 +39,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -275,7 +277,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.9.1",
+                    text = "v0.9.2",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -517,7 +519,7 @@ private fun CircularDockButton(
 
     Column(
         modifier = Modifier
-            .width(64.dp)
+            .width(68.dp)
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -548,7 +550,7 @@ private fun CircularDockButton(
             }
         }
         Spacer(modifier = Modifier.height(4.dp))
-        Text(text = label, color = textTint, fontSize = 10.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(text = label, color = textTint, fontSize = 10.sp, fontWeight = FontWeight.Medium, maxLines = 1, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -569,8 +571,10 @@ private fun CompactSliderRow(
         Text(
             text = label,
             color = Color(0xFFDCE0EC),
-            fontSize = 12.sp,
-            modifier = Modifier.width(66.dp)
+            fontSize = 11.sp,
+            lineHeight = 13.sp,
+            maxLines = 2,
+            modifier = Modifier.width(74.dp)
         )
         Slider(
             value = value,
@@ -606,6 +610,34 @@ private fun CompactSliderRow(
             )
         }
     }
+}
+
+
+@Composable
+private fun BrushSizeSliderRow(
+    label: String,
+    sizePx: Float,
+    minPx: Float = 1f,
+    maxPx: Float = 250f,
+    defaultPx: Float = 28f,
+    onChange: (Float) -> Unit
+) {
+    // Quadratic precision curve: gives 1..16px fine-detail brushes ~25% of slider travel while still reaching 250px
+    val span = (maxPx - minPx).coerceAtLeast(1f)
+    val clamped = sizePx.coerceIn(minPx, maxPx)
+    val norm = kotlin.math.sqrt(((clamped - minPx) / span).coerceIn(0f, 1f))
+    val defaultNorm = kotlin.math.sqrt(((defaultPx.coerceIn(minPx, maxPx) - minPx) / span).coerceIn(0f, 1f))
+    CompactSliderRow(
+        label = label,
+        valueText = "${clamped.roundToInt()}px",
+        value = norm,
+        range = 0f..1f,
+        defaultValue = defaultNorm,
+        onChange = { t ->
+            val mapped = (minPx + span * t * t).roundToInt().toFloat().coerceIn(minPx, maxPx)
+            onChange(mapped)
+        }
+    )
 }
 
 @Composable
@@ -749,6 +781,13 @@ fun StonebridgeStudioScreen(
     var showExitSaveDialog by remember { mutableStateOf(false) }
 
     // Live draggable Text layer editor state
+    val dockScrollState = rememberScrollState()
+    val drawScrollState = rememberScrollState()
+    val selectScrollState = rememberScrollState()
+    val adjustScrollState = rememberScrollState()
+    val cropScrollState = rememberScrollState()
+    val effectScrollState = rememberScrollState()
+    var textBoxSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     var textDraft by remember { mutableStateOf("StonebridgeCraft") }
     var textNormX by remember { mutableFloatStateOf(0.50f) }
     var textNormY by remember { mutableFloatStateOf(0.50f) }
@@ -892,6 +931,23 @@ fun StonebridgeStudioScreen(
     LaunchedEffect(state.fitCameraSignal, canvasViewRef) {
         if (state.fitCameraSignal > 0 && canvasViewRef != null) {
             fitToSafeArea(0, activePanel)
+        }
+    }
+
+    LaunchedEffect(activePanel) {
+        if (activePanel != BottomPanel.DOCK && state.compareOriginal) {
+            vm.dismissCompareOriginal()
+        }
+        val isProxyPanel = activePanel == BottomPanel.LIGHT_LIVE ||
+            activePanel == BottomPanel.COLOR_LIVE ||
+            activePanel == BottomPanel.LEVELS_LIVE ||
+            activePanel == BottomPanel.COLOR_BAL_LIVE ||
+            activePanel == BottomPanel.CURVES_LIVE ||
+            activePanel == BottomPanel.BLUR_EDIT ||
+            activePanel == BottomPanel.SHARPEN_EDIT ||
+            activePanel == BottomPanel.LAYER_FX_EDIT
+        if (!isProxyPanel) {
+            vm.endProxyPreview()
         }
     }
 
@@ -1499,12 +1555,16 @@ fun StonebridgeStudioScreen(
                 }
                 Box(
                     modifier = Modifier
+                        .onSizeChanged { textBoxSize = it }
                         .offset {
-                            androidx.compose.ui.unit.IntOffset(
-                                (sx - 120f).roundToInt(),
-                                (sy - 40f).roundToInt()
-                            )
+                            val halfW = if (textBoxSize.width > 0) textBoxSize.width / 2f else 90f
+                            val halfH = if (textBoxSize.height > 0) textBoxSize.height / 2f else 24f
+                            val maxX = (viewRef.width - textBoxSize.width - 12).coerceAtLeast(12)
+                            val clampedX = (sx - halfW).roundToInt().coerceIn(12, maxX)
+                            val clampedY = (sy - halfH).roundToInt().coerceAtLeast(12)
+                            androidx.compose.ui.unit.IntOffset(clampedX, clampedY)
                         }
+                        .widthIn(max = 300.dp)
                         .border(1.5.dp, Color(0xAA4F9CFF), RoundedCornerShape(8.dp))
                         .background(Color(0x44111217), RoundedCornerShape(8.dp))
                         .padding(horizontal = 10.dp, vertical = 4.dp)
@@ -1984,7 +2044,7 @@ fun StonebridgeStudioScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
+                            .horizontalScroll(dockScrollState)
                             .padding(horizontal = 8.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -2018,7 +2078,7 @@ fun StonebridgeStudioScreen(
                             onClick = {
                                 vm.setTool(ActiveTool.NONE)
                                 val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-                                textSizePx = (docW * 0.08f).coerceIn(36f, 260f)
+                                textSizePx = (docW * 0.055f).coerceIn(24f, 180f)
                                 textNormX = 0.50f
                                 textNormY = 0.50f
                                 activePanel = BottomPanel.TEXT_EDIT
@@ -2097,7 +2157,7 @@ fun StonebridgeStudioScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
+                                .horizontalScroll(drawScrollState),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
@@ -2249,7 +2309,7 @@ fun StonebridgeStudioScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Box(modifier = Modifier.weight(1f)) {
-                                        CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 2f..250f, defaultValue = 28f) {
+                                        BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 28f) {
                                             vm.updateBrush(size = it)
                                             brushSizePreviewTick++
                                         }
@@ -2273,7 +2333,7 @@ fun StonebridgeStudioScreen(
                                 }
                             }
                         } else if (state.activeTool == ActiveTool.ERASER) {
-                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 4f..250f, defaultValue = 28f) {
+                            BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 28f) {
                                 vm.updateBrush(size = it)
                                 brushSizePreviewTick++
                             }
@@ -2286,7 +2346,7 @@ fun StonebridgeStudioScreen(
                             state.activeTool == ActiveTool.DODGE ||
                             state.activeTool == ActiveTool.BURN
                         ) {
-                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 8f..250f, defaultValue = 48f) {
+                            BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
                                 vm.updateBrush(size = it)
                                 brushSizePreviewTick++
                             }
@@ -2314,7 +2374,7 @@ fun StonebridgeStudioScreen(
                                     )
                                 }
                             }
-                            CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 8f..250f, defaultValue = 48f) {
+                            BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
                                 vm.updateBrush(size = it)
                                 brushSizePreviewTick++
                             }
@@ -2347,7 +2407,7 @@ fun StonebridgeStudioScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
+                                .horizontalScroll(selectScrollState),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
@@ -2477,7 +2537,7 @@ fun StonebridgeStudioScreen(
                             state.activeTool == ActiveTool.SELECT_BRUSH_ADD ||
                             state.activeTool == ActiveTool.SELECT_BRUSH_SUB
                         ) {
-                            CompactSliderRow("Fırça", "${state.brushSize.toInt()}px", state.brushSize, 10f..250f, defaultValue = 48f) {
+                            BrushSizeSliderRow("Fırça", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
                                 vm.updateBrush(size = it)
                             }
                         }
@@ -2570,7 +2630,7 @@ fun StonebridgeStudioScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
+                                .horizontalScroll(adjustScrollState),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
@@ -2606,7 +2666,7 @@ fun StonebridgeStudioScreen(
                             )
                             CircularDockButton(
                                 icon = Icons.Default.ColorLens,
-                                label = "Renk Dengesi",
+                                label = "Denge",
                                 onClick = {
                                     cbCyanRedVal = 0f
                                     cbMagentaGreenVal = 0f
@@ -2780,11 +2840,11 @@ fun StonebridgeStudioScreen(
                                 activePanel = BottomPanel.DOCK
                             }
                         )
-                        CompactSliderRow("Camgöbeği / Kırmızı", "${cbCyanRedVal.roundToInt()}", cbCyanRedVal, -100f..100f, defaultValue = 0f) {
+                        CompactSliderRow("Camgöbeği\nKırmızı", "${cbCyanRedVal.roundToInt()}", cbCyanRedVal, -100f..100f, defaultValue = 0f) {
                             cbCyanRedVal = it
                             vm.updateProxyAdjustment("colorBalance", """{"midtones":[${cbCyanRedVal.roundToInt()},${cbMagentaGreenVal.roundToInt()},${cbYellowBlueVal.roundToInt()}],"preserveLuminosity":true}""")
                         }
-                        CompactSliderRow("Macenta / Yeşil", "${cbMagentaGreenVal.roundToInt()}", cbMagentaGreenVal, -100f..100f, defaultValue = 0f) {
+                        CompactSliderRow("Macenta\nYeşil", "${cbMagentaGreenVal.roundToInt()}", cbMagentaGreenVal, -100f..100f, defaultValue = 0f) {
                             cbMagentaGreenVal = it
                             vm.updateProxyAdjustment("colorBalance", """{"midtones":[${cbCyanRedVal.roundToInt()},${cbMagentaGreenVal.roundToInt()},${cbYellowBlueVal.roundToInt()}],"preserveLuminosity":true}""")
                         }
@@ -2975,7 +3035,7 @@ fun StonebridgeStudioScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
+                                .horizontalScroll(cropScrollState),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
@@ -3060,7 +3120,7 @@ fun StonebridgeStudioScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
+                                .horizontalScroll(effectScrollState),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CROP_PRESETS.forEach { preset ->

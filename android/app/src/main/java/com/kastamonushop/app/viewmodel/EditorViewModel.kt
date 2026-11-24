@@ -205,27 +205,46 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    private val thumbRefreshScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun refreshLayerThumbnails() {
+        if (!thumbRefreshScheduled.compareAndSet(false, true)) return
+        paintExecutor.execute {
+            try {
+                runCatching {
+                    val layers = engine.getLayers()
+                    val out = LinkedHashMap<ULong, ImageBitmap>(layers.size)
+                    for (layer in layers) {
+                        val thumb = runCatching { engine.getLayerThumbnail(layer.id, 88u) }.getOrNull() ?: continue
+                        val w = thumb.width.toInt()
+                        val h = thumb.height.toInt()
+                        if (w > 0 && h > 0 && thumb.rgba.size >= w * h * 4) {
+                            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                            bmp.copyPixelsFromBuffer(ByteBuffer.wrap(thumb.rgba))
+                            out[layer.id] = bmp.asImageBitmap()
+                        }
+                    }
+                    _layerThumbnails.value = out
+                }
+            } finally {
+                thumbRefreshScheduled.set(false)
+            }
+        }
+    }
+
+    fun dismissCompareOriginal() {
+        if (!_uiState.value.compareOriginal) return
+        _uiState.update { it.copy(compareOriginal = false) }
         paintExecutor.execute {
             runCatching {
-                val layers = engine.getLayers()
-                val out = LinkedHashMap<ULong, ImageBitmap>(layers.size)
-                for (layer in layers) {
-                    val thumb = runCatching { engine.getLayerThumbnail(layer.id, 88u) }.getOrNull() ?: continue
-                    val w = thumb.width.toInt()
-                    val h = thumb.height.toInt()
-                    if (w > 0 && h > 0 && thumb.rgba.size >= w * h * 4) {
-                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(thumb.rgba))
-                        out[layer.id] = bmp.asImageBitmap()
-                    }
-                }
-                _layerThumbnails.value = out
+                engine.setCompareOriginal(false)
+                NativeSurfaceBridge.nativeRenderFrame()
             }
         }
     }
 
     fun setTool(tool: ActiveTool) {
+        dismissCompareOriginal()
         _uiState.update {
             it.copy(
                 activeTool = tool,
@@ -522,6 +541,7 @@ class EditorViewModel : ViewModel() {
 
     // --- 60 FPS Exact Proxy Preview Engine ("Genel Güç") ---
     fun beginLayerProxyPreview() {
+        dismissCompareOriginal()
         pendingProxyJob.set(null)
         paintExecutor.execute {
             runCatching {
@@ -539,6 +559,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun beginProxyPreview() {
+        dismissCompareOriginal()
         pendingProxyJob.set(null)
         paintExecutor.execute {
             runCatching {
@@ -1298,6 +1319,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun undo() {
+        dismissCompareOriginal()
         paintExecutor.execute {
             runCatching {
                 val info = engine.undo()
@@ -1317,6 +1339,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun redo() {
+        dismissCompareOriginal()
         paintExecutor.execute {
             runCatching {
                 val info = engine.redo()

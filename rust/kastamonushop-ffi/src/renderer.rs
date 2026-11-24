@@ -116,6 +116,8 @@ pub struct VulkanRenderer {
     doc_tex_size: (u32, u32),
     display_doc_size: (u32, u32),
     last_rendered_gen: u64,
+    last_sel_gen: u64,
+    sel_upload_buf: Vec<u8>,
 }
 
 impl VulkanRenderer {
@@ -340,6 +342,8 @@ impl VulkanRenderer {
             doc_tex_size: (0, 0),
             display_doc_size: (1, 1),
             last_rendered_gen: 0,
+            last_sel_gen: u64::MAX,
+            sel_upload_buf: Vec::new(),
         })
     }
 
@@ -471,6 +475,7 @@ impl VulkanRenderer {
         doc: &Document,
         display_size: (u32, u32),
         generation: u64,
+        sel_generation: u64,
         force_full: bool,
         dirty_rect: Option<Rect>,
         camera: ViewportCamera,
@@ -562,7 +567,10 @@ impl VulkanRenderer {
                 }
                 self.last_rendered_gen = generation;
             }
-            self.sync_selection_texture(doc);
+            if self.last_sel_gen != sel_generation {
+                self.sync_selection_texture(doc);
+                self.last_sel_gen = sel_generation;
+            }
         }
 
         self.present_cached_only(camera, preview)
@@ -630,7 +638,9 @@ impl VulkanRenderer {
             self.rebuild_blit_bind_group();
         }
 
-        let mut buf = vec![0u8; (sw as usize) * (sh as usize)];
+        let needed = (sw as usize) * (sh as usize);
+        self.sel_upload_buf.resize(needed, 0);
+        self.sel_upload_buf.fill(0);
         let sx_step = doc_w as f32 / sw as f32;
         let sy_step = doc_h as f32 / sh as f32;
         for y in 0..sh {
@@ -646,7 +656,7 @@ impl VulkanRenderer {
                 }
                 let v = sel.sample_channel(dx, dy, 0);
                 if v > 0.004 {
-                    buf[row + x as usize] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    self.sel_upload_buf[row + x as usize] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
                 }
             }
         }
@@ -658,7 +668,7 @@ impl VulkanRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &buf,
+            &self.sel_upload_buf,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(sw),

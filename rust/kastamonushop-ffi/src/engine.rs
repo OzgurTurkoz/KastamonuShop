@@ -125,6 +125,7 @@ struct ProxyPreviewSession {
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
+    pub selection_generation: u64,
     pub pending_dirty: Option<Rect>,
     pub force_full_redraw: bool,
     live_stroke: Option<ActiveLiveStroke>,
@@ -134,6 +135,7 @@ pub(crate) struct EngineCore {
     live_filter: Option<LiveFilterSession>,
     proxy_preview: Option<ProxyPreviewSession>,
     transform_hidden_layer: Option<LayerId>,
+    original_snapshot: Option<Arc<Document>>,
     compare_original: bool,
 }
 
@@ -155,9 +157,11 @@ impl EngineCore {
             }),
         );
         let _ = session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
+        let initial_snapshot = session.active().map(|ds| Arc::clone(ds.doc()));
         Self {
             session,
             render_generation: 1,
+            selection_generation: 1,
             pending_dirty: None,
             force_full_redraw: true,
             live_stroke: None,
@@ -167,6 +171,7 @@ impl EngineCore {
             live_filter: None,
             proxy_preview: None,
             transform_hidden_layer: None,
+            original_snapshot: initial_snapshot,
             compare_original: false,
         }
     }
@@ -193,12 +198,11 @@ impl EngineCore {
         let doc = self.active_document()?;
         let sz = (doc.size.width.max(1), doc.size.height.max(1));
         if self.compare_original {
-            let mut cloned = (*doc).clone();
-            let bottom_id = cloned.layers.first().map(|l| l.id);
-            for l in &mut cloned.layers {
-                l.visible = bottom_id == Some(l.id);
+            if let Some(orig) = &self.original_snapshot {
+                let orig_sz = (orig.size.width.max(1), orig.size.height.max(1));
+                return Some((Arc::clone(orig), orig_sz));
             }
-            return Some((Arc::new(cloned), sz));
+            return Some((doc, sz));
         }
         if let Some(hid) = self.transform_hidden_layer {
             let mut cloned = (*doc).clone();
@@ -208,6 +212,25 @@ impl EngineCore {
             return Some((Arc::new(cloned), sz));
         }
         Some((doc, sz))
+    }
+
+    pub fn capture_original_snapshot(&mut self) {
+        self.original_snapshot = self.session.active().map(|ds| Arc::clone(ds.doc()));
+        self.compare_original = false;
+        self.selection_generation = self.selection_generation.wrapping_add(1);
+    }
+
+    pub fn dismiss_compare(&mut self) {
+        if self.compare_original {
+            self.compare_original = false;
+            self.force_full_redraw = true;
+            self.selection_generation = self.selection_generation.wrapping_add(1);
+        }
+    }
+
+    pub fn mark_selection_dirty(&mut self) {
+        self.selection_generation = self.selection_generation.wrapping_add(1);
+        self.mark_full_dirty();
     }
 
     pub fn mark_full_dirty(&mut self) {
@@ -306,6 +329,7 @@ impl KastamonuEngine {
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
+        guard.capture_original_snapshot();
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
@@ -334,6 +358,7 @@ impl KastamonuEngine {
         if single_layer_id.is_some() {
             let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
         }
+        guard.capture_original_snapshot();
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
@@ -371,6 +396,7 @@ impl KastamonuEngine {
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
         let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
+        guard.capture_original_snapshot();
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
@@ -382,6 +408,7 @@ impl KastamonuEngine {
         guard.live_adjustment = None;
         guard.live_filter = None;
         guard.proxy_preview = None;
+        guard.dismiss_compare();
         photocraft_engine::file_cmds::place_bytes(&mut guard.session, &file_name, bytes, None, &json!({}))
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
         // Auto-rasterize placed photo into a normal editable pixel layer so brush/eraser/thumbnails work immediately
@@ -409,6 +436,7 @@ impl KastamonuEngine {
                 .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?
         };
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         let out = guard
             .session
@@ -434,6 +462,7 @@ impl KastamonuEngine {
             return Err(EngineError::InvalidParams { detail: "Metin boş olamaz".into() });
         }
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         let dpi = guard
             .session
@@ -507,6 +536,7 @@ impl KastamonuEngine {
             return self.info_from_locked(&guard);
         }
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
 
         let (prev_active, target_id, was_locked) = {
@@ -526,9 +556,9 @@ impl KastamonuEngine {
             .map(|pt| json!([pt.x as f64, pt.y as f64, pt.pressure.clamp(0.05, 1.0) as f64]))
             .collect();
         let clamped_size = if tool == "spot_heal" {
-            size.clamp(4.0, 140.0)
+            size.clamp(1.0, 140.0)
         } else {
-            size.clamp(4.0, 400.0)
+            size.clamp(1.0, 400.0)
         };
         let clamped_hard = (hardness.clamp(0.0, 1.0) * 100.0).round();
         let clamped_str = strength.clamp(5.0, 100.0);
@@ -667,6 +697,7 @@ impl KastamonuEngine {
     ) -> Result<DocumentInfo, EngineError> {
         let turns = ((quarter_turns_cw % 4) + 4) % 4;
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         guard.live_dab = None;
         guard.live_adjustment = None;
@@ -744,7 +775,8 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -766,7 +798,8 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -774,6 +807,7 @@ impl KastamonuEngine {
     /// `mode`: `"left_to_right"`, `"right_to_left"`, `"top_to_bottom"`, `"bottom_to_top"`.
     pub fn apply_photo_mirror(&self, mode: String, axis_ratio: f32) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         guard.live_dab = None;
         if guard.session.active().is_none() {
@@ -889,12 +923,210 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Low-memory O(1)-per-pixel 3-pass separable Box/Gaussian Blur that NEVER hits Android's working-memory cap.
+    /// Shared premultiplied-alpha 3-pass separable sliding-window box blur (O(1) per pixel, tiny scratch RAM).
+    /// Premultiplying RGB by alpha prevents dark/white fringe halos on transparent PNG cutouts.
+    fn box_blur_passes_inplace(data: &mut [f32], w: usize, h: usize, ch: usize, pass_r: usize, passes: usize) {
+        if pass_r == 0 || w < 2 || h < 2 || ch == 0 {
+            return;
+        }
+        let active_ch = ch.min(8);
+        let has_alpha = ch >= 4;
+        if has_alpha {
+            for px in data.chunks_exact_mut(ch) {
+                let a = px[3].clamp(0.0, 1.0);
+                px[0] *= a;
+                px[1] *= a;
+                px[2] *= a;
+            }
+        }
+        let mut line_buf = vec![0.0f32; w.max(h) * ch];
+        let mut acc = [0.0f32; 8];
+        let win = (2 * pass_r + 1) as f32;
+        let inv_win = 1.0 / win;
+
+        for _ in 0..passes {
+            for y in 0..h {
+                let row = y * w * ch;
+                for c in 0..active_ch {
+                    let first = data[row + c];
+                    acc[c] = first * (pass_r + 1) as f32;
+                    for k in 1..=pass_r {
+                        acc[c] += data[row + k.min(w - 1) * ch + c];
+                    }
+                }
+                for x in 0..w {
+                    for c in 0..active_ch {
+                        line_buf[x * ch + c] = acc[c] * inv_win;
+                    }
+                    let add_x = (x + pass_r + 1).min(w - 1);
+                    let sub_x = x.saturating_sub(pass_r);
+                    for c in 0..active_ch {
+                        acc[c] += data[row + add_x * ch + c] - data[row + sub_x * ch + c];
+                    }
+                }
+                data[row..(row + w * ch)].copy_from_slice(&line_buf[..(w * ch)]);
+            }
+
+            for x in 0..w {
+                for c in 0..active_ch {
+                    let first = data[x * ch + c];
+                    acc[c] = first * (pass_r + 1) as f32;
+                    for k in 1..=pass_r {
+                        acc[c] += data[(k.min(h - 1) * w + x) * ch + c];
+                    }
+                }
+                for y in 0..h {
+                    for c in 0..active_ch {
+                        line_buf[y * ch + c] = acc[c] * inv_win;
+                    }
+                    let add_y = (y + pass_r + 1).min(h - 1);
+                    let sub_y = y.saturating_sub(pass_r);
+                    for c in 0..active_ch {
+                        acc[c] += data[(add_y * w + x) * ch + c] - data[(sub_y * w + x) * ch + c];
+                    }
+                }
+                for y in 0..h {
+                    let idx = (y * w + x) * ch;
+                    for c in 0..active_ch {
+                        data[idx + c] = line_buf[y * ch + c];
+                    }
+                }
+            }
+        }
+
+        if has_alpha {
+            for px in data.chunks_exact_mut(ch) {
+                let a = px[3].clamp(0.0, 1.0);
+                if a > 1e-4 {
+                    let inv_a = 1.0 / a;
+                    px[0] = (px[0] * inv_a).clamp(0.0, 1.0);
+                    px[1] = (px[1] * inv_a).clamp(0.0, 1.0);
+                    px[2] = (px[2] * inv_a).clamp(0.0, 1.0);
+                } else {
+                    px[0] = 0.0;
+                    px[1] = 0.0;
+                    px[2] = 0.0;
+                }
+                px[3] = a;
+            }
+        }
+    }
+
+    fn run_blur_on_doc(doc: &mut Document, target_id: LayerId, radius_px: f32) {
+        if radius_px < 0.5 {
+            return;
+        }
+        let bounds = doc.bounds();
+        let w = doc.size.width as usize;
+        let h = doc.size.height as usize;
+        if w < 2 || h < 2 {
+            return;
+        }
+        let sel_mask: Option<Vec<f32>> = doc.selection.as_ref().and_then(|sel| {
+            if sel.content_bounds().is_empty() {
+                None
+            } else {
+                Some(sel.read_region(bounds))
+            }
+        });
+        let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+            return;
+        };
+        let LayerContent::Raster(surf) = &mut layer.content else {
+            return;
+        };
+        let ch = surf.format().channels();
+        let orig = surf.read_region(bounds);
+        if orig.len() < w * h * ch {
+            return;
+        }
+        let mut blurred = orig.clone();
+        let pass_r = (radius_px * 0.58).round().max(1.0) as usize;
+        Self::box_blur_passes_inplace(&mut blurred, w, h, ch, pass_r, 3);
+
+        if let Some(mask) = sel_mask {
+            let m_ch = (mask.len() / (w * h)).max(1);
+            for i in 0..(w * h) {
+                let m = mask[i * m_ch].clamp(0.0, 1.0);
+                if m < 0.999 {
+                    let base = i * ch;
+                    let inv_m = 1.0 - m;
+                    for c in 0..ch {
+                        blurred[base + c] = orig[base + c] * inv_m + blurred[base + c] * m;
+                    }
+                }
+            }
+        }
+        surf.write_region_par(bounds, &blurred);
+    }
+
+    fn run_sharpen_on_doc(doc: &mut Document, target_id: LayerId, amount: f32) {
+        let strength = (amount.clamp(0.0, 250.0) / 100.0) * 1.35;
+        if strength < 0.01 {
+            return;
+        }
+        let bounds = doc.bounds();
+        let w = doc.size.width as usize;
+        let h = doc.size.height as usize;
+        if w < 3 || h < 3 {
+            return;
+        }
+        let sel_mask: Option<Vec<f32>> = doc.selection.as_ref().and_then(|sel| {
+            if sel.content_bounds().is_empty() {
+                None
+            } else {
+                Some(sel.read_region(bounds))
+            }
+        });
+        let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+            return;
+        };
+        let LayerContent::Raster(surf) = &mut layer.content else {
+            return;
+        };
+        let ch = surf.format().channels();
+        let rgb_ch = ch.min(3);
+        let orig = surf.read_region(bounds);
+        if orig.len() < w * h * ch {
+            return;
+        }
+        // Resolution-invariant Unsharp Mask radius so 512px proxy and full-res match 100% identically
+        let usm_radius = ((w.max(h) as f32) * 0.0028).clamp(1.0, 8.0);
+        let pass_r = (usm_radius * 0.58).round().max(1.0) as usize;
+        let mut blurred = orig.clone();
+        Self::box_blur_passes_inplace(&mut blurred, w, h, ch, pass_r, 2);
+
+        let mut out = orig.clone();
+        if let Some(mask) = sel_mask {
+            let m_ch = (mask.len() / (w * h)).max(1);
+            for i in 0..(w * h) {
+                let m = mask[i * m_ch].clamp(0.0, 1.0);
+                if m > 0.001 {
+                    let base = i * ch;
+                    let eff = strength * m;
+                    for c in 0..rgb_ch {
+                        out[base + c] = (orig[base + c] + (orig[base + c] - blurred[base + c]) * eff).clamp(0.0, 1.0);
+                    }
+                }
+            }
+        } else {
+            for i in 0..(w * h) {
+                let base = i * ch;
+                for c in 0..rgb_ch {
+                    out[base + c] = (orig[base + c] + (orig[base + c] - blurred[base + c]) * strength).clamp(0.0, 1.0);
+                }
+            }
+        }
+        surf.write_region_par(bounds, &out);
+    }
+
+    /// Low-memory O(1)-per-pixel 3-pass separable Box/Gaussian Blur with transparency & selection-mask parity.
     pub fn apply_blur_fast(&self, radius: f32) -> Result<DocumentInfo, EngineError> {
-        let r = radius.round().clamp(1.0, 80.0) as usize;
+        let r = radius.clamp(0.0, 80.0);
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.proxy_preview = None;
+        guard.dismiss_compare();
         let target_id = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
             find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
@@ -906,85 +1138,7 @@ impl KastamonuEngine {
         guard
             .session
             .edit("Bulanıklaştırma", |doc, _| {
-                let bounds = doc.bounds();
-                let w = doc.size.width as usize;
-                let h = doc.size.height as usize;
-                if w < 2 || h < 2 {
-                    return Ok(());
-                }
-                let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
-                    return Ok(());
-                };
-                let LayerContent::Raster(surf) = &mut layer.content else {
-                    return Ok(());
-                };
-                let ch = surf.format().channels();
-                let mut data = surf.read_region(bounds);
-                if data.len() < w * h * ch {
-                    return Ok(());
-                }
-                // 3-pass separable sliding-window box blur approximates Gaussian blur with tiny O(max(w,h)) scratch RAM
-                let pass_r = ((r as f32) * 0.58).round().max(1.0) as usize;
-                let mut line_buf = vec![0.0f32; w.max(h) * ch];
-                let mut acc = [0.0f32; 8];
-                let active_ch = ch.min(8);
-
-                for _ in 0..3 {
-                    // Horizontal pass
-                    let win = (2 * pass_r + 1) as f32;
-                    for y in 0..h {
-                        let row = y * w * ch;
-                        for c in 0..active_ch {
-                            let first = data[row + c];
-                            acc[c] = first * (pass_r + 1) as f32;
-                            for k in 1..=pass_r {
-                                let xk = k.min(w - 1);
-                                acc[c] += data[row + xk * ch + c];
-                            }
-                        }
-                        for x in 0..w {
-                            for c in 0..active_ch {
-                                line_buf[x * ch + c] = acc[c] / win;
-                            }
-                            let add_x = (x + pass_r + 1).min(w - 1);
-                            let sub_x = x.saturating_sub(pass_r);
-                            for c in 0..active_ch {
-                                acc[c] += data[row + add_x * ch + c] - data[row + sub_x * ch + c];
-                            }
-                        }
-                        data[row..(row + w * ch)].copy_from_slice(&line_buf[..(w * ch)]);
-                    }
-
-                    // Vertical pass
-                    for x in 0..w {
-                        for c in 0..active_ch {
-                            let first = data[x * ch + c];
-                            acc[c] = first * (pass_r + 1) as f32;
-                            for k in 1..=pass_r {
-                                let yk = k.min(h - 1);
-                                acc[c] += data[(yk * w + x) * ch + c];
-                            }
-                        }
-                        for y in 0..h {
-                            for c in 0..active_ch {
-                                line_buf[y * ch + c] = acc[c] / win;
-                            }
-                            let add_y = (y + pass_r + 1).min(h - 1);
-                            let sub_y = y.saturating_sub(pass_r);
-                            for c in 0..active_ch {
-                                acc[c] += data[(add_y * w + x) * ch + c] - data[(sub_y * w + x) * ch + c];
-                            }
-                        }
-                        for y in 0..h {
-                            let idx = (y * w + x) * ch;
-                            for c in 0..active_ch {
-                                data[idx + c] = line_buf[y * ch + c];
-                            }
-                        }
-                    }
-                }
-
-                surf.write_region_par(bounds, &data);
+                Self::run_blur_on_doc(doc, target_id, r);
                 Ok(())
             })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -992,12 +1146,13 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Low-memory Unsharp Mask sharpen that NEVER hits Android's working-memory cap.
+    /// Low-memory resolution-invariant Unsharp Mask sharpen with transparency & selection-mask parity.
     pub fn apply_sharpen_fast(&self, amount: f32) -> Result<DocumentInfo, EngineError> {
-        let strength = (amount.clamp(0.0, 250.0) / 100.0) * 1.1;
+        let amt = amount.clamp(0.0, 250.0);
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.proxy_preview = None;
+        guard.dismiss_compare();
         let target_id = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
             find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
@@ -1009,42 +1164,7 @@ impl KastamonuEngine {
         guard
             .session
             .edit("Keskinleştirme", |doc, _| {
-                let bounds = doc.bounds();
-                let w = doc.size.width as usize;
-                let h = doc.size.height as usize;
-                if w < 3 || h < 3 {
-                    return Ok(());
-                }
-                let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
-                    return Ok(());
-                };
-                let LayerContent::Raster(surf) = &mut layer.content else {
-                    return Ok(());
-                };
-                let ch = surf.format().channels();
-                let rgb_ch = ch.min(3);
-                let orig = surf.read_region(bounds);
-                if orig.len() < w * h * ch {
-                    return Ok(());
-                }
-                let mut out = orig.clone();
-                let row_stride = w * ch;
-                for y in 1..(h - 1) {
-                    let row = y * row_stride;
-                    for x in 1..(w - 1) {
-                        let idx = row + x * ch;
-                        let left = idx - ch;
-                        let right = idx + ch;
-                        let up = idx - row_stride;
-                        let down = idx + row_stride;
-                        for c in 0..rgb_ch {
-                            let blur4 = (orig[left + c] + orig[right + c] + orig[up + c] + orig[down + c]) * 0.25;
-                            let v = orig[idx + c] + (orig[idx + c] - blur4) * strength;
-                            out[idx + c] = v.clamp(0.0, 1.0);
-                        }
-                    }
-                }
-                surf.write_region_par(bounds, &out);
+                Self::run_sharpen_on_doc(doc, target_id, amt);
                 Ok(())
             })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -1052,14 +1172,18 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Starts a 60 FPS exact-parity Proxy Preview (~512px flattened copy) so EVERY PhotoCraft
-    /// adjustment and filter previews 100% identically to `Uygula` in 1-4ms per frame.
+    /// Starts a 60 FPS exact-parity alpha- & layer-preserving Proxy Preview (~512px) so EVERY PhotoCraft
+    /// adjustment and filter preserves transparency, layers, and selection masks identically to `Uygula`.
     pub fn begin_proxy_preview(&self) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.live_dab = None;
         guard.live_clone = None;
-        let real_doc = guard.active_document().ok_or(EngineError::NoActiveDocument)?;
+        guard.dismiss_compare();
+        let (real_doc, active_id) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            (Arc::clone(ds.doc()), ds.active_layer())
+        };
         let real_w = real_doc.size.width.max(1);
         let real_h = real_doc.size.height.max(1);
         let max_proxy = 512u32;
@@ -1070,7 +1194,10 @@ impl KastamonuEngine {
         let mut ps = Session::new();
         ps.add_document((*real_doc).clone(), None);
         ps.set_active(0);
-        let _ = ps.execute("layer.flattenImage", json!({}));
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        // NOTE: NEVER call layer.flattenImage here — flattening destroys transparent backgrounds by filling solid white!
         if pw < real_w || ph < real_h {
             let _ = ps.execute(
                 "image.imageSize",
@@ -1100,12 +1227,16 @@ impl KastamonuEngine {
         };
         let cmd = format!("layer.newAdjustmentLayer.{kind}");
         let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
         let mut ps = Session::new();
         ps.add_document((*proxy.base_doc).clone(), None);
         ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
         let _ = ps.execute(&cmd, params);
         proxy.session = ps;
         guard.mark_full_dirty();
@@ -1114,88 +1245,27 @@ impl KastamonuEngine {
 
     pub fn update_proxy_blur(&self, radius: f32) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
         let mut ps = Session::new();
         ps.add_document((*proxy.base_doc).clone(), None);
         ps.set_active(0);
-        let scaled_r = (radius * proxy.scale).round().clamp(0.0, 60.0) as usize;
-        if scaled_r >= 1 {
-            let _ = ps.edit("Proxy Blur", |doc, _| {
-                let bounds = doc.bounds();
-                let w = doc.size.width as usize;
-                let h = doc.size.height as usize;
-                if w < 2 || h < 2 {
-                    return Ok(());
-                }
-                let Some(layer) = doc.layers.first_mut() else {
-                    return Ok(());
-                };
-                let LayerContent::Raster(surf) = &mut layer.content else {
-                    return Ok(());
-                };
-                let ch = surf.format().channels();
-                let mut data = surf.read_region(bounds);
-                if data.len() < w * h * ch {
-                    return Ok(());
-                }
-                let pass_r = ((scaled_r as f32) * 0.58).round().max(1.0) as usize;
-                let mut line_buf = vec![0.0f32; w.max(h) * ch];
-                let mut acc = [0.0f32; 8];
-                let active_ch = ch.min(8);
-                for _ in 0..3 {
-                    let win = (2 * pass_r + 1) as f32;
-                    for y in 0..h {
-                        let row = y * w * ch;
-                        for c in 0..active_ch {
-                            let first = data[row + c];
-                            acc[c] = first * (pass_r + 1) as f32;
-                            for k in 1..=pass_r {
-                                acc[c] += data[row + k.min(w - 1) * ch + c];
-                            }
-                        }
-                        for x in 0..w {
-                            for c in 0..active_ch {
-                                line_buf[x * ch + c] = acc[c] / win;
-                            }
-                            let add_x = (x + pass_r + 1).min(w - 1);
-                            let sub_x = x.saturating_sub(pass_r);
-                            for c in 0..active_ch {
-                                acc[c] += data[row + add_x * ch + c] - data[row + sub_x * ch + c];
-                            }
-                        }
-                        data[row..(row + w * ch)].copy_from_slice(&line_buf[..(w * ch)]);
-                    }
-                    for x in 0..w {
-                        for c in 0..active_ch {
-                            let first = data[x * ch + c];
-                            acc[c] = first * (pass_r + 1) as f32;
-                            for k in 1..=pass_r {
-                                acc[c] += data[(k.min(h - 1) * w + x) * ch + c];
-                            }
-                        }
-                        for y in 0..h {
-                            for c in 0..active_ch {
-                                line_buf[y * ch + c] = acc[c] / win;
-                            }
-                            let add_y = (y + pass_r + 1).min(h - 1);
-                            let sub_y = y.saturating_sub(pass_r);
-                            for c in 0..active_ch {
-                                acc[c] += data[(add_y * w + x) * ch + c] - data[(sub_y * w + x) * ch + c];
-                            }
-                        }
-                        for y in 0..h {
-                            let idx = (y * w + x) * ch;
-                            for c in 0..active_ch {
-                                data[idx + c] = line_buf[y * ch + c];
-                            }
-                        }
-                    }
-                }
-                surf.write_region_par(bounds, &data);
-                Ok(())
-            });
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let scaled_r = (radius.clamp(0.0, 80.0) * proxy.scale).clamp(0.0, 60.0);
+        if scaled_r >= 0.5 {
+            let target_id = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(tid) = target_id {
+                let _ = ps.edit("Proxy Blur", |doc, _| {
+                    Self::run_blur_on_doc(doc, tid, scaled_r);
+                    Ok(())
+                });
+            }
         }
         proxy.session = ps;
         guard.mark_full_dirty();
@@ -1204,48 +1274,26 @@ impl KastamonuEngine {
 
     pub fn update_proxy_sharpen(&self, amount: f32) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
         let mut ps = Session::new();
         ps.add_document((*proxy.base_doc).clone(), None);
         ps.set_active(0);
-        let strength = (amount.clamp(0.0, 250.0) / 100.0) * 1.1;
-        if strength > 0.01 {
-            let _ = ps.edit("Proxy Sharpen", |doc, _| {
-                let bounds = doc.bounds();
-                let w = doc.size.width as usize;
-                let h = doc.size.height as usize;
-                if w < 3 || h < 3 {
-                    return Ok(());
-                }
-                let Some(layer) = doc.layers.first_mut() else {
-                    return Ok(());
-                };
-                let LayerContent::Raster(surf) = &mut layer.content else {
-                    return Ok(());
-                };
-                let ch = surf.format().channels();
-                let rgb_ch = ch.min(3);
-                let orig = surf.read_region(bounds);
-                if orig.len() < w * h * ch {
-                    return Ok(());
-                }
-                let mut out = orig.clone();
-                let row_stride = w * ch;
-                for y in 1..(h - 1) {
-                    let row = y * row_stride;
-                    for x in 1..(w - 1) {
-                        let idx = row + x * ch;
-                        for c in 0..rgb_ch {
-                            let blur4 = (orig[idx - ch + c] + orig[idx + ch + c] + orig[idx - row_stride + c] + orig[idx + row_stride + c]) * 0.25;
-                            out[idx + c] = (orig[idx + c] + (orig[idx + c] - blur4) * strength).clamp(0.0, 1.0);
-                        }
-                    }
-                }
-                surf.write_region_par(bounds, &out);
-                Ok(())
-            });
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        if amount > 0.5 {
+            let target_id = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(tid) = target_id {
+                let _ = ps.edit("Proxy Sharpen", |doc, _| {
+                    Self::run_sharpen_on_doc(doc, tid, amount);
+                    Ok(())
+                });
+            }
         }
         proxy.session = ps;
         guard.mark_full_dirty();
@@ -1259,6 +1307,7 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard.live_dab = None;
         guard.live_clone = None;
+        guard.dismiss_compare();
         let (real_doc, active_id) = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
             (Arc::clone(ds.doc()), ds.active_layer())
@@ -1394,6 +1443,7 @@ impl KastamonuEngine {
         rotate_deg: f32,
     ) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         guard.live_dab = None;
         guard.live_clone = None;
@@ -1456,6 +1506,7 @@ impl KastamonuEngine {
         };
         let cmd = format!("layer.newAdjustmentLayer.{kind}");
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         guard.proxy_preview = None;
         guard
@@ -1682,6 +1733,8 @@ impl KastamonuEngine {
 
     pub fn undo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.selection_generation = guard.selection_generation.wrapping_add(1);
         guard.live_stroke = None;
         guard.live_dab = None;
         guard.live_adjustment = None;
@@ -1697,6 +1750,8 @@ impl KastamonuEngine {
 
     pub fn redo(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.selection_generation = guard.selection_generation.wrapping_add(1);
         guard.live_stroke = None;
         guard.live_dab = None;
         guard.live_adjustment = None;
@@ -1800,8 +1855,11 @@ impl KastamonuEngine {
     /// Instant Before/After compare mode: hides all layers except the original Background (zero undo steps).
     pub fn set_compare_original(&self, enabled: bool) {
         let mut guard = self.core.lock();
+        if enabled {
+            guard.proxy_preview = None;
+        }
         guard.compare_original = enabled;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
     }
 
     pub fn move_layer_up(&self) -> Result<Vec<LayerSummary>, EngineError> {
@@ -1901,7 +1959,8 @@ impl KastamonuEngine {
             .session
             .execute("select.modify.feather", json!({ "radius": radius.clamp(0.5, 100.0) as f64 }))
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         let b = guard
             .active_document()
             .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
@@ -1920,6 +1979,7 @@ impl KastamonuEngine {
         distance: f32,
     ) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         guard.proxy_preview = None;
         let is_bg = guard.session.active().is_some_and(|ds| {
@@ -1963,6 +2023,7 @@ impl KastamonuEngine {
 
     pub fn clear_layer_effects(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         let _ = guard.session.execute("layer.layerStyle.clear", json!({}));
         guard.mark_full_dirty();
@@ -2053,6 +2114,8 @@ impl KastamonuEngine {
             0.22
         } else if clamped_size > 50.0 {
             0.15
+        } else if clamped_size <= 4.0 {
+            0.25
         } else {
             0.10
         };
@@ -2091,6 +2154,7 @@ impl KastamonuEngine {
             params["mode"] = json!("clear");
         }
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         let live = LiveStroke::begin(&guard.session, &params)
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         let dmg = live.bounds();
@@ -2166,6 +2230,7 @@ impl KastamonuEngine {
         strength: f32,
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         guard.live_dab = None;
 
@@ -2180,7 +2245,7 @@ impl KastamonuEngine {
             (prev, id, locked)
         };
 
-        let clamped_size = size.clamp(4.0, 400.0);
+        let clamped_size = size.clamp(1.0, 400.0);
         let clamped_hard = (hardness.clamp(0.0, 1.0) * 100.0).round();
         let clamped_str = strength.clamp(5.0, 100.0);
         let adaptive_spacing = if clamped_size > 160.0 {
@@ -2373,7 +2438,8 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         let b = guard
             .active_document()
             .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
@@ -2422,7 +2488,8 @@ impl KastamonuEngine {
                 )
                 .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         }
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         let b = guard
             .active_document()
             .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
@@ -2459,7 +2526,8 @@ impl KastamonuEngine {
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         // Smooth tiny 1px jagged speckles for cleaner selection edges
         let _ = guard.session.execute("select.modify.smooth", json!({ "radius": 2 }));
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         let b = guard
             .active_document()
             .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
@@ -2482,7 +2550,8 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         let b = guard
             .active_document()
             .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
@@ -2514,14 +2583,15 @@ impl KastamonuEngine {
                 "select.quick",
                 json!({
                     "points": pts,
-                    "size": size.clamp(8.0, 400.0) as f64,
+                    "size": size.clamp(1.0, 400.0) as f64,
                     "mode": mode,
                     "sampleAllLayers": true,
                     "enhanceEdge": true
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         let b = guard
             .active_document()
             .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
@@ -2543,7 +2613,7 @@ impl KastamonuEngine {
         }
         let mut guard = self.core.lock();
         guard.live_stroke = None;
-        let radius = (size.clamp(6.0, 400.0) * 0.5).max(3.0);
+        let radius = (size.clamp(1.0, 400.0) * 0.5).max(0.5);
         let pad = radius.ceil() as i32 + 2;
         let label = if subtract { "Seçim Silgisi" } else { "Seçim Fırçası" };
 
@@ -2594,7 +2664,7 @@ impl KastamonuEngine {
                             let dx = (px as f32 + 0.5) - cx;
                             let dist = (dx * dx + dy * dy).sqrt();
                             if dist <= radius {
-                                let edge = ((radius - dist) * 0.5).clamp(0.0, 1.0);
+                                let edge = if radius <= 1.5 { if dist <= radius + 0.35 { 1.0 } else { 0.0 } } else { ((radius - dist) * 0.5).clamp(0.0, 1.0) };
                                 let idx = row + (px - roi.x0) as usize;
                                 if subtract {
                                     buf[idx] = (buf[idx] * (1.0 - edge)).clamp(0.0, 1.0);
@@ -2641,7 +2711,8 @@ impl KastamonuEngine {
             .session
             .execute("select.inverse", json!({}))
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         let b = guard
             .active_document()
             .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
@@ -2653,12 +2724,14 @@ impl KastamonuEngine {
     pub fn select_deselect(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         let _ = guard.session.execute("select.deselect", json!({}));
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
     pub fn clear_selection_pixels(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         let (target_id, was_locked) = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
             let active = ds.active_layer();
@@ -2693,6 +2766,7 @@ impl KastamonuEngine {
 
     pub fn fill_selection_pixels(&self, color_hex: String) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         let (target_id, was_locked) = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
             let active = ds.active_layer();
@@ -2731,6 +2805,7 @@ impl KastamonuEngine {
     /// selected object and fills the region from surrounding photo context.
     pub fn content_aware_remove(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         guard.live_dab = None;
         guard.live_clone = None;
@@ -2797,6 +2872,7 @@ impl KastamonuEngine {
         opacity: f32,
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
+        guard.dismiss_compare();
         guard.live_stroke = None;
         guard.live_dab = None;
         guard.live_clone = None;
@@ -2812,7 +2888,7 @@ impl KastamonuEngine {
             (prev, id, locked)
         };
 
-        let clamped_size = size.clamp(4.0, 400.0);
+        let clamped_size = size.clamp(1.0, 400.0);
         let clamped_hard = (hardness.clamp(0.0, 1.0) * 100.0).round();
         let clamped_op = (opacity.clamp(0.05, 1.0) * 100.0).round();
         let pt_json = json!([sample.x as f64, sample.y as f64, sample.pressure.clamp(0.05, 1.0) as f64]);
@@ -3134,5 +3210,91 @@ mod v08_automated_tests {
         eng.update_proxy_layer_effect("stroke".into(), "#FFFFFF".into(), 12.0, 100.0, 0.0)
             .expect("proxy stroke");
         eng.end_proxy_preview();
+    }
+
+    #[test]
+    fn test_v092_before_after_snapshot_survives_blur_and_auto_dismisses() {
+        let eng = test_engine();
+        let w = 64u32;
+        let h = 64u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let inside = (20..44).contains(&x) && (20..44).contains(&y);
+                rgba[i] = if inside { 230 } else { 0 };
+                rgba[i + 1] = if inside { 30 } else { 0 };
+                rgba[i + 2] = if inside { 30 } else { 0 };
+                rgba[i + 3] = if inside { 255 } else { 0 }; // Transparent background!
+            }
+        }
+        eng.open_rgba_bytes("transparent.png".into(), w, h, rgba).expect("open");
+        eng.apply_blur_fast(12.0).expect("blur");
+
+        // Enable Before/After — snapshot must still hold the untouched sharp original!
+        eng.set_compare_original(true);
+        {
+            let guard = eng.core.lock();
+            assert!(guard.compare_original);
+            let (orig_doc, _) = guard.active_document_and_display_size().expect("orig doc");
+            let LayerContent::Raster(surf) = &orig_doc.layers[0].content else { panic!("raster") };
+            let px = surf.read_region(Rect::new(2, 2, 3, 3));
+            assert!(px[3] < 0.01, "original snapshot must preserve transparent background");
+            let center = surf.read_region(Rect::new(32, 32, 33, 33));
+            assert!(center[0] > 0.85 && center[3] > 0.95, "original snapshot must preserve sharp red center");
+        }
+
+        // Starting a new edit must automatically dismiss Before/After
+        eng.begin_proxy_preview().expect("proxy");
+        {
+            let guard = eng.core.lock();
+            assert!(!guard.compare_original, "compare_original must auto-dismiss on new tool/preview");
+        }
+        eng.end_proxy_preview();
+    }
+
+    #[test]
+    fn test_v092_proxy_preserves_alpha_and_selection_masked_blur_and_1px_brush() {
+        let eng = test_engine();
+        let w = 80u32;
+        let h = 80u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let inside = (24..56).contains(&x) && (24..56).contains(&y);
+                rgba[i] = if inside { 240 } else { 0 };
+                rgba[i + 1] = 0;
+                rgba[i + 2] = 0;
+                rgba[i + 3] = if inside { 255 } else { 0 };
+            }
+        }
+        eng.open_rgba_bytes("alpha_test.png".into(), w, h, rgba).expect("open");
+
+        // Proxy preview must NOT flatten transparent background to solid white
+        eng.begin_proxy_preview().expect("begin_proxy_preview");
+        eng.update_proxy_sharpen(150.0).expect("proxy sharpen");
+        {
+            let guard = eng.core.lock();
+            let (pdoc, _) = guard.active_document_and_display_size().expect("proxy doc");
+            let LayerContent::Raster(surf) = &pdoc.layers[0].content else { panic!("raster") };
+            let corner = surf.read_region(Rect::new(1, 1, 2, 2));
+            assert!(corner[3] < 0.01, "proxy preview must keep transparent corner transparent, got alpha={}", corner[3]);
+        }
+        eng.end_proxy_preview();
+
+        // Selection-masked blur must leave unselected pixels untouched
+        let _ = eng.select_rect(0, 0, 20, 20, false, "replace".into()).expect("sel");
+        eng.apply_blur_fast(10.0).expect("masked blur");
+        let _ = eng.select_deselect().expect("desel");
+
+        // 1px brush & 1px manual selection stroke must both succeed cleanly
+        eng.set_brush(1.0, 1.0, 1.0, 1.0, "#FFFFFF".into()).expect("1px brush");
+        let pts = vec![
+            StrokeSample { x: 10.0, y: 10.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 20.0, y: 10.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        let sel1px = eng.paint_selection_stroke(pts, 1.0, false).expect("1px selection stroke");
+        assert!(sel1px.is_some(), "1px selection stroke should select pixels");
     }
 }

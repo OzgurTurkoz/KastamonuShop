@@ -12,8 +12,8 @@ android {
         applicationId = "com.kastamonushop.app"
         minSdk = 29 // Android 10+: guaranteed Vulkan 1.1 & modern SurfaceView
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.9.1"
+        versionCode = 28
+        versionName = "0.9.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
