@@ -44,9 +44,11 @@ pub struct GpuPreviewState {
     pub cb_cr: f32,
     pub cb_mg: f32,
     pub cb_yb: f32,
+    pub curve_black: f32,
     pub curve_shadow: f32,
     pub curve_mid: f32,
     pub curve_high: f32,
+    pub curve_white: f32,
     pub curve_enabled: bool,
 }
 
@@ -69,9 +71,11 @@ impl Default for GpuPreviewState {
             cb_cr: 0.0,
             cb_mg: 0.0,
             cb_yb: 0.0,
+            curve_black: 0.0,
             curve_shadow: 0.25,
             curve_mid: 0.50,
             curve_high: 0.75,
+            curve_white: 1.0,
             curve_enabled: false,
         }
     }
@@ -90,6 +94,7 @@ struct ViewportUniforms {
     color_bal: [f32; 4],
     sel_info: [f32; 4],
     curve_pts: [f32; 4],
+    curve_ends: [f32; 4],
 }
 
 pub struct VulkanRenderer {
@@ -283,6 +288,7 @@ impl VulkanRenderer {
             color_bal: [0.0, 0.0, 0.0, 0.0],
             sel_info: [0.0, 1.0, 1.0, 0.0],
             curve_pts: [0.25, 0.50, 0.75, 0.0],
+            curve_ends: [0.0, 1.0, 0.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport_uniforms"),
@@ -413,6 +419,7 @@ impl VulkanRenderer {
                 preview.curve_high,
                 if preview.curve_enabled { 1.0 } else { 0.0 },
             ],
+            curve_ends: [preview.curve_black, preview.curve_white, 0.0, 0.0],
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));

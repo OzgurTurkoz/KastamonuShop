@@ -270,7 +270,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.8.0",
+                    text = "v0.8.1",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -666,9 +666,43 @@ fun StonebridgeStudioScreen(
     var cbCyanRedVal by remember { mutableFloatStateOf(0f) }
     var cbMagentaGreenVal by remember { mutableFloatStateOf(0f) }
     var cbYellowBlueVal by remember { mutableFloatStateOf(0f) }
+    var curveBlackVal by remember { mutableFloatStateOf(0.0f) }
     var curveShadowVal by remember { mutableFloatStateOf(0.25f) }
     var curveMidVal by remember { mutableFloatStateOf(0.50f) }
     var curveHighVal by remember { mutableFloatStateOf(0.75f) }
+    var curveWhiteVal by remember { mutableFloatStateOf(1.0f) }
+    var curveOverlayExpanded by remember { mutableStateOf(false) }
+    var draggingCurveNode by remember { mutableIntStateOf(-1) }
+
+    fun evalHermiteCurve(x: Float, y0: Float, y1: Float, y2: Float, y3: Float, y4: Float): Float {
+        val xc = x.coerceIn(0f, 1f)
+        val m0 = (y1 - y0) * 4f
+        val m1 = (y2 - y0) * 2f
+        val m2 = (y3 - y1) * 2f
+        val m3 = (y4 - y2) * 2f
+        val m4 = (y4 - y3) * 4f
+        val p0: Float; val p1: Float; val t0: Float; val t1: Float; val t: Float
+        when {
+            xc >= 0.75f -> { p0 = y3; p1 = y4; t0 = m3; t1 = m4; t = (xc - 0.75f) * 4f }
+            xc >= 0.50f -> { p0 = y2; p1 = y3; t0 = m2; t1 = m3; t = (xc - 0.50f) * 4f }
+            xc >= 0.25f -> { p0 = y1; p1 = y2; t0 = m1; t1 = m2; t = (xc - 0.25f) * 4f }
+            else -> { p0 = y0; p1 = y1; t0 = m0; t1 = m1; t = xc * 4f }
+        }
+        val t2 = t * t
+        val t3 = t2 * t
+        val h00 = 2f * t3 - 3f * t2 + 1f
+        val h10 = t3 - 2f * t2 + t
+        val h01 = -2f * t3 + 3f * t2
+        val h11 = t3 - t2
+        return (h00 * p0 + h10 * (t0 * 0.25f) + h01 * p1 + h11 * (t1 * 0.25f)).coerceIn(0f, 1f)
+    }
+
+    fun pushCurveGpu(y0: Float, y1: Float, y2: Float, y3: Float, y4: Float) {
+        val active = abs(y0 - 0.0f) > 0.005f || abs(y1 - 0.25f) > 0.005f ||
+            abs(y2 - 0.50f) > 0.005f || abs(y3 - 0.75f) > 0.005f || abs(y4 - 1.0f) > 0.005f
+        NativeSurfaceBridge.nativeSetCurvePreview(y0, y1, y2, y3, y4, active)
+        NativeSurfaceBridge.nativeRenderFrame()
+    }
 
     // 4 normalized corners (TL, TR, BR, BL) in document space (0..1) for 60 FPS Perspective Crop
     var pTl by remember { mutableStateOf(Offset(0.12f, 0.12f)) }
@@ -725,14 +759,16 @@ fun StonebridgeStudioScreen(
         NativeSurfaceBridge.nativeSetPreview(0, 0.5f, false, false)
         NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
         NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
-        NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
+        curveOverlayExpanded = false
+        NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
         canvasViewRef?.fitToDocument(0)
     }
 
     fun clearAdjustGpuPreviewOnly() {
         NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
         NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
-        NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
+        curveOverlayExpanded = false
+        NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
         NativeSurfaceBridge.nativeRenderFrame()
     }
 
@@ -1098,6 +1134,121 @@ fun StonebridgeStudioScreen(
         }
 
         // 60 FPS Live Draggable Text Preview overlay
+        // Interactive 60 FPS Full-Canvas Draggable Tone Curve Overlay (toggled by tapping the mini curve box)
+        if (activePanel == BottomPanel.CURVES_LIVE && curveOverlayExpanded) {
+            val view = canvasViewRef
+            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+            if (view != null) {
+                val _tick = cameraTick
+                val (rawL, rawT) = view.docToScreen(0f, 0f)
+                val (rawR, rawB) = view.docToScreen(docW, docH)
+                val boxL = min(rawL, rawR)
+                val boxR = kotlin.math.max(rawL, rawR)
+                val boxT = min(rawT, rawB)
+                val boxB = kotlin.math.max(rawT, rawB)
+                val boxW = (boxR - boxL).coerceAtLeast(120f)
+                val boxH = (boxB - boxT).coerceAtLeast(120f)
+
+                val knotXs = floatArrayOf(0f, 0.25f, 0.50f, 0.75f, 1.0f)
+                fun knotScreen(idx: Int, yNorm: Float): Offset =
+                    Offset(boxL + knotXs[idx] * boxW, boxB - yNorm * boxH)
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(boxL, boxT, boxW, boxH) {
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    val ys = floatArrayOf(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
+                                    var bestIdx = -1
+                                    var bestDist = 110f
+                                    for (i in 0..4) {
+                                        val pt = knotScreen(i, ys[i])
+                                        val d = kotlin.math.hypot((pos.x - pt.x).toDouble(), (pos.y - pt.y).toDouble()).toFloat()
+                                        if (d < bestDist) {
+                                            bestDist = d
+                                            bestIdx = i
+                                        }
+                                    }
+                                    // If tapped directly near the curve between nodes, pick nearest X node
+                                    if (bestIdx == -1 && pos.x in (boxL - 36f)..(boxR + 36f) && pos.y in (boxT - 36f)..(boxB + 36f)) {
+                                        val nx = ((pos.x - boxL) / boxW).coerceIn(0f, 1f)
+                                        bestIdx = (nx * 4f).roundToInt().coerceIn(0, 4)
+                                    }
+                                    draggingCurveNode = bestIdx
+                                },
+                                onDragEnd = { draggingCurveNode = -1 },
+                                onDragCancel = { draggingCurveNode = -1 },
+                                onDrag = { change, _ ->
+                                    if (draggingCurveNode in 0..4) {
+                                        change.consume()
+                                        val ny = ((boxB - change.position.y) / boxH).coerceIn(0f, 1f)
+                                        when (draggingCurveNode) {
+                                            0 -> curveBlackVal = ny
+                                            1 -> curveShadowVal = ny
+                                            2 -> curveMidVal = ny
+                                            3 -> curveHighVal = ny
+                                            4 -> curveWhiteVal = ny
+                                        }
+                                        pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
+                                    }
+                                }
+                            )
+                        }
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        // Dashed outer frame over the photo
+                        drawRect(
+                            color = Color(0xBBFFFFFF),
+                            topLeft = Offset(boxL, boxT),
+                            size = Size(boxW, boxH),
+                            style = Stroke(width = 2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)))
+                        )
+                        // Subtle 4x4 grid + diagonal reference
+                        for (g in 1..3) {
+                            val t = g / 4f
+                            drawLine(Color(0x33FFFFFF), Offset(boxL + boxW * t, boxT), Offset(boxL + boxW * t, boxB), 1f)
+                            drawLine(Color(0x33FFFFFF), Offset(boxL, boxT + boxH * t), Offset(boxR, boxT + boxH * t), 1f)
+                        }
+                        drawLine(Color(0x44FFFFFF), Offset(boxL, boxB), Offset(boxR, boxT), 1.5f)
+
+                        // Smooth 64-step cubic Hermite spline curve (matches blit.wgsl 1:1!)
+                        val path = Path()
+                        val steps = 64
+                        for (i in 0..steps) {
+                            val x = i.toFloat() / steps.toFloat()
+                            val y = evalHermiteCurve(x, curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
+                            val sx = boxL + x * boxW
+                            val sy = boxB - y * boxH
+                            if (i == 0) path.moveTo(sx, sy) else path.lineTo(sx, sy)
+                        }
+                        drawPath(path, color = Color(0xCC000000), style = Stroke(width = 6f))
+                        drawPath(path, color = Color.White, style = Stroke(width = 3f))
+
+                        // 5 large draggable translucent circular handles
+                        val ys = floatArrayOf(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
+                        for (i in 0..4) {
+                            val pt = knotScreen(i, ys[i])
+                            val active = draggingCurveNode == i
+                            drawCircle(
+                                color = if (active) Color(0xAA4F9CFF) else Color(0x66FFFFFF),
+                                radius = if (active) 30f else 24f,
+                                center = pt
+                            )
+                            drawCircle(
+                                color = if (active) Color(0xFF4F9CFF) else Color.White,
+                                radius = if (active) 30f else 24f,
+                                center = pt,
+                                style = Stroke(width = 2.5f)
+                            )
+                            drawCircle(color = Color.White, radius = 5f, center = pt)
+                        }
+                    }
+                }
+            }
+        }
+
         // Interactive 60 FPS 4-Corner Perspective Crop Overlay
         if (activePanel == BottomPanel.PERSPECTIVE_CROP_EDIT) {
             val view = canvasViewRef
@@ -2218,10 +2369,13 @@ fun StonebridgeStudioScreen(
                                 icon = Icons.Default.ShowChart,
                                 label = "Eğriler",
                                 onClick = {
+                                    curveBlackVal = 0.0f
                                     curveShadowVal = 0.25f
                                     curveMidVal = 0.50f
                                     curveHighVal = 0.75f
-                                    NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
+                                    curveWhiteVal = 1.0f
+                                    curveOverlayExpanded = false
+        NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
                                     activePanel = BottomPanel.CURVES_LIVE
                                 }
                             )
@@ -2402,36 +2556,37 @@ fun StonebridgeStudioScreen(
                 }
 
                 BottomPanel.CURVES_LIVE -> {
-                    fun pushCurve(sy: Float, my: Float, hy: Float) {
-                        val active = abs(sy - 0.25f) > 0.005f || abs(my - 0.50f) > 0.005f || abs(hy - 0.75f) > 0.005f
-                        NativeSurfaceBridge.nativeSetCurvePreview(sy, my, hy, active)
-                        NativeSurfaceBridge.nativeRenderFrame()
-                    }
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         BottomEditorHeader(
                             title = "Eğriler (Curves)",
-                            subtitle = "60 FPS canlı ton eğrisi — Uygula ile katman ekle",
+                            subtitle = if (curveOverlayExpanded) "Fotoğraf üzerindeki 5 noktayı parmağınla sürükle" else "Elle kontrol için sol kutucuğa dokun",
                             applyLabel = "Uygula",
                             onClose = {
+                                curveOverlayExpanded = false
                                 clearAdjustGpuPreviewOnly()
                                 activePanel = BottomPanel.ADJUST_MENU
                             },
                             onApply = {
-                                val isDefault = abs(curveShadowVal - 0.25f) < 0.01f &&
+                                curveOverlayExpanded = false
+                                val isDefault = abs(curveBlackVal - 0.0f) < 0.01f &&
+                                    abs(curveShadowVal - 0.25f) < 0.01f &&
                                     abs(curveMidVal - 0.50f) < 0.01f &&
-                                    abs(curveHighVal - 0.75f) < 0.01f
+                                    abs(curveHighVal - 0.75f) < 0.01f &&
+                                    abs(curveWhiteVal - 1.0f) < 0.01f
                                 if (isDefault) {
                                     clearAdjustGpuPreviewOnly()
                                 } else {
+                                    val by = (curveBlackVal * 255f).roundToInt().coerceIn(0, 255)
                                     val sy = (curveShadowVal * 255f).roundToInt().coerceIn(0, 255)
                                     val my = (curveMidVal * 255f).roundToInt().coerceIn(0, 255)
                                     val hy = (curveHighVal * 255f).roundToInt().coerceIn(0, 255)
+                                    val wy = (curveWhiteVal * 255f).roundToInt().coerceIn(0, 255)
                                     vm.applyAdjustmentOnce(
                                         "curves",
-                                        """{"points":[[0,0],[64,$sy],[128,$my],[192,$hy],[255,255]]}""",
+                                        """{"points":[[0,$by],[64,$sy],[128,$my],[192,$hy],[255,$wy]]}""",
                                         "Eğriler"
                                     )
                                 }
@@ -2443,39 +2598,55 @@ fun StonebridgeStudioScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Live Mini Tone Curve Graph
+                            // Tappable Mini Tone Curve Graph -> opens/closes full-canvas manual curve overlay!
                             Box(
                                 modifier = Modifier
-                                    .size(74.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFF141720))
-                                    .border(1.dp, Color(0xFF343A4C), RoundedCornerShape(8.dp))
+                                    .size(76.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (curveOverlayExpanded) Color(0xFF1D2B45) else Color(0xFF141720))
+                                    .border(
+                                        width = if (curveOverlayExpanded) 2.dp else 1.dp,
+                                        color = if (curveOverlayExpanded) MaterialTheme.colorScheme.primary else Color(0xFF454D66),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable {
+                                        curveOverlayExpanded = !curveOverlayExpanded
+                                        if (curveOverlayExpanded) {
+                                            canvasViewRef?.fitToDocument(0)
+                                        }
+                                    }
                             ) {
-                                Canvas(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                                Canvas(modifier = Modifier.fillMaxSize().padding(6.dp)) {
                                     val w = size.width
                                     val h = size.height
-                                    // Grid + diagonal reference
                                     drawLine(Color(0x33FFFFFF), Offset(w * 0.5f, 0f), Offset(w * 0.5f, h), 1f)
                                     drawLine(Color(0x33FFFFFF), Offset(0f, h * 0.5f), Offset(w, h * 0.5f), 1f)
                                     drawLine(Color(0x44FFFFFF), Offset(0f, h), Offset(w, 0f), 1f)
-                                    val pts = listOf(
-                                        Offset(0f, h),
-                                        Offset(w * 0.25f, h * (1f - curveShadowVal)),
-                                        Offset(w * 0.50f, h * (1f - curveMidVal)),
-                                        Offset(w * 0.75f, h * (1f - curveHighVal)),
-                                        Offset(w, 0f)
-                                    )
-                                    val path = Path().apply {
-                                        moveTo(pts[0].x, pts[0].y)
-                                        for (i in 1 until pts.size) {
-                                            lineTo(pts[i].x, pts[i].y)
-                                        }
+                                    val path = Path()
+                                    val steps = 24
+                                    for (i in 0..steps) {
+                                        val x = i.toFloat() / steps.toFloat()
+                                        val y = evalHermiteCurve(x, curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
+                                        val sx = x * w
+                                        val sy = h * (1f - y)
+                                        if (i == 0) path.moveTo(sx, sy) else path.lineTo(sx, sy)
                                     }
                                     drawPath(path, Color(0xFF4F9CFF), style = Stroke(width = 2.5f))
-                                    pts.subList(1, 4).forEach { pt ->
-                                        drawCircle(Color.White, radius = 3.5f, center = pt)
+                                    val ys = floatArrayOf(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
+                                    val xs = floatArrayOf(0f, 0.25f, 0.50f, 0.75f, 1.0f)
+                                    for (i in 0..4) {
+                                        drawCircle(Color.White, radius = 3f, center = Offset(w * xs[i], h * (1f - ys[i])))
                                     }
                                 }
+                                Icon(
+                                    imageVector = if (curveOverlayExpanded) Icons.Default.CloseFullscreen else Icons.Default.OpenInFull,
+                                    contentDescription = "Manuel Eğri",
+                                    tint = if (curveOverlayExpanded) MaterialTheme.colorScheme.primary else Color(0xCCFFFFFF),
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(4.dp)
+                                        .size(13.dp)
+                                )
                             }
                             // 1-tap Pro Presets
                             Column(
@@ -2486,16 +2657,16 @@ fun StonebridgeStudioScreen(
                                     FilterChip(
                                         selected = false,
                                         onClick = {
-                                            curveShadowVal = 0.17f; curveMidVal = 0.50f; curveHighVal = 0.84f
-                                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                                            curveBlackVal = 0.0f; curveShadowVal = 0.17f; curveMidVal = 0.50f; curveHighVal = 0.84f; curveWhiteVal = 1.0f
+                                            pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
                                         },
                                         label = { Text("S-Kontrast", fontSize = 10.sp) }
                                     )
                                     FilterChip(
                                         selected = false,
                                         onClick = {
-                                            curveShadowVal = 0.34f; curveMidVal = 0.52f; curveHighVal = 0.72f
-                                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                                            curveBlackVal = 0.08f; curveShadowVal = 0.34f; curveMidVal = 0.52f; curveHighVal = 0.72f; curveWhiteVal = 0.94f
+                                            pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
                                         },
                                         label = { Text("Mat Film", fontSize = 10.sp) }
                                     )
@@ -2504,33 +2675,33 @@ fun StonebridgeStudioScreen(
                                     FilterChip(
                                         selected = false,
                                         onClick = {
-                                            curveShadowVal = 0.33f; curveMidVal = 0.62f; curveHighVal = 0.85f
-                                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                                            curveBlackVal = 0.0f; curveShadowVal = 0.33f; curveMidVal = 0.62f; curveHighVal = 0.85f; curveWhiteVal = 1.0f
+                                            pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
                                         },
                                         label = { Text("Aydınlık", fontSize = 10.sp) }
                                     )
                                     FilterChip(
                                         selected = false,
                                         onClick = {
-                                            curveShadowVal = 0.25f; curveMidVal = 0.50f; curveHighVal = 0.75f
-                                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                                            curveBlackVal = 0.0f; curveShadowVal = 0.25f; curveMidVal = 0.50f; curveHighVal = 0.75f; curveWhiteVal = 1.0f
+                                            pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
                                         },
                                         label = { Text("Sıfırla", fontSize = 10.sp) }
                                     )
                                 }
                             }
                         }
-                        CompactSliderRow("Gölgeler", "${(curveShadowVal * 255f).roundToInt()}", curveShadowVal, 0.02f..0.60f, defaultValue = 0.25f) {
+                        CompactSliderRow("Gölgeler", "${(curveShadowVal * 255f).roundToInt()}", curveShadowVal, 0.0f..1.0f, defaultValue = 0.25f) {
                             curveShadowVal = it
-                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                            pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
                         }
-                        CompactSliderRow("Orta Ton", "${(curveMidVal * 255f).roundToInt()}", curveMidVal, 0.15f..0.85f, defaultValue = 0.50f) {
+                        CompactSliderRow("Orta Ton", "${(curveMidVal * 255f).roundToInt()}", curveMidVal, 0.0f..1.0f, defaultValue = 0.50f) {
                             curveMidVal = it
-                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                            pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
                         }
-                        CompactSliderRow("Parlaklar", "${(curveHighVal * 255f).roundToInt()}", curveHighVal, 0.40f..0.98f, defaultValue = 0.75f) {
+                        CompactSliderRow("Parlaklar", "${(curveHighVal * 255f).roundToInt()}", curveHighVal, 0.0f..1.0f, defaultValue = 0.75f) {
                             curveHighVal = it
-                            pushCurve(curveShadowVal, curveMidVal, curveHighVal)
+                            pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
                         }
                     }
                 }

@@ -22,6 +22,8 @@ struct ViewportUniforms {
     sel_info: vec4<f32>,
     // [shadow_y (0..1), mid_y (0..1), high_y (0..1), enabled (0/1)]
     curve_pts: vec4<f32>,
+    // [black_y (0..1), white_y (0..1), 0.0, 0.0]
+    curve_ends: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -41,17 +43,17 @@ struct VertexOut {
     @location(0) screen_px: vec2<f32>,
 };
 
-fn eval_curve_1d(x: f32, y1: f32, y2: f32, y3: f32) -> f32 {
+fn eval_curve_1d(x: f32, y0: f32, y1: f32, y2: f32, y3: f32, y4: f32) -> f32 {
     let xc = clamp(x, 0.0, 1.0);
-    // Piecewise smooth Hermite interpolation over 5 knots: (0,0), (0.25,y1), (0.5,y2), (0.75,y3), (1,1)
-    let m0 = (y1 - 0.0) * 4.0;
-    let m1 = (y2 - 0.0) * 2.0;
+    // Piecewise smooth Hermite interpolation over 5 knots: (0,y0), (0.25,y1), (0.5,y2), (0.75,y3), (1,y4)
+    let m0 = (y1 - y0) * 4.0;
+    let m1 = (y2 - y0) * 2.0;
     let m2 = (y3 - y1) * 2.0;
-    let m3 = (1.0 - y2) * 2.0;
-    let m4 = (1.0 - y3) * 4.0;
-    var p0 = 0.0; var p1 = y1; var t0 = m0; var t1 = m1; var t = xc * 4.0;
+    let m3 = (y4 - y2) * 2.0;
+    let m4 = (y4 - y3) * 4.0;
+    var p0 = y0; var p1 = y1; var t0 = m0; var t1 = m1; var t = xc * 4.0;
     if (xc >= 0.75) {
-        p0 = y3; p1 = 1.0; t0 = m3; t1 = m4; t = (xc - 0.75) * 4.0;
+        p0 = y3; p1 = y4; t0 = m3; t1 = m4; t = (xc - 0.75) * 4.0;
     } else if (xc >= 0.50) {
         p0 = y2; p1 = y3; t0 = m2; t1 = m3; t = (xc - 0.50) * 4.0;
     } else if (xc >= 0.25) {
@@ -225,12 +227,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         col = clamp(col + shift * mid_w, vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
-    // 60 FPS GPU Tone Curve (Curves) preview
+    // 60 FPS GPU Tone Curve (Curves) preview (all 5 knots draggable)
     if (u.curve_pts.w > 0.5) {
         col = vec3<f32>(
-            eval_curve_1d(col.r, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z),
-            eval_curve_1d(col.g, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z),
-            eval_curve_1d(col.b, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z)
+            eval_curve_1d(col.r, u.curve_ends.x, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z, u.curve_ends.y),
+            eval_curve_1d(col.g, u.curve_ends.x, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z, u.curve_ends.y),
+            eval_curve_1d(col.b, u.curve_ends.x, u.curve_pts.x, u.curve_pts.y, u.curve_pts.z, u.curve_ends.y)
         );
     }
 

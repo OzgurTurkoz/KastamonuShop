@@ -834,14 +834,14 @@ class EditorViewModel : ViewModel() {
                 val layers = engine.getLayers()
                 NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
                 NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
-                NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
+                NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus("$labelTr uygulandı", 2000L)
             }.onFailure { err ->
                 NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
                 NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
-                NativeSurfaceBridge.nativeSetCurvePreview(0.25f, 0.50f, 0.75f, false)
+                NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("$labelTr hatası: ${err.message}", 3500L)
             }
