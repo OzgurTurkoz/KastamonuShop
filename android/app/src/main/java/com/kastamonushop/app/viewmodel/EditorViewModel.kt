@@ -382,7 +382,8 @@ class EditorViewModel : ViewModel() {
             val s = _uiState.value
             runCatching {
                 val b = engine.selectMagicWand(pt.first.toInt(), pt.second.toInt(), nextTol.toInt().toUInt(), s.wandContiguous, "replace")
-                _uiState.update { it.copy(selectionBounds = b) }
+                val info = engine.getDocumentInfo()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = b) }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }
@@ -423,7 +424,8 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 val b = engine.selectSubject()
-                _uiState.update { it.copy(selectionBounds = b, isBusy = false) }
+                val info = engine.getDocumentInfo()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = b, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus(if (b != null) "Ana konu otomatik seçildi" else "Konu bulunamadı — Akıllı Fırça veya Elle Ekle kullanabilirsin", 2400L)
             }.onFailure { err ->
@@ -450,7 +452,8 @@ class EditorViewModel : ViewModel() {
                     ActiveTool.SELECT_BRUSH_SUB -> engine.paintSelectionStroke(samples, size, true)
                     else -> return@runCatching
                 }
-                _uiState.update { it.copy(selectionBounds = b, isBusy = false) }
+                val info = engine.getDocumentInfo()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = b, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
@@ -465,7 +468,8 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 val b = engine.selectRect(x, y, width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt(), s.selectEllipse, mode)
-                _uiState.update { it.copy(selectionBounds = b) }
+                val infoSel = runCatching { engine.getDocumentInfo() }.getOrNull()
+                _uiState.update { it.copy(docInfo = infoSel ?: it.docInfo, selectionBounds = b) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus(if (s.selectEllipse) "Elips alan seçildi" else "Dikdörtgen alan seçildi", 1600L)
             }.onFailure { err ->
@@ -506,7 +510,8 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 val b = engine.selectInverse()
-                _uiState.update { it.copy(selectionBounds = b) }
+                val infoSel = runCatching { engine.getDocumentInfo() }.getOrNull()
+                _uiState.update { it.copy(docInfo = infoSel ?: it.docInfo, selectionBounds = b) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus("Seçim tersine çevrildi", 1800L)
             }.onFailure { err ->
@@ -1925,7 +1930,8 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 val b = engine.featherSelection(radius)
-                _uiState.update { it.copy(selectionBounds = b) }
+                val infoSel = runCatching { engine.getDocumentInfo() }.getOrNull()
+                _uiState.update { it.copy(docInfo = infoSel ?: it.docInfo, selectionBounds = b) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus("Seçim kenarı yumuşatıldı (${radius.toInt()}px)", 1600L)
             }.onFailure { err ->

@@ -3642,7 +3642,8 @@ impl KastamonuEngine {
             })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
 
-        guard.mark_full_dirty();
+        guard.dismiss_compare();
+        guard.mark_selection_dirty();
         let b = guard
             .active_document()
             .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
@@ -4454,5 +4455,24 @@ mod v08_automated_tests {
         assert_eq!(patch.rgba.len(), 48 * 48 * 4);
         let center_idx = (24 * 48 + 24) * 4;
         assert!(patch.rgba[center_idx] > 230 && patch.rgba[center_idx + 1] < 40, "center pixel must match red photo");
+    }
+
+    #[test]
+    fn test_v100_manual_selection_increments_selection_generation_and_undo() {
+        let eng = test_engine();
+        eng.new_document("v100_sel".into(), 128, 128).expect("new_document");
+        let gen_before = eng.core.lock().selection_generation;
+        let pts = vec![
+            StrokeSample { x: 30.0, y: 30.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 70.0, y: 70.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        let added = eng.paint_selection_stroke(pts, 20.0, false).expect("paint add");
+        assert!(added.is_some(), "manual add selection must produce bounds");
+        let gen_after = eng.core.lock().selection_generation;
+        assert!(gen_after > gen_before, "paint_selection_stroke must bump selection_generation for GPU texture upload");
+        let info = eng.get_document_info().expect("info");
+        assert!(info.can_undo, "manual selection stroke must be undoable");
+        let _ = eng.undo().expect("undo manual selection");
+        assert!(eng.get_selection_bounds().is_none(), "undo must cleanly remove manual selection");
     }
 }

@@ -285,7 +285,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.9.9.5",
+                    text = "v1.0.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -708,6 +708,12 @@ fun StonebridgeStudioScreen(
 
     var rulerPreview by remember { mutableStateOf<RulerLinePreview?>(null) }
     var retouchCursor by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var retouchTrailPoints by remember { mutableStateOf<List<Offset>>(emptyList()) }
+    var cropNormL by remember { mutableFloatStateOf(0.05f) }
+    var cropNormT by remember { mutableFloatStateOf(0.05f) }
+    var cropNormR by remember { mutableFloatStateOf(0.95f) }
+    var cropNormB by remember { mutableFloatStateOf(0.95f) }
+    var cropFreeMode by remember { mutableStateOf(false) }
     var selectPreviewRect by remember { mutableStateOf<FloatArray?>(null) }
     var levelsBlackVal by remember { mutableFloatStateOf(0f) }
     var levelsGammaVal by remember { mutableFloatStateOf(1f) }
@@ -1126,7 +1132,10 @@ fun StonebridgeStudioScreen(
                     onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
                     onStrokeEnd = { vm.finishLiveStroke() },
                     onStrokeCancel = { vm.cancelLiveStroke() },
-                    onRetouchPreview = { pos -> retouchCursor = pos },
+                    onRetouchPreview = { pos ->
+                        retouchCursor = pos
+                        retouchTrailPoints = if (pos == null) emptyList() else (retouchTrailPoints + Offset(pos.first, pos.second))
+                    },
                     onRetouchCommit = { samples ->
                         val t = vm.uiState.value.activeTool
                         if (t == ActiveTool.SELECT_QUICK || t == ActiveTool.SELECT_BRUSH_ADD || t == ActiveTool.SELECT_BRUSH_SUB) {
@@ -1299,22 +1308,141 @@ fun StonebridgeStudioScreen(
         }
 
         // Live Crop Frame Overlay when in CROP_RATIO_EDIT
-        if (activePanel == BottomPanel.CROP_RATIO_EDIT) {
-            val docW = state.docInfo?.width?.toInt() ?: 2048
-            val docH = state.docInfo?.height?.toInt() ?: 2048
-            val rect = remember(docW, docH, selectedCropPreset, cropScale) {
-                computeCropRect(docW, docH, selectedCropPreset.ratio, cropScale)
+        // v1.0.0 60 FPS Live Stroke Ribbon Trail for Leke (Spot Heal) & Selection Brushes
+        if (retouchTrailPoints.isNotEmpty()) {
+            val viewRef = canvasViewRef
+            val trailColor = when (state.activeTool) {
+                ActiveTool.SPOT_HEAL -> Color(0x88FF5A5F)
+                ActiveTool.SELECT_BRUSH_SUB -> Color(0x88FF4D4F)
+                ActiveTool.SELECT_QUICK -> Color(0x882ED573)
+                else -> Color(0x884F9CFF)
             }
+            val strokeW = ((state.brushSize * (viewRef?.getCurrentZoom() ?: 1f)).coerceIn(4f, 360f))
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                if (retouchTrailPoints.size == 1) {
+                    drawCircle(trailColor, radius = strokeW * 0.5f, center = retouchTrailPoints[0])
+                } else {
+                    val p = Path().apply {
+                        moveTo(retouchTrailPoints[0].x, retouchTrailPoints[0].y)
+                        for (i in 1 until retouchTrailPoints.size) {
+                            lineTo(retouchTrailPoints[i].x, retouchTrailPoints[i].y)
+                        }
+                    }
+                    drawPath(
+                        path = p,
+                        color = trailColor,
+                        style = Stroke(
+                            width = strokeW,
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                            join = androidx.compose.ui.graphics.StrokeJoin.Round
+                        )
+                    )
+                }
+            }
+        }
+
+        // v1.0.0 Interactive 4-Corner Draggable & Movable Normal Crop Overlay
+        if (activePanel == BottomPanel.CROP_RATIO_EDIT) {
+            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
             val viewRef = canvasViewRef
             val tick = cameraTick
             if (viewRef != null && tick >= 0) {
-                val (sx0, sy0) = viewRef.docToScreen(rect[0].toFloat(), rect[1].toFloat())
-                val (sx1, sy1) = viewRef.docToScreen((rect[0] + rect[2]).toFloat(), (rect[1] + rect[3]).toFloat())
+                val (sx0, sy0) = viewRef.docToScreen(docW * cropNormL, docH * cropNormT)
+                val (sx1, sy1) = viewRef.docToScreen(docW * cropNormR, docH * cropNormB)
                 val left = min(sx0, sx1)
                 val top = min(sy0, sy1)
                 val boxW = abs(sx1 - sx0)
                 val boxH = abs(sy1 - sy0)
-                Canvas(modifier = Modifier.fillMaxSize()) {
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(docW, docH, cropFreeMode, selectedCropPreset, tick) {
+                            var dragTarget = -1 // 0=TL, 1=TR, 2=BR, 3=BL, 4=MOVE
+                            var lastDocX = 0f
+                            var lastDocY = 0f
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    val corners = listOf(
+                                        Offset(left, top),
+                                        Offset(left + boxW, top),
+                                        Offset(left + boxW, top + boxH),
+                                        Offset(left, top + boxH)
+                                    )
+                                    var bestIdx = -1
+                                    var bestDist = 76f
+                                    corners.forEachIndexed { i, c ->
+                                        val d = kotlin.math.hypot((pos.x - c.x).toDouble(), (pos.y - c.y).toDouble()).toFloat()
+                                        if (d < bestDist) {
+                                            bestDist = d
+                                            bestIdx = i
+                                        }
+                                    }
+                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
+                                    lastDocX = dx
+                                    lastDocY = dy
+                                    dragTarget = when {
+                                        bestIdx in 0..3 -> bestIdx
+                                        pos.x in left..(left + boxW) && pos.y in top..(top + boxH) -> 4
+                                        else -> -1
+                                    }
+                                },
+                                onDragEnd = { dragTarget = -1; loupeScreenPos = null; vm.hideLoupe() },
+                                onDragCancel = { dragTarget = -1; loupeScreenPos = null; vm.hideLoupe() },
+                                onDrag = { change, _ ->
+                                    if (dragTarget == -1) return@detectDragGestures
+                                    change.consume()
+                                    val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
+                                    val minFrac = 0.08f
+                                    val lockedRatio = if (cropFreeMode) null else (selectedCropPreset.ratio ?: (docW / docH.coerceAtLeast(1f)))
+                                    if (dragTarget == 4) {
+                                        val dnx = (dx - lastDocX) / docW
+                                        val dny = (dy - lastDocY) / docH
+                                        lastDocX = dx
+                                        lastDocY = dy
+                                        val wFrac = cropNormR - cropNormL
+                                        val hFrac = cropNormB - cropNormT
+                                        val nl = (cropNormL + dnx).coerceIn(0f, (1f - wFrac).coerceAtLeast(0f))
+                                        val nt = (cropNormT + dny).coerceIn(0f, (1f - hFrac).coerceAtLeast(0f))
+                                        cropNormL = nl; cropNormR = nl + wFrac
+                                        cropNormT = nt; cropNormB = nt + hFrac
+                                    } else {
+                                        val nx = (dx / docW).coerceIn(0f, 1f)
+                                        val ny = (dy / docH).coerceIn(0f, 1f)
+                                        if (lockedRatio == null) {
+                                            when (dragTarget) {
+                                                0 -> { cropNormL = nx.coerceAtMost(cropNormR - minFrac); cropNormT = ny.coerceAtMost(cropNormB - minFrac) }
+                                                1 -> { cropNormR = nx.coerceAtLeast(cropNormL + minFrac); cropNormT = ny.coerceAtMost(cropNormB - minFrac) }
+                                                2 -> { cropNormR = nx.coerceAtLeast(cropNormL + minFrac); cropNormB = ny.coerceAtLeast(cropNormT + minFrac) }
+                                                3 -> { cropNormL = nx.coerceAtMost(cropNormR - minFrac); cropNormB = ny.coerceAtLeast(cropNormT + minFrac) }
+                                            }
+                                        } else {
+                                            // Keep exact aspect ratio anchored at the opposite corner
+                                            val anchorX = if (dragTarget == 0 || dragTarget == 3) cropNormR * docW else cropNormL * docW
+                                            val anchorY = if (dragTarget == 0 || dragTarget == 1) cropNormB * docH else cropNormT * docH
+                                            val rawW = abs(dx - anchorX).coerceAtLeast(docW * minFrac)
+                                            val rawH = (rawW / lockedRatio).coerceAtLeast(docH * minFrac)
+                                            val maxW = if (dragTarget == 0 || dragTarget == 3) anchorX else (docW - anchorX)
+                                            val maxH = if (dragTarget == 0 || dragTarget == 1) anchorY else (docH - anchorY)
+                                            val scaleFit = min(1f, min(maxW / rawW.coerceAtLeast(1f), maxH / rawH.coerceAtLeast(1f)))
+                                            val fw = (rawW * scaleFit) / docW
+                                            val fh = (rawH * scaleFit) / docH
+                                            when (dragTarget) {
+                                                0 -> { cropNormL = (cropNormR - fw).coerceIn(0f, 1f); cropNormT = (cropNormB - fh).coerceIn(0f, 1f) }
+                                                1 -> { cropNormR = (cropNormL + fw).coerceIn(0f, 1f); cropNormT = (cropNormB - fh).coerceIn(0f, 1f) }
+                                                2 -> { cropNormR = (cropNormL + fw).coerceIn(0f, 1f); cropNormB = (cropNormT + fh).coerceIn(0f, 1f) }
+                                                3 -> { cropNormL = (cropNormR - fw).coerceIn(0f, 1f); cropNormB = (cropNormT + fh).coerceIn(0f, 1f) }
+                                            }
+                                        }
+                                        loupeScreenPos = change.position
+                                        val cxDoc = if (dragTarget == 0 || dragTarget == 3) cropNormL * docW else cropNormR * docW
+                                        val cyDoc = if (dragTarget == 0 || dragTarget == 1) cropNormT * docH else cropNormB * docH
+                                        vm.updateLoupe(cxDoc, cyDoc, (min(docW, docH) * 0.035f).coerceIn(16f, 64f))
+                                    }
+                                }
+                            )
+                        }
+                ) {
                     val dim = Color(0x88000000)
                     drawRect(dim, topLeft = Offset(0f, 0f), size = Size(size.width, top.coerceAtLeast(0f)))
                     drawRect(dim, topLeft = Offset(0f, top + boxH), size = Size(size.width, (size.height - top - boxH).coerceAtLeast(0f)))
@@ -1327,12 +1455,17 @@ fun StonebridgeStudioScreen(
                         drawLine(gridColor, Offset(gx, top), Offset(gx, top + boxH), strokeWidth = 1.5f)
                         drawLine(gridColor, Offset(left, gy), Offset(left + boxW, gy), strokeWidth = 1.5f)
                     }
-                    drawRect(
-                        color = Color.White,
-                        topLeft = Offset(left, top),
-                        size = Size(boxW, boxH),
-                        style = Stroke(width = 3.5f)
-                    )
+                    drawRect(color = Color.White, topLeft = Offset(left, top), size = Size(boxW, boxH), style = Stroke(width = 3.5f))
+                    // 4 crisp interactive corner handles
+                    listOf(
+                        Offset(left, top),
+                        Offset(left + boxW, top),
+                        Offset(left + boxW, top + boxH),
+                        Offset(left, top + boxH)
+                    ).forEach { corner ->
+                        drawCircle(Color.White, radius = 15f, center = corner)
+                        drawCircle(Color(0xFF4F9CFF), radius = 10f, center = corner)
+                    }
                 }
             }
         }
@@ -3535,6 +3668,15 @@ fun StonebridgeStudioScreen(
                                     if (hasPendingTransform) clearGpuPreview()
                                     canvasViewRef?.fitToDocument(0)
                                     cropScale = 0.90f
+                                    cropFreeMode = false
+                                    cropScale = 0.90f
+                                    val dw0 = state.docInfo?.width?.toInt() ?: 2048
+                                    val dh0 = state.docInfo?.height?.toInt() ?: 2048
+                                    val r0 = computeCropRect(dw0, dh0, selectedCropPreset.ratio, 0.90f)
+                                    cropNormL = (r0[0].toFloat() / dw0).coerceIn(0f, 1f)
+                                    cropNormT = (r0[1].toFloat() / dh0).coerceIn(0f, 1f)
+                                    cropNormR = ((r0[0] + r0[2]).toFloat() / dw0).coerceIn(0f, 1f)
+                                    cropNormB = ((r0[1] + r0[3]).toFloat() / dh0).coerceIn(0f, 1f)
                                     activePanel = BottomPanel.CROP_RATIO_EDIT
                                 }
                             )
@@ -3592,18 +3734,28 @@ fun StonebridgeStudioScreen(
                 BottomPanel.CROP_RATIO_EDIT -> {
                     val docW = state.docInfo?.width?.toInt() ?: 2048
                     val docH = state.docInfo?.height?.toInt() ?: 2048
-                    val rect = computeCropRect(docW, docH, selectedCropPreset.ratio, cropScale)
+                    val cropX = (cropNormL * docW).roundToInt().coerceIn(0, (docW - 4).coerceAtLeast(0))
+                    val cropY = (cropNormT * docH).roundToInt().coerceIn(0, (docH - 4).coerceAtLeast(0))
+                    val cropW = ((cropNormR - cropNormL) * docW).roundToInt().coerceIn(4, (docW - cropX).coerceAtLeast(4))
+                    val cropH = ((cropNormB - cropNormT) * docH).roundToInt().coerceIn(4, (docH - cropY).coerceAtLeast(4))
+                    val syncFromPreset = { ratio: Float?, sc: Float ->
+                        val r = computeCropRect(docW, docH, ratio, sc)
+                        cropNormL = (r[0].toFloat() / docW).coerceIn(0f, 1f)
+                        cropNormT = (r[1].toFloat() / docH).coerceIn(0f, 1f)
+                        cropNormR = ((r[0] + r[2]).toFloat() / docW).coerceIn(0f, 1f)
+                        cropNormB = ((r[1] + r[3]).toFloat() / docH).coerceIn(0f, 1f)
+                    }
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         BottomEditorHeader(
-                            title = "Kırp (${rect[2]}×${rect[3]})",
-                            subtitle = "Oran seçip çerçeveyi ayarla, sonra Uygula de",
+                            title = "Kırp (${cropW}×${cropH})",
+                            subtitle = "4 köşeden boyutlandır veya içinden tutup taşı",
                             applyLabel = "Uygula",
                             onClose = { activePanel = BottomPanel.CROP_MENU },
                             onApply = {
-                                vm.cropCanvas(rect[0], rect[1], rect[2], rect[3])
+                                vm.cropCanvas(cropX, cropY, cropW, cropH)
                                 activePanel = BottomPanel.DOCK
                             }
                         )
@@ -3613,16 +3765,26 @@ fun StonebridgeStudioScreen(
                                 .horizontalScroll(effectScrollState),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            FilterChip(
+                                selected = cropFreeMode,
+                                onClick = { cropFreeMode = true },
+                                label = { Text("Serbest", fontSize = 11.sp) }
+                            )
                             CROP_PRESETS.forEach { preset ->
                                 FilterChip(
-                                    selected = preset == selectedCropPreset,
-                                    onClick = { selectedCropPreset = preset },
+                                    selected = !cropFreeMode && preset == selectedCropPreset,
+                                    onClick = {
+                                        cropFreeMode = false
+                                        selectedCropPreset = preset
+                                        syncFromPreset(preset.ratio, cropScale)
+                                    },
                                     label = { Text(preset.label, fontSize = 11.sp) }
                                 )
                             }
                         }
                         CompactSliderRow("Alan", "%${(cropScale * 100).roundToInt()}", cropScale, 0.40f..1.0f, defaultValue = 1.0f) {
                             cropScale = it
+                            syncFromPreset(if (cropFreeMode) null else selectedCropPreset.ratio, it)
                         }
                     }
                 }
