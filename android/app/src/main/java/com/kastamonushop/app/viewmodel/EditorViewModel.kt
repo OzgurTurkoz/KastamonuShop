@@ -123,6 +123,13 @@ class EditorViewModel : ViewModel() {
         data class Adjust(val kind: String, val paramsJson: String) : ProxyJob()
         data class Blur(val radius: Float) : ProxyJob()
         data class Sharpen(val amount: Float) : ProxyJob()
+        data class LayerFx(
+            val kind: String,
+            val colorHex: String,
+            val size: Float,
+            val opacity: Float,
+            val distance: Float
+        ) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -514,6 +521,23 @@ class EditorViewModel : ViewModel() {
     }
 
     // --- 60 FPS Exact Proxy Preview Engine ("Genel Güç") ---
+    fun beginLayerProxyPreview() {
+        pendingProxyJob.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.beginLayerProxyPreview()
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun updateProxyLayerEffect(kind: String, colorHex: String, size: Float, opacity: Float, distance: Float) {
+        pendingProxyJob.set(ProxyJob.LayerFx(kind, colorHex, size, opacity, distance))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
     fun beginProxyPreview() {
         pendingProxyJob.set(null)
         paintExecutor.execute {
@@ -559,6 +583,7 @@ class EditorViewModel : ViewModel() {
                     is ProxyJob.Adjust -> engine.updateProxyAdjustment(job.kind, job.paramsJson)
                     is ProxyJob.Blur -> engine.updateProxyBlur(job.radius)
                     is ProxyJob.Sharpen -> engine.updateProxySharpen(job.amount)
+                    is ProxyJob.LayerFx -> engine.updateProxyLayerEffect(job.kind, job.colorHex, job.size, job.opacity, job.distance)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }

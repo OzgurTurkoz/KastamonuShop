@@ -275,7 +275,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.9.0",
+                    text = "v0.9.1",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -793,7 +793,7 @@ fun StonebridgeStudioScreen(
             BottomPanel.DOCK -> 112f
             BottomPanel.CURVES_LIVE -> 340f
             BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE -> 250f
-            BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT, BottomPanel.MIRROR_EDIT, BottomPanel.LAYER_TRANSFORM -> 240f
+            BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT, BottomPanel.MIRROR_EDIT, BottomPanel.LAYER_TRANSFORM, BottomPanel.LAYER_FX_EDIT -> 250f
             BottomPanel.PERSPECTIVE_CROP_EDIT, BottomPanel.CROP_RATIO_EDIT, BottomPanel.TEXT_EDIT -> 220f
             else -> 190f
         }
@@ -881,6 +881,7 @@ fun StonebridgeStudioScreen(
                 }
                 BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> activePanel = BottomPanel.CROP_MENU
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); activePanel = BottomPanel.DOCK }
+                BottomPanel.LAYER_FX_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.DOCK }
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
@@ -908,6 +909,7 @@ fun StonebridgeStudioScreen(
                 BottomPanel.BLUR_EDIT,
                 BottomPanel.SHARPEN_EDIT,
                 BottomPanel.LAYER_TRANSFORM,
+                BottomPanel.LAYER_FX_EDIT,
                 BottomPanel.DOCK -> fitToSafeArea(pendingQuarterTurns, activePanel)
                 else -> Unit
             }
@@ -1766,6 +1768,8 @@ fun StonebridgeStudioScreen(
                                 showLayers = false
                                 vm.setTool(ActiveTool.NONE)
                                 showFxFineTune = false
+                                vm.beginLayerProxyPreview()
+                                vm.updateProxyLayerEffect(fxKind, fxColorHex, fxSizeVal, fxOpacityVal, fxDistanceVal)
                                 activePanel = BottomPanel.LAYER_FX_EDIT
                             },
                             modifier = Modifier.size(34.dp)
@@ -3351,15 +3355,21 @@ fun StonebridgeStudioScreen(
 
                 BottomPanel.LAYER_FX_EDIT -> {
                     val activeName = state.layers.firstOrNull { it.isActive }?.name ?: "Katman"
+                    fun pushFxLive() {
+                        vm.updateProxyLayerEffect(fxKind, fxColorHex, fxSizeVal, fxOpacityVal, fxDistanceVal)
+                    }
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         BottomEditorHeader(
                             title = "Katman Efektleri (fx): $activeName",
-                            subtitle = "Metin, kesilmiş nesne veya çizime tahribatsız efekt ekle",
+                            subtitle = "60 FPS canlı önizleme — beğenirsen Uygula de",
                             applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.DOCK },
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.DOCK
+                            },
                             onApply = {
                                 vm.applyLayerEffect(fxKind, fxColorHex, fxSizeVal, fxOpacityVal, fxDistanceVal)
                                 activePanel = BottomPanel.DOCK
@@ -3384,6 +3394,7 @@ fun StonebridgeStudioScreen(
                                         if (id == "dropShadow") fxColorHex = "#000000"
                                         else if (id == "stroke") fxColorHex = "#FFFFFF"
                                         else if (id == "outerGlow") fxColorHex = "#4F9CFF"
+                                        pushFxLive()
                                     },
                                     label = { Text(lbl, fontSize = 11.sp) }
                                 )
@@ -3394,14 +3405,18 @@ fun StonebridgeStudioScreen(
                                 label = { Text(if (showFxFineTune) "İnce ▲" else "İnce ▼", fontSize = 11.sp) }
                             )
                             OutlinedButton(
-                                onClick = { vm.clearLayerEffects() },
+                                onClick = {
+                                    vm.endProxyPreview()
+                                    vm.clearLayerEffects()
+                                    activePanel = BottomPanel.DOCK
+                                },
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                                 modifier = Modifier.height(32.dp)
                             ) {
                                 Text("Temizle", fontSize = 10.sp)
                             }
                         }
-                        // Temel: Renk + Boyut
+                        // Temel: Renk + Boyut (60 FPS live preview!)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -3419,22 +3434,28 @@ fun StonebridgeStudioScreen(
                                             color = if (fxColorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
                                             shape = CircleShape
                                         )
-                                        .clickable { fxColorHex = hex }
+                                        .clickable {
+                                            fxColorHex = hex
+                                            pushFxLive()
+                                        }
                                 )
                             }
                         }
                         if (fxKind != "colorOverlay") {
                             CompactSliderRow("Boyut", "${fxSizeVal.roundToInt()}px", fxSizeVal, 1f..80f, defaultValue = 16f) {
                                 fxSizeVal = it
+                                pushFxLive()
                             }
                         }
                         if (showFxFineTune) {
                             CompactSliderRow("Opaklık", "%${fxOpacityVal.roundToInt()}", fxOpacityVal, 5f..100f, defaultValue = 75f) {
                                 fxOpacityVal = it
+                                pushFxLive()
                             }
                             if (fxKind == "dropShadow") {
                                 CompactSliderRow("Uzaklık", "${fxDistanceVal.roundToInt()}px", fxDistanceVal, 0f..80f, defaultValue = 12f) {
                                     fxDistanceVal = it
+                                    pushFxLive()
                                 }
                             }
                         }

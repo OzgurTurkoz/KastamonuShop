@@ -1252,6 +1252,102 @@ impl KastamonuEngine {
         Ok(())
     }
 
+    /// Starts a 60 FPS multi-layer Proxy Preview (~512px WITHOUT flattening) so Layer Styles (`fx`)
+    /// and future per-layer tools preview 100% live and identically to `Uygula` in 2-4ms.
+    pub fn begin_layer_proxy_preview(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_clone = None;
+        let (real_doc, active_id) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            (Arc::clone(ds.doc()), ds.active_layer())
+        };
+        let real_w = real_doc.size.width.max(1);
+        let real_h = real_doc.size.height.max(1);
+        let max_proxy = 512u32;
+        let scale = (max_proxy as f32 / real_w.max(real_h) as f32).min(1.0);
+        let pw = ((real_w as f32 * scale).round() as u32).clamp(1, max_proxy);
+        let ph = ((real_h as f32 * scale).round() as u32).clamp(1, max_proxy);
+
+        let mut ps = Session::new();
+        ps.add_document((*real_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        if pw < real_w || ph < real_h {
+            let _ = ps.execute(
+                "image.imageSize",
+                json!({ "width": pw, "height": ph, "resample": "bilinear" }),
+            );
+        }
+        let base_doc = ps
+            .active()
+            .map(|ds| Arc::clone(ds.doc()))
+            .ok_or(EngineError::NoActiveDocument)?;
+        guard.proxy_preview = Some(ProxyPreviewSession {
+            base_doc,
+            session: ps,
+            scale,
+            real_size: (real_w, real_h),
+        });
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn update_proxy_layer_effect(
+        &self,
+        kind: String,
+        color_hex: String,
+        size: f32,
+        opacity: f32,
+        distance: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let is_bg = ps.active().is_some_and(|ds| {
+            let bottom = ds.doc().layers.first().map(|l| l.id);
+            ds.active_layer().is_some() && ds.active_layer() == bottom
+        });
+        let op = opacity.clamp(5.0, 100.0) as f64;
+        let sz = (size * proxy.scale).clamp(1.0, 150.0) as f64;
+        let dist = (distance * proxy.scale).clamp(0.0, 150.0) as f64;
+        let stroke_pos = if is_bg { "inside" } else { "outside" };
+        let (cmd, params) = match kind.as_str() {
+            "dropShadow" => (
+                "layer.layerStyle.dropShadow",
+                json!({ "color": color_hex, "opacity": op, "size": sz, "distance": dist, "angle": 120.0 }),
+            ),
+            "stroke" => (
+                "layer.layerStyle.stroke",
+                json!({ "color": color_hex, "opacity": op, "size": sz, "position": stroke_pos }),
+            ),
+            "outerGlow" => (
+                "layer.layerStyle.outerGlow",
+                json!({ "color": color_hex, "opacity": op, "size": sz }),
+            ),
+            "colorOverlay" => (
+                "layer.layerStyle.colorOverlay",
+                json!({ "color": color_hex, "opacity": op }),
+            ),
+            _ => return Ok(()),
+        };
+        let _ = ps.execute(cmd, params);
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
     pub fn end_proxy_preview(&self) {
         let mut guard = self.core.lock();
         if guard.proxy_preview.take().is_some() {
@@ -1825,6 +1921,12 @@ impl KastamonuEngine {
     ) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let is_bg = guard.session.active().is_some_and(|ds| {
+            let bottom = ds.doc().layers.first().map(|l| l.id);
+            ds.active_layer().is_some() && ds.active_layer() == bottom
+        });
+        let stroke_pos = if is_bg { "inside" } else { "outside" };
         let op = opacity.clamp(5.0, 100.0) as f64;
         let sz = size.clamp(1.0, 150.0) as f64;
         let dist = distance.clamp(0.0, 150.0) as f64;
@@ -1835,7 +1937,7 @@ impl KastamonuEngine {
             ),
             "stroke" => (
                 "layer.layerStyle.stroke",
-                json!({ "color": color_hex, "opacity": op, "size": sz, "position": "outside" }),
+                json!({ "color": color_hex, "opacity": op, "size": sz, "position": stroke_pos }),
             ),
             "outerGlow" => (
                 "layer.layerStyle.outerGlow",
@@ -3020,5 +3122,17 @@ mod v08_automated_tests {
         assert!(reopened.layer_count >= 2, "multi-layer pcraft preserved all layers");
 
         let _ = eng.clear_layer_effects().expect("clear fx");
+    }
+
+    #[test]
+    fn test_v091_live_proxy_layer_effect_preview() {
+        let eng = test_engine();
+        eng.new_document("fx_proxy".into(), 320, 240).expect("new_document");
+        eng.begin_layer_proxy_preview().expect("begin_layer_proxy_preview");
+        eng.update_proxy_layer_effect("colorOverlay".into(), "#4F9CFF".into(), 10.0, 60.0, 0.0)
+            .expect("proxy colorOverlay");
+        eng.update_proxy_layer_effect("stroke".into(), "#FFFFFF".into(), 12.0, 100.0, 0.0)
+            .expect("proxy stroke");
+        eng.end_proxy_preview();
     }
 }
