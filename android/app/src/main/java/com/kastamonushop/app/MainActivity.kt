@@ -106,7 +106,10 @@ private enum class BottomPanel {
     EFFECT_MENU,
     MIRROR_EDIT,
     LAYER_TRANSFORM,
-    LAYER_FX_EDIT
+    LAYER_FX_EDIT,
+    CAMERA_LIGHT_LIVE,
+    GRADIENT_EDIT,
+    SHAPE_EDIT
 }
 
 private data class BlendModeOption(
@@ -276,7 +279,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.9.2",
+                    text = "v0.9.5",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -787,6 +790,39 @@ fun StonebridgeStudioScreen(
     val cropScrollState = rememberScrollState()
     val effectScrollState = rememberScrollState()
     var textBoxSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    // v0.9.5 Camera Light (PhotoCraft native filter.cameraRaw) state
+    var camExposureVal by remember { mutableFloatStateOf(0f) }
+    var camShadowsVal by remember { mutableFloatStateOf(0f) }
+    var camHighlightsVal by remember { mutableFloatStateOf(0f) }
+    var camVibranceVal by remember { mutableFloatStateOf(0f) }
+    var camTempVal by remember { mutableFloatStateOf(0f) }
+    var camTintVal by remember { mutableFloatStateOf(0f) }
+    var camClarityVal by remember { mutableFloatStateOf(0f) }
+    var camDehazeVal by remember { mutableFloatStateOf(0f) }
+    var showCamFineTune by remember { mutableStateOf(false) }
+
+    // v0.9.5 Live Gradient Fill (gradient.fill.create) state
+    var gradFromNormX by remember { mutableFloatStateOf(0.20f) }
+    var gradFromNormY by remember { mutableFloatStateOf(0.20f) }
+    var gradToNormX by remember { mutableFloatStateOf(0.80f) }
+    var gradToNormY by remember { mutableFloatStateOf(0.80f) }
+    var gradStyle by remember { mutableStateOf("linear") }
+    var gradStartHex by remember { mutableStateOf("#4F9CFF") }
+    var gradEndHex by remember { mutableStateOf("#FF4D4F") }
+    var gradOpacity by remember { mutableFloatStateOf(85f) }
+
+    // v0.9.5 Native Vector Shape (shape.create) state
+    var shapeKind by remember { mutableStateOf("roundedRect") }
+    var shapeX0Norm by remember { mutableFloatStateOf(0.25f) }
+    var shapeY0Norm by remember { mutableFloatStateOf(0.25f) }
+    var shapeX1Norm by remember { mutableFloatStateOf(0.75f) }
+    var shapeY1Norm by remember { mutableFloatStateOf(0.75f) }
+    var shapeFillHex by remember { mutableStateOf("#4F9CFF") }
+    var shapeStrokeHex by remember { mutableStateOf("#FFFFFF") }
+    var shapeStrokeWidth by remember { mutableFloatStateOf(6f) }
+    var shapeCornerRadius by remember { mutableFloatStateOf(24f) }
+    var shapeSides by remember { mutableIntStateOf(6) }
+    var showShapeFineTune by remember { mutableStateOf(false) }
     var textDraft by remember { mutableStateOf("StonebridgeCraft") }
     var textNormX by remember { mutableFloatStateOf(0.50f) }
     var textNormY by remember { mutableFloatStateOf(0.50f) }
@@ -919,7 +955,8 @@ fun StonebridgeStudioScreen(
                 }
                 BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> activePanel = BottomPanel.CROP_MENU
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); activePanel = BottomPanel.DOCK }
-                BottomPanel.LAYER_FX_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.DOCK }
+                BottomPanel.LAYER_FX_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.DOCK }
+                BottomPanel.CAMERA_LIGHT_LIVE -> { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU }
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
@@ -944,7 +981,10 @@ fun StonebridgeStudioScreen(
             activePanel == BottomPanel.CURVES_LIVE ||
             activePanel == BottomPanel.BLUR_EDIT ||
             activePanel == BottomPanel.SHARPEN_EDIT ||
-            activePanel == BottomPanel.LAYER_FX_EDIT
+            activePanel == BottomPanel.LAYER_FX_EDIT ||
+            activePanel == BottomPanel.CAMERA_LIGHT_LIVE ||
+            activePanel == BottomPanel.GRADIENT_EDIT ||
+            activePanel == BottomPanel.SHAPE_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -965,6 +1005,9 @@ fun StonebridgeStudioScreen(
                 BottomPanel.SHARPEN_EDIT,
                 BottomPanel.LAYER_TRANSFORM,
                 BottomPanel.LAYER_FX_EDIT,
+                BottomPanel.CAMERA_LIGHT_LIVE,
+                BottomPanel.GRADIENT_EDIT,
+                BottomPanel.SHAPE_EDIT,
                 BottomPanel.DOCK -> fitToSafeArea(pendingQuarterTurns, activePanel)
                 else -> Unit
             }
@@ -1579,6 +1622,124 @@ fun StonebridgeStudioScreen(
             }
         }
 
+        // v0.9.5 Interactive On-Canvas Gradient Start/End Drag Overlay (60 FPS Live Proxy)
+        if (activePanel == BottomPanel.GRADIENT_EDIT) {
+            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+            val viewRef = canvasViewRef
+            val tick = cameraTick
+            if (viewRef != null && tick >= 0) {
+                val (ax, ay) = viewRef.docToScreen(docW * gradFromNormX, docH * gradFromNormY)
+                val (bx, by) = viewRef.docToScreen(docW * gradToNormX, docH * gradToNormY)
+                val startCol = remember(gradStartHex) { runCatching { Color(AndroidColor.parseColor(gradStartHex)) }.getOrDefault(Color(0xFF4F9CFF)) }
+                val endCol = remember(gradEndHex) { runCatching { Color(AndroidColor.parseColor(gradEndHex)) }.getOrDefault(Color(0xFFFF4D4F)) }
+                androidx.compose.foundation.Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(docW, docH, gradStyle, gradStartHex, gradEndHex, gradOpacity) {
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    val dA = kotlin.math.hypot(pos.x - ax, pos.y - ay)
+                                    val dB = kotlin.math.hypot(pos.x - bx, pos.y - by)
+                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
+                                    if (dA > 70f && dB > 70f) {
+                                        gradFromNormX = (dx / docW).coerceIn(0f, 1f)
+                                        gradFromNormY = (dy / docH).coerceIn(0f, 1f)
+                                        gradToNormX = gradFromNormX
+                                        gradToNormY = gradFromNormY
+                                    }
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val p = change.position
+                                    val (dx, dy) = viewRef.screenToDoc(p.x, p.y)
+                                    val nx = (dx / docW).coerceIn(0f, 1f)
+                                    val ny = (dy / docH).coerceIn(0f, 1f)
+                                    val (curAx, curAy) = viewRef.docToScreen(docW * gradFromNormX, docH * gradFromNormY)
+                                    val (curBx, curBy) = viewRef.docToScreen(docW * gradToNormX, docH * gradToNormY)
+                                    if (kotlin.math.hypot(p.x - curAx, p.y - curAy) < kotlin.math.hypot(p.x - curBx, p.y - curBy)) {
+                                        gradFromNormX = nx
+                                        gradFromNormY = ny
+                                    } else {
+                                        gradToNormX = nx
+                                        gradToNormY = ny
+                                    }
+                                    vm.updateProxyGradient(
+                                        docW * gradFromNormX, docH * gradFromNormY,
+                                        docW * gradToNormX, docH * gradToNormY,
+                                        gradStyle, gradStartHex, gradEndHex, gradOpacity
+                                    )
+                                }
+                            )
+                        }
+                ) {
+                    drawLine(Color.White.copy(alpha = 0.85f), Offset(ax, ay), Offset(bx, by), strokeWidth = 3f)
+                    drawCircle(Color.White, radius = 16f, center = Offset(ax, ay))
+                    drawCircle(startCol, radius = 12f, center = Offset(ax, ay))
+                    drawCircle(Color.White, radius = 16f, center = Offset(bx, by))
+                    drawCircle(endCol, radius = 12f, center = Offset(bx, by))
+                }
+            }
+        }
+
+        // v0.9.5 Interactive On-Canvas Vector Shape Draw/Resize Overlay (60 FPS Live Proxy)
+        if (activePanel == BottomPanel.SHAPE_EDIT) {
+            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+            val viewRef = canvasViewRef
+            val tick = cameraTick
+            if (viewRef != null && tick >= 0) {
+                val (sx0, sy0) = viewRef.docToScreen(docW * shapeX0Norm, docH * shapeY0Norm)
+                val (sx1, sy1) = viewRef.docToScreen(docW * shapeX1Norm, docH * shapeY1Norm)
+                androidx.compose.foundation.Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(docW, docH, shapeKind, shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides) {
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
+                                    shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
+                                    shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
+                                    shapeX1Norm = (shapeX0Norm + 0.04f).coerceAtMost(1f)
+                                    shapeY1Norm = (shapeY0Norm + 0.04f).coerceAtMost(1f)
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
+                                    shapeX1Norm = (dx / docW).coerceIn(0f, 1f)
+                                    shapeY1Norm = (dy / docH).coerceIn(0f, 1f)
+                                    vm.updateProxyShape(
+                                        shapeKind,
+                                        docW * shapeX0Norm, docH * shapeY0Norm,
+                                        docW * shapeX1Norm, docH * shapeY1Norm,
+                                        shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
+                                    )
+                                }
+                            )
+                        }
+                ) {
+                    val lx = min(sx0, sx1)
+                    val ty = min(sy0, sy1)
+                    val rw = abs(sx1 - sx0).coerceAtLeast(4f)
+                    val rh = abs(sy1 - sy0).coerceAtLeast(4f)
+                    if (shapeKind == "line") {
+                        drawLine(Color(0xCC4F9CFF), Offset(sx0, sy0), Offset(sx1, sy1), strokeWidth = 2.5f)
+                    } else {
+                        drawRect(
+                            color = Color(0xCC4F9CFF),
+                            topLeft = Offset(lx, ty),
+                            size = androidx.compose.ui.geometry.Size(rw, rh),
+                            style = Stroke(width = 2f)
+                        )
+                    }
+                    drawCircle(Color.White, radius = 10f, center = Offset(sx0, sy0))
+                    drawCircle(Color(0xFF4F9CFF), radius = 6f, center = Offset(sx0, sy0))
+                    drawCircle(Color.White, radius = 10f, center = Offset(sx1, sy1))
+                    drawCircle(Color(0xFF4F9CFF), radius = 6f, center = Offset(sx1, sy1))
+                }
+            }
+        }
+
         // Exit Save Confirmation Dialog ("Bu fotoğrafı kaydetmek istiyor musun?")
         if (showExitSaveDialog) {
             AlertDialog(
@@ -2081,6 +2242,44 @@ fun StonebridgeStudioScreen(
                                 textNormX = 0.50f
                                 textNormY = 0.50f
                                 activePanel = BottomPanel.TEXT_EDIT
+                            }
+                        )
+                        CircularDockButton(
+                            icon = Icons.Default.Gradient,
+                            label = "Degrade",
+                            onClick = {
+                                vm.setTool(ActiveTool.NONE)
+                                val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                                val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+                                gradFromNormX = 0.20f; gradFromNormY = 0.20f
+                                gradToNormX = 0.80f; gradToNormY = 0.80f
+                                vm.beginProxyPreview()
+                                vm.updateProxyGradient(
+                                    docW * gradFromNormX, docH * gradFromNormY,
+                                    docW * gradToNormX, docH * gradToNormY,
+                                    gradStyle, gradStartHex, gradEndHex, gradOpacity
+                                )
+                                activePanel = BottomPanel.GRADIENT_EDIT
+                            }
+                        )
+                        CircularDockButton(
+                            icon = Icons.Default.Category,
+                            label = "Şekil",
+                            onClick = {
+                                vm.setTool(ActiveTool.NONE)
+                                val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                                val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+                                shapeX0Norm = 0.25f; shapeY0Norm = 0.25f
+                                shapeX1Norm = 0.75f; shapeY1Norm = 0.75f
+                                showShapeFineTune = false
+                                vm.beginProxyPreview()
+                                vm.updateProxyShape(
+                                    shapeKind,
+                                    docW * shapeX0Norm, docH * shapeY0Norm,
+                                    docW * shapeX1Norm, docH * shapeY1Norm,
+                                    shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
+                                )
+                                activePanel = BottomPanel.SHAPE_EDIT
                             }
                         )
                         CircularDockButton(
@@ -2633,6 +2832,17 @@ fun StonebridgeStudioScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
+                                icon = Icons.Default.WbSunny,
+                                label = "Kamera",
+                                onClick = {
+                                    camExposureVal = 0f; camShadowsVal = 0f; camHighlightsVal = 0f; camVibranceVal = 0f
+                                    camTempVal = 0f; camTintVal = 0f; camClarityVal = 0f; camDehazeVal = 0f
+                                    showCamFineTune = false
+                                    vm.beginProxyPreview()
+                                    activePanel = BottomPanel.CAMERA_LIGHT_LIVE
+                                }
+                            )
+                            CircularDockButton(
                                 icon = Icons.Default.Brightness6,
                                 label = "Işık",
                                 onClick = {
@@ -2688,6 +2898,269 @@ fun StonebridgeStudioScreen(
                                     activePanel = BottomPanel.CURVES_LIVE
                                 }
                             )
+                        }
+                    }
+                }
+
+                BottomPanel.CAMERA_LIGHT_LIVE -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        val pushCamProxy = {
+                            vm.updateProxyCameraLight(
+                                camExposureVal, camShadowsVal, camHighlightsVal, camVibranceVal,
+                                camTempVal, camTintVal, camClarityVal, camDehazeVal
+                            )
+                        }
+                        BottomEditorHeader(
+                            title = "Kamera Işık (RAW)",
+                            subtitle = "60 FPS canlı önizleme — Uygula ile kalıcı işle",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                clearAdjustGpuPreviewOnly()
+                                activePanel = BottomPanel.ADJUST_MENU
+                            },
+                            onApply = {
+                                val isNeutral = abs(camExposureVal) < 0.02f &&
+                                    camShadowsVal.roundToInt() == 0 && camHighlightsVal.roundToInt() == 0 &&
+                                    camVibranceVal.roundToInt() == 0 && camTempVal.roundToInt() == 0 &&
+                                    camTintVal.roundToInt() == 0 && camClarityVal.roundToInt() == 0 &&
+                                    camDehazeVal.roundToInt() == 0
+                                if (isNeutral) {
+                                    clearAdjustGpuPreviewOnly()
+                                } else {
+                                    vm.applyCameraLight(
+                                        camExposureVal, camShadowsVal, camHighlightsVal, camVibranceVal,
+                                        camTempVal, camTintVal, camClarityVal, camDehazeVal
+                                    )
+                                }
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Pozlama", String.format(java.util.Locale.US, "%+.2f", camExposureVal), camExposureVal, -2.5f..2.5f, defaultValue = 0f) {
+                            camExposureVal = it; pushCamProxy()
+                        }
+                        CompactSliderRow("Gölgeler", "${camShadowsVal.roundToInt()}", camShadowsVal, -100f..100f, defaultValue = 0f) {
+                            camShadowsVal = it; pushCamProxy()
+                        }
+                        CompactSliderRow("Parlaklar", "${camHighlightsVal.roundToInt()}", camHighlightsVal, -100f..100f, defaultValue = 0f) {
+                            camHighlightsVal = it; pushCamProxy()
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                CompactSliderRow("Canlılık", "${camVibranceVal.roundToInt()}", camVibranceVal, -100f..100f, defaultValue = 0f) {
+                                    camVibranceVal = it; pushCamProxy()
+                                }
+                            }
+                            FilterChip(
+                                selected = showCamFineTune,
+                                onClick = { showCamFineTune = !showCamFineTune },
+                                label = { Text(if (showCamFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp) }
+                            )
+                        }
+                        if (showCamFineTune) {
+                            CompactSliderRow("Sıcaklık", "${camTempVal.roundToInt()}", camTempVal, -100f..100f, defaultValue = 0f) {
+                                camTempVal = it; pushCamProxy()
+                            }
+                            CompactSliderRow("Netlik", "${camClarityVal.roundToInt()}", camClarityVal, -100f..100f, defaultValue = 0f) {
+                                camClarityVal = it; pushCamProxy()
+                            }
+                            CompactSliderRow("Sis Gider", "${camDehazeVal.roundToInt()}", camDehazeVal, -100f..100f, defaultValue = 0f) {
+                                camDehazeVal = it; pushCamProxy()
+                            }
+                            CompactSliderRow("Renk Tonu", "${camTintVal.roundToInt()}", camTintVal, -100f..100f, defaultValue = 0f) {
+                                camTintVal = it; pushCamProxy()
+                            }
+                        }
+                    }
+                }
+
+                BottomPanel.GRADIENT_EDIT -> {
+                    val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                    val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+                    val pushGradProxy = {
+                        vm.updateProxyGradient(
+                            docW * gradFromNormX, docH * gradFromNormY,
+                            docW * gradToNormX, docH * gradToNormY,
+                            gradStyle, gradStartHex, gradEndHex, gradOpacity
+                        )
+                    }
+                    val gradSwatches = listOf("#4F9CFF", "#FF4D4F", "#FAAD14", "#52C41A", "#A855F7", "#FFFFFF", "#000000")
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Degrade Katmanı",
+                            subtitle = "Tuvalde sürükleyerek yönü ayarla — 60 FPS canlı önizleme",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.DOCK
+                            },
+                            onApply = {
+                                vm.applyGradientFill(
+                                    docW * gradFromNormX, docH * gradFromNormY,
+                                    docW * gradToNormX, docH * gradToNormY,
+                                    gradStyle, gradStartHex, gradEndHex, gradOpacity
+                                )
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("linear" to "Doğrusal", "radial" to "Dairesel", "reflected" to "Yansımalı", "diamond" to "Elmas").forEach { (st, lbl) ->
+                                FilterChip(
+                                    selected = gradStyle == st,
+                                    onClick = { gradStyle = st; pushGradProxy() },
+                                    label = { Text(lbl, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("Başlangıç", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(62.dp))
+                            gradSwatches.forEach { hex ->
+                                val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(c)
+                                        .border(if (gradStartHex == hex) 2.dp else 1.dp, if (gradStartHex == hex) Color.White else Color(0xFF444858), CircleShape)
+                                        .clickable { gradStartHex = hex; pushGradProxy() }
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("Bitiş", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(62.dp))
+                            gradSwatches.forEach { hex ->
+                                val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(c)
+                                        .border(if (gradEndHex == hex) 2.dp else 1.dp, if (gradEndHex == hex) Color.White else Color(0xFF444858), CircleShape)
+                                        .clickable { gradEndHex = hex; pushGradProxy() }
+                                )
+                            }
+                        }
+                        CompactSliderRow("Opaklık", "%${gradOpacity.roundToInt()}", gradOpacity, 10f..100f, defaultValue = 85f) {
+                            gradOpacity = it; pushGradProxy()
+                        }
+                    }
+                }
+
+                BottomPanel.SHAPE_EDIT -> {
+                    val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                    val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+                    val pushShapeProxy = {
+                        vm.updateProxyShape(
+                            shapeKind,
+                            docW * shapeX0Norm, docH * shapeY0Norm,
+                            docW * shapeX1Norm, docH * shapeY1Norm,
+                            shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
+                        )
+                    }
+                    val shapeSwatches = listOf("" to "Yok", "#4F9CFF" to "Mavi", "#FF4D4F" to "Kırmızı", "#52C41A" to "Yeşil", "#FAAD14" to "Sarı", "#FFFFFF" to "Beyaz", "#000000" to "Siyah")
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Vektör Şekil",
+                            subtitle = "Tuvalde parmağınla çiz — katman olarak eklenir",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.DOCK
+                            },
+                            onApply = {
+                                vm.createShapeLayer(
+                                    shapeKind,
+                                    docW * shapeX0Norm, docH * shapeY0Norm,
+                                    docW * shapeX1Norm, docH * shapeY1Norm,
+                                    shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
+                                )
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "roundedRect" to "Yuvarlak",
+                                "rect" to "Kutu",
+                                "ellipse" to "Daire",
+                                "triangle" to "Üçgen",
+                                "polygon" to "Çokgen",
+                                "star" to "Yıldız",
+                                "line" to "Çizgi"
+                            ).forEach { (k, lbl) ->
+                                FilterChip(
+                                    selected = shapeKind == k,
+                                    onClick = { shapeKind = k; pushShapeProxy() },
+                                    label = { Text(lbl, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("Dolgu", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(44.dp))
+                            shapeSwatches.forEach { (hex, _) ->
+                                val isSel = shapeFillHex == hex
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(if (hex.isEmpty()) Color(0xFF2A2C36) else Color(AndroidColor.parseColor(hex)))
+                                        .border(if (isSel) 2.dp else 1.dp, if (isSel) Color.White else Color(0xFF444858), CircleShape)
+                                        .clickable { shapeFillHex = hex; pushShapeProxy() },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (hex.isEmpty()) Text("×", color = Color(0xFFFF6B6B), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
+                            FilterChip(
+                                selected = showShapeFineTune,
+                                onClick = { showShapeFineTune = !showShapeFineTune },
+                                label = { Text(if (showShapeFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp) }
+                            )
+                        }
+                        if (showShapeFineTune) {
+                            CompactSliderRow("Kenarlık", "${shapeStrokeWidth.roundToInt()}px", shapeStrokeWidth, 0f..40f, defaultValue = 6f) {
+                                shapeStrokeWidth = it; pushShapeProxy()
+                            }
+                            if (shapeKind == "roundedRect") {
+                                CompactSliderRow("Köşe", "${shapeCornerRadius.roundToInt()}px", shapeCornerRadius, 0f..120f, defaultValue = 24f) {
+                                    shapeCornerRadius = it; pushShapeProxy()
+                                }
+                            }
+                            if (shapeKind == "polygon" || shapeKind == "star") {
+                                CompactSliderRow("Kenar", "$shapeSides", shapeSides.toFloat(), 3f..12f, defaultValue = 6f) {
+                                    shapeSides = it.roundToInt().coerceIn(3, 12); pushShapeProxy()
+                                }
+                            }
                         }
                     }
                 }

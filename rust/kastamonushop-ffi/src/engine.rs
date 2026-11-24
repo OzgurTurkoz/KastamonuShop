@@ -503,6 +503,61 @@ fn run_sharpen_on_doc(doc: &mut Document, target_id: LayerId, amount: f32) {
 }
 
 
+
+fn build_shape_params(
+    kind: &str,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    fill_hex: &str,
+    stroke_hex: &str,
+    stroke_width: f32,
+    corner_radius: f32,
+    sides: u32,
+) -> Value {
+    let min_x = x0.min(x1) as f64;
+    let min_y = y0.min(y1) as f64;
+    let w = (x1 - x0).abs().max(4.0) as f64;
+    let h = (y1 - y0).abs().max(4.0) as f64;
+    let mut obj = serde_json::Map::new();
+    obj.insert("kind".into(), json!(kind));
+    if kind == "line" {
+        obj.insert("from".into(), json!([x0 as f64, y0 as f64]));
+        obj.insert("to".into(), json!([x1 as f64, y1 as f64]));
+        obj.insert("weight".into(), json!(stroke_width.clamp(1.0, 200.0) as f64));
+        let col = if !stroke_hex.trim().is_empty() { stroke_hex } else if !fill_hex.trim().is_empty() { fill_hex } else { "#FFFFFF" };
+        obj.insert("fill".into(), json!(col));
+        obj.insert("stroke".into(), json!({ "color": col, "width": stroke_width.clamp(1.0, 200.0) as f64, "opacity": 100.0 }));
+    } else {
+        obj.insert("rect".into(), json!([min_x, min_y, w, h]));
+        if kind == "roundedRect" {
+            obj.insert("radius".into(), json!(corner_radius.clamp(0.0, 400.0) as f64));
+        }
+        if kind == "polygon" || kind == "star" {
+            obj.insert("sides".into(), json!(sides.clamp(3, 12)));
+        }
+        if fill_hex.trim().is_empty() {
+            obj.insert("fill".into(), Value::Null);
+        } else {
+            obj.insert("fill".into(), json!(fill_hex));
+        }
+        if stroke_width > 0.5 && !stroke_hex.trim().is_empty() {
+            obj.insert(
+                "stroke".into(),
+                json!({
+                    "color": stroke_hex,
+                    "width": stroke_width.clamp(1.0, 200.0) as f64,
+                    "opacity": 100.0
+                }),
+            );
+        } else {
+            obj.insert("stroke".into(), Value::Null);
+        }
+    }
+    Value::Object(obj)
+}
+
 #[uniffi::export]
 impl KastamonuEngine {
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
@@ -1396,6 +1451,245 @@ impl KastamonuEngine {
         proxy.session = ps;
         guard.mark_full_dirty();
         Ok(())
+    }
+
+    /// 60 FPS Proxy Preview for PhotoCraft's native Camera Raw develop pipeline
+    /// (Exposure, Shadows, Highlights, Vibrance, Temperature, Tint, Clarity, Dehaze).
+    pub fn update_proxy_camera_light(
+        &self,
+        exposure: f32,
+        shadows: f32,
+        highlights: f32,
+        vibrance: f32,
+        temperature: f32,
+        tint: f32,
+        clarity: f32,
+        dehaze: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let target_id = ps
+            .active()
+            .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+        if let Some(tid) = target_id {
+            ps.set_active_layer(Some(tid));
+            let params = json!({
+                "exposure": exposure.clamp(-5.0, 5.0) as f64,
+                "shadows": shadows.clamp(-100.0, 100.0) as f64,
+                "highlights": highlights.clamp(-100.0, 100.0) as f64,
+                "vibrance": vibrance.clamp(-100.0, 100.0) as f64,
+                "temperature": temperature.clamp(-100.0, 100.0) as f64,
+                "tint": tint.clamp(-100.0, 100.0) as f64,
+                "clarity": clarity.clamp(-100.0, 100.0) as f64,
+                "dehaze": dehaze.clamp(-100.0, 100.0) as f64
+            });
+            let _ = ps.execute("filter.cameraRaw", params);
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits PhotoCraft's native Camera Raw develop pipeline once on the active photo layer.
+    pub fn apply_camera_light(
+        &self,
+        exposure: f32,
+        shadows: f32,
+        highlights: f32,
+        vibrance: f32,
+        temperature: f32,
+        tint: f32,
+        clarity: f32,
+        dehaze: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Kamera Işık uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        let params = json!({
+            "exposure": exposure.clamp(-5.0, 5.0) as f64,
+            "shadows": shadows.clamp(-100.0, 100.0) as f64,
+            "highlights": highlights.clamp(-100.0, 100.0) as f64,
+            "vibrance": vibrance.clamp(-100.0, 100.0) as f64,
+            "temperature": temperature.clamp(-100.0, 100.0) as f64,
+            "tint": tint.clamp(-100.0, 100.0) as f64,
+            "clarity": clarity.clamp(-100.0, 100.0) as f64,
+            "dehaze": dehaze.clamp(-100.0, 100.0) as f64
+        });
+        guard
+            .session
+            .execute("filter.cameraRaw", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// 60 FPS Live Proxy Preview for non-destructive Gradient Fill (`gradient.fill.create`).
+    pub fn update_proxy_gradient(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        to_x: f32,
+        to_y: f32,
+        style: String,
+        start_hex: String,
+        end_hex: String,
+        opacity: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let sc = proxy.scale;
+        let params = json!({
+            "from": [(from_x * sc) as f64, (from_y * sc) as f64],
+            "to": [(to_x * sc) as f64, (to_y * sc) as f64],
+            "style": style,
+            "stops": [[0.0, start_hex], [1.0, end_hex]],
+            "opacity": opacity.clamp(5.0, 100.0) as f64
+        });
+        let _ = ps.execute("gradient.fill.create", params);
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits a real non-destructive Gradient Fill layer (`gradient.fill.create`), masked by any active selection.
+    pub fn apply_gradient_fill(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        to_x: f32,
+        to_y: f32,
+        style: String,
+        start_hex: String,
+        end_hex: String,
+        opacity: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let params = json!({
+            "from": [from_x as f64, from_y as f64],
+            "to": [to_x as f64, to_y as f64],
+            "style": style,
+            "stops": [[0.0, start_hex], [1.0, end_hex]],
+            "opacity": opacity.clamp(5.0, 100.0) as f64
+        });
+        guard
+            .session
+            .execute("gradient.fill.create", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_selection_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// 60 FPS Live Proxy Preview for Vector Shapes (`shape.create`).
+    pub fn update_proxy_shape(
+        &self,
+        kind: String,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        fill_hex: String,
+        stroke_hex: String,
+        stroke_width: f32,
+        corner_radius: f32,
+        sides: u32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let sc = proxy.scale;
+        let params = build_shape_params(
+            &kind,
+            x0 * sc,
+            y0 * sc,
+            x1 * sc,
+            y1 * sc,
+            &fill_hex,
+            &stroke_hex,
+            stroke_width * sc,
+            corner_radius * sc,
+            sides,
+        );
+        let _ = ps.execute("shape.create", params);
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits a native Vector Shape layer (`shape.create`) — movable, scalable & compatible with Layer FX.
+    pub fn create_shape_layer(
+        &self,
+        kind: String,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        fill_hex: String,
+        stroke_hex: String,
+        stroke_width: f32,
+        corner_radius: f32,
+        sides: u32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let params = build_shape_params(
+            &kind,
+            x0,
+            y0,
+            x1,
+            y1,
+            &fill_hex,
+            &stroke_hex,
+            stroke_width,
+            corner_radius,
+            sides,
+        );
+        guard
+            .session
+            .execute("shape.create", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
     }
 
     pub fn end_proxy_preview(&self) {
@@ -3298,5 +3592,70 @@ mod v08_automated_tests {
         ];
         let sel1px = eng.paint_selection_stroke(pts, 1.0, false).expect("1px selection stroke");
         assert!(sel1px.is_some(), "1px selection stroke should select pixels");
+    }
+
+    #[test]
+    fn test_v095_camera_light_proxy_and_apply_preserves_alpha() {
+        let eng = test_engine();
+        let w = 96u32;
+        let h = 96u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let inside = (24..72).contains(&x) && (24..72).contains(&y);
+                rgba[i] = if inside { 90 } else { 0 };
+                rgba[i + 1] = if inside { 80 } else { 0 };
+                rgba[i + 2] = if inside { 70 } else { 0 };
+                rgba[i + 3] = if inside { 255 } else { 0 };
+            }
+        }
+        eng.open_rgba_bytes("cam.png".into(), w, h, rgba).expect("open");
+        eng.begin_proxy_preview().expect("begin proxy");
+        eng.update_proxy_camera_light(1.2, 45.0, -30.0, 35.0, 20.0, 0.0, 25.0, 10.0)
+            .expect("proxy camera light");
+        eng.end_proxy_preview();
+        let info = eng
+            .apply_camera_light(1.2, 45.0, -30.0, 35.0, 20.0, 0.0, 25.0, 10.0)
+            .expect("apply camera light");
+        assert_eq!((info.width, info.height), (w, h));
+        // Verify transparent corner stays transparent after Camera Raw develop
+        let guard = eng.core.lock();
+        let doc = guard.active_document().unwrap();
+        let LayerContent::Raster(surf) = &doc.layers[0].content else { panic!("raster") };
+        let corner = surf.read_region(Rect::new(2, 2, 3, 3));
+        assert!(corner[3] < 0.01, "camera light must preserve transparency");
+    }
+
+    #[test]
+    fn test_v095_gradient_fill_proxy_and_apply_creates_layer() {
+        let eng = test_engine();
+        eng.new_document("grad".into(), 160, 160).expect("new_document");
+        let before = eng.get_layers().expect("layers").len();
+        eng.begin_proxy_preview().expect("begin proxy");
+        eng.update_proxy_gradient(10.0, 10.0, 150.0, 150.0, "linear".into(), "#4F9CFF".into(), "#FF4D4F".into(), 85.0)
+            .expect("proxy gradient");
+        eng.end_proxy_preview();
+        let info = eng
+            .apply_gradient_fill(10.0, 10.0, 150.0, 150.0, "radial".into(), "#4F9CFF".into(), "#FF4D4F".into(), 85.0)
+            .expect("apply gradient");
+        assert_eq!(info.layer_count as usize, before + 1);
+    }
+
+    #[test]
+    fn test_v095_vector_shape_proxy_and_create_all_kinds() {
+        let eng = test_engine();
+        eng.new_document("shapes".into(), 200, 200).expect("new_document");
+        let before = eng.get_layers().expect("layers").len();
+        eng.begin_proxy_preview().expect("begin proxy");
+        eng.update_proxy_shape("roundedRect".into(), 20.0, 20.0, 160.0, 140.0, "#4F9CFF".into(), "#FFFFFF".into(), 4.0, 16.0, 5)
+            .expect("proxy roundedRect");
+        eng.end_proxy_preview();
+
+        let _ = eng.create_shape_layer("rect".into(), 20.0, 20.0, 120.0, 100.0, "#FF4D4F".into(), "#FFFFFF".into(), 3.0, 0.0, 5).expect("rect");
+        let _ = eng.create_shape_layer("ellipse".into(), 40.0, 40.0, 160.0, 160.0, "#52C41A".into(), "".into(), 0.0, 0.0, 5).expect("ellipse");
+        let _ = eng.create_shape_layer("polygon".into(), 30.0, 30.0, 150.0, 150.0, "#FAAD14".into(), "#000000".into(), 2.0, 0.0, 6).expect("polygon");
+        let info = eng.create_shape_layer("line".into(), 10.0, 10.0, 180.0, 180.0, "".into(), "#FFFFFF".into(), 6.0, 0.0, 5).expect("line");
+        assert_eq!(info.layer_count as usize, before + 4);
     }
 }

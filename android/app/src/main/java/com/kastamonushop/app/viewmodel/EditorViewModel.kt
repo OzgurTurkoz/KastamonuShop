@@ -130,6 +130,38 @@ class EditorViewModel : ViewModel() {
             val opacity: Float,
             val distance: Float
         ) : ProxyJob()
+        data class CameraLight(
+            val exposure: Float,
+            val shadows: Float,
+            val highlights: Float,
+            val vibrance: Float,
+            val temperature: Float,
+            val tint: Float,
+            val clarity: Float,
+            val dehaze: Float
+        ) : ProxyJob()
+        data class Gradient(
+            val fromX: Float,
+            val fromY: Float,
+            val toX: Float,
+            val toY: Float,
+            val style: String,
+            val startHex: String,
+            val endHex: String,
+            val opacity: Float
+        ) : ProxyJob()
+        data class Shape(
+            val kind: String,
+            val x0: Float,
+            val y0: Float,
+            val x1: Float,
+            val y1: Float,
+            val fillHex: String,
+            val strokeHex: String,
+            val strokeWidth: Float,
+            val cornerRadius: Float,
+            val sides: UInt
+        ) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -605,8 +637,164 @@ class EditorViewModel : ViewModel() {
                     is ProxyJob.Blur -> engine.updateProxyBlur(job.radius)
                     is ProxyJob.Sharpen -> engine.updateProxySharpen(job.amount)
                     is ProxyJob.LayerFx -> engine.updateProxyLayerEffect(job.kind, job.colorHex, job.size, job.opacity, job.distance)
+                    is ProxyJob.CameraLight -> engine.updateProxyCameraLight(
+                        job.exposure, job.shadows, job.highlights, job.vibrance,
+                        job.temperature, job.tint, job.clarity, job.dehaze
+                    )
+                    is ProxyJob.Gradient -> engine.updateProxyGradient(
+                        job.fromX, job.fromY, job.toX, job.toY,
+                        job.style, job.startHex, job.endHex, job.opacity
+                    )
+                    is ProxyJob.Shape -> engine.updateProxyShape(
+                        job.kind, job.x0, job.y0, job.x1, job.y1,
+                        job.fillHex, job.strokeHex, job.strokeWidth, job.cornerRadius, job.sides
+                    )
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+
+    fun updateProxyCameraLight(
+        exposure: Float,
+        shadows: Float,
+        highlights: Float,
+        vibrance: Float,
+        temperature: Float,
+        tint: Float,
+        clarity: Float,
+        dehaze: Float
+    ) {
+        pendingProxyJob.set(ProxyJob.CameraLight(exposure, shadows, highlights, vibrance, temperature, tint, clarity, dehaze))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyCameraLight(
+        exposure: Float,
+        shadows: Float,
+        highlights: Float,
+        vibrance: Float,
+        temperature: Float,
+        tint: Float,
+        clarity: Float,
+        dehaze: Float
+    ) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyCameraLight(
+                    exposure, shadows, highlights, vibrance, temperature, tint, clarity, dehaze
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Kamera Işık uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Kamera Işık hatası: ${err.message}", 2800L)
+            }
+        }
+    }
+
+    fun updateProxyGradient(
+        fromX: Float,
+        fromY: Float,
+        toX: Float,
+        toY: Float,
+        style: String,
+        startHex: String,
+        endHex: String,
+        opacity: Float
+    ) {
+        pendingProxyJob.set(ProxyJob.Gradient(fromX, fromY, toX, toY, style, startHex, endHex, opacity))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyGradientFill(
+        fromX: Float,
+        fromY: Float,
+        toX: Float,
+        toY: Float,
+        style: String,
+        startHex: String,
+        endHex: String,
+        opacity: Float
+    ) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyGradientFill(fromX, fromY, toX, toY, style, startHex, endHex, opacity)
+                val layers = engine.getLayers()
+                val sel = engine.getSelectionBounds()
+                _uiState.update { it.copy(docInfo = info, layers = layers, selectionBounds = sel, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Degrade katmanı eklendi", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Degrade hatası: ${err.message}", 2800L)
+            }
+        }
+    }
+
+    fun updateProxyShape(
+        kind: String,
+        x0: Float,
+        y0: Float,
+        x1: Float,
+        y1: Float,
+        fillHex: String,
+        strokeHex: String,
+        strokeWidth: Float,
+        cornerRadius: Float,
+        sides: Int
+    ) {
+        pendingProxyJob.set(
+            ProxyJob.Shape(kind, x0, y0, x1, y1, fillHex, strokeHex, strokeWidth, cornerRadius, sides.coerceIn(3, 12).toUInt())
+        )
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun createShapeLayer(
+        kind: String,
+        x0: Float,
+        y0: Float,
+        x1: Float,
+        y1: Float,
+        fillHex: String,
+        strokeHex: String,
+        strokeWidth: Float,
+        cornerRadius: Float,
+        sides: Int
+    ) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.createShapeLayer(
+                    kind, x0, y0, x1, y1, fillHex, strokeHex, strokeWidth, cornerRadius, sides.coerceIn(3, 12).toUInt()
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Şekil katmanı eklendi", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Şekil hatası: ${err.message}", 2800L)
             }
         }
     }
