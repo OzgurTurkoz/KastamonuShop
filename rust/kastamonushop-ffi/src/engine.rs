@@ -2504,16 +2504,23 @@ impl KastamonuEngine {
         let _ = guard.session.execute(
             "select.refineEdge",
             json!({
-                "radius": 6.0,
+                "radius": 4.0,
                 "smartRadius": true,
-                "smooth": 10.0,
+                "smooth": 8.0,
                 "feather": 1.0,
-                "contrast": 18.0,
-                "decontaminate": true,
+                "contrast": 15.0,
+                "decontaminate": false,
                 "output": "selection",
                 "sampleAllLayers": true
             }),
         );
+        let still_has_sel = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| !s.content_bounds().is_empty()))
+            .unwrap_or(false);
+        if !still_has_sel {
+            let _ = guard.session.execute("select.subject", json!({ "sampleAllLayers": true }));
+        }
         guard
             .session
             .execute("select.inverse", json!({}))
