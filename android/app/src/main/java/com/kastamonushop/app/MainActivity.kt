@@ -118,7 +118,8 @@ private enum class BottomPanel {
     RADIAL_BLUR_EDIT,
     QUICK_ACTIONS_MENU,
     HSL_MIXER_LIVE,
-    POSTER_THRESH_LIVE
+    POSTER_THRESH_LIVE,
+    FILTER_GALLERY_EDIT
 }
 
 private data class BlendModeOption(
@@ -288,7 +289,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.1.1",
+                    text = "v1.2.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -695,6 +696,7 @@ fun StonebridgeStudioScreen(
     val layerThumbs by vm.layerThumbnails.collectAsState()
     val loupeBitmap by vm.loupeBitmap.collectAsState()
     val cinemaThumbs by vm.cinemaThumbs.collectAsState()
+    val galleryThumbs by vm.galleryThumbs.collectAsState()
     var loupeScreenPos by remember { mutableStateOf<Offset?>(null) }
     val activeLayerPrev by vm.activeLayerPreview.collectAsState()
     val context = LocalContext.current
@@ -866,6 +868,10 @@ fun StonebridgeStudioScreen(
     var posterLevels by remember { mutableFloatStateOf(6f) }
     var threshLevel by remember { mutableFloatStateOf(128f) }
     var posterTouched by remember { mutableStateOf(false) }
+    // v1.2.0 Filter Gallery (Artistic & Pixelate) state — starts cleanly on 'none' (Orijinal)
+    var galleryKind by remember { mutableStateOf("none") }
+    var galleryAmount by remember { mutableFloatStateOf(45f) }
+    var galleryDetail by remember { mutableFloatStateOf(50f) }
     var textDraft by remember { mutableStateOf("StonebridgeCraft") }
     var textNormX by remember { mutableFloatStateOf(0.50f) }
     var textNormY by remember { mutableFloatStateOf(0.50f) }
@@ -1003,7 +1009,7 @@ fun StonebridgeStudioScreen(
                 BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); liquifyCursorScreen = null; activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.AUTO_ENHANCE_MENU -> activePanel = BottomPanel.ADJUST_MENU
                 BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU }
-                BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU }
+                BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT, BottomPanel.FILTER_GALLERY_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU }
                 BottomPanel.QUICK_ACTIONS_MENU -> activePanel = BottomPanel.DOCK
                 BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE -> { vm.endProxyPreview(); activePanel = BottomPanel.ADJUST_MENU }
                 else -> activePanel = BottomPanel.DOCK
@@ -1038,7 +1044,8 @@ fun StonebridgeStudioScreen(
             activePanel == BottomPanel.MOTION_BLUR_EDIT ||
             activePanel == BottomPanel.RADIAL_BLUR_EDIT ||
             activePanel == BottomPanel.HSL_MIXER_LIVE ||
-            activePanel == BottomPanel.POSTER_THRESH_LIVE
+            activePanel == BottomPanel.POSTER_THRESH_LIVE ||
+            activePanel == BottomPanel.FILTER_GALLERY_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -1072,6 +1079,7 @@ fun StonebridgeStudioScreen(
                 BottomPanel.RADIAL_BLUR_EDIT,
                 BottomPanel.HSL_MIXER_LIVE,
                 BottomPanel.POSTER_THRESH_LIVE,
+                BottomPanel.FILTER_GALLERY_EDIT,
                 BottomPanel.DOCK -> fitToSafeArea(pendingQuarterTurns, activePanel)
                 else -> Unit
             }
@@ -3998,6 +4006,18 @@ fun StonebridgeStudioScreen(
                                     activePanel = BottomPanel.RADIAL_BLUR_EDIT
                                 }
                             )
+                            CircularDockButton(
+                                icon = Icons.Default.AutoAwesome,
+                                label = "Galeri",
+                                onClick = {
+                                    galleryKind = "none"
+                                    galleryAmount = 45f
+                                    galleryDetail = 50f
+                                    vm.loadGalleryThumbs()
+                                    vm.beginProxyPreview()
+                                    activePanel = BottomPanel.FILTER_GALLERY_EDIT
+                                }
+                            )
                         }
                     }
                 }
@@ -4119,6 +4139,30 @@ fun StonebridgeStudioScreen(
                     onPreview = { vm.updateProxyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain) },
                     onClose = { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU },
                     onApply = { vm.applyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain); activePanel = BottomPanel.DOCK }
+                )
+                BottomPanel.FILTER_GALLERY_EDIT -> FilterGalleryPanel(
+                    thumbs = galleryThumbs,
+                    kind = galleryKind,
+                    onKind = { k ->
+                        galleryKind = k
+                        vm.updateProxyGalleryFilter(k, galleryAmount, galleryDetail)
+                    },
+                    amount = galleryAmount,
+                    onAmount = { a ->
+                        galleryAmount = a
+                        if (galleryKind != "none") vm.updateProxyGalleryFilter(galleryKind, a, galleryDetail)
+                    },
+                    detail = galleryDetail,
+                    onDetail = { d ->
+                        galleryDetail = d
+                        if (galleryKind != "none") vm.updateProxyGalleryFilter(galleryKind, galleryAmount, d)
+                    },
+                    onClose = { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU },
+                    onApply = { lbl ->
+                        if (galleryKind == "none") vm.endProxyPreview()
+                        else vm.applyGalleryFilter(galleryKind, galleryAmount, galleryDetail, lbl)
+                        activePanel = BottomPanel.DOCK
+                    }
                 )
                 BottomPanel.MOTION_BLUR_EDIT -> MotionBlurPanel(
                     angle = motionBlurAngle, onAngle = { motionBlurAngle = it },
@@ -4823,6 +4867,76 @@ private fun PosterThreshPanel(
             CompactSliderRow("Seviye", "${posterLevels.roundToInt()}", posterLevels, 2f..24f, 6f, onChange = onPosterLevels)
         } else {
             CompactSliderRow("Eşik", "${threshLevel.roundToInt()}", threshLevel, 1f..254f, 128f, onChange = onThreshLevel)
+        }
+    }
+}
+
+@Composable
+private fun FilterGalleryPanel(
+    thumbs: List<ImageBitmap>,
+    kind: String, onKind: (String) -> Unit,
+    amount: Float, onAmount: (Float) -> Unit,
+    detail: Float, onDetail: (Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: (String) -> Unit
+) {
+    val items = listOf(
+        "none" to "Orijinal",
+        "oilPaint" to "Yağlı Boya",
+        "watercolor" to "Suluboya",
+        "charcoal" to "Karakalem",
+        "glowingEdges" to "Neon Kenar",
+        "emboss" to "Kabartma",
+        "mosaic" to "Mozaik",
+        "crystallize" to "Kristal",
+        "pointillize" to "Noktalama",
+        "colorHalftone" to "Renkli Tram"
+    )
+    val selectedLabel = items.firstOrNull { it.first == kind }?.second ?: "Filtre"
+    val isPixelate = kind == "mosaic" || kind == "crystallize" || kind == "pointillize" || kind == "colorHalftone"
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader(
+            title = if (kind == "none") "Filtre Galerisi" else "Filtre: $selectedLabel",
+            subtitle = "Sanatsal & Pikselleştir — kendi fotoğrafınla 60 FPS önizleme",
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = { onApply(selectedLabel) }
+        )
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items.forEachIndexed { idx, (id, lbl) ->
+                val isSel = kind == id
+                Column(
+                    modifier = Modifier.width(62.dp).clickable { onKind(id) },
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF2A2C36))
+                            .border(if (isSel) 2.dp else 1.dp, if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF3E4150), RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val bmp = thumbs.getOrNull(idx)
+                        if (bmp != null) {
+                            androidx.compose.foundation.Image(
+                                bitmap = bmp,
+                                contentDescription = lbl,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = lbl, tint = Color(0xFF8A8FA3), modifier = Modifier.size(20.dp))
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(lbl, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFFDCE0EC), fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal)
+                }
+            }
+        }
+        if (kind != "none") {
+            CompactSliderRow(if (isPixelate) "Hücre" else "Şiddet", "%${amount.roundToInt()}", amount, 5f..100f, 45f, onChange = onAmount)
+            if (!isPixelate) {
+                CompactSliderRow("Detay", "%${detail.roundToInt()}", detail, 5f..100f, 50f, onChange = onDetail)
+            }
         }
     }
 }

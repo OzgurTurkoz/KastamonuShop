@@ -174,6 +174,7 @@ class EditorViewModel : ViewModel() {
         data class MotionBlur(val angle: Float, val distance: Float) : ProxyJob()
         data class RadialBlur(val amount: Float, val method: String) : ProxyJob()
         data class HslMixer(val h: List<Float>, val s: List<Float>, val l: List<Float>) : ProxyJob()
+        data class GalleryFilter(val kind: String, val amount: Float, val detail: Float) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -199,6 +200,54 @@ class EditorViewModel : ViewModel() {
 
     private val _cinemaThumbs = MutableStateFlow<List<ImageBitmap>>(emptyList())
     val cinemaThumbs: StateFlow<List<ImageBitmap>> = _cinemaThumbs.asStateFlow()
+
+    private val _galleryThumbs = MutableStateFlow<List<ImageBitmap>>(emptyList())
+    val galleryThumbs: StateFlow<List<ImageBitmap>> = _galleryThumbs.asStateFlow()
+
+    fun loadGalleryThumbs() {
+        paintExecutor.execute {
+            runCatching {
+                val raw = engine.renderFilterGalleryThumbs(80u)
+                val out = ArrayList<ImageBitmap>(raw.size)
+                for (t in raw) {
+                    val w = t.width.toInt()
+                    val h = t.height.toInt()
+                    if (w > 0 && h > 0 && t.rgba.size >= w * h * 4) {
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(t.rgba))
+                        out.add(bmp.asImageBitmap())
+                    }
+                }
+                _galleryThumbs.value = out
+            }
+        }
+    }
+
+    fun updateProxyGalleryFilter(kind: String, amount: Float, detail: Float) {
+        pendingProxyJob.set(ProxyJob.GalleryFilter(kind, amount, detail))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyGalleryFilter(kind: String, amount: Float, detail: Float, label: String) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyGalleryFilter(kind, amount, detail)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("$label uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Filtre hatası: ${err.message}", 2600L)
+            }
+        }
+    }
 
     fun loadCinemaThumbs() {
         paintExecutor.execute {
@@ -731,6 +780,7 @@ class EditorViewModel : ViewModel() {
                     is ProxyJob.MotionBlur -> engine.updateProxyMotionBlur(job.angle, job.distance)
                     is ProxyJob.RadialBlur -> engine.updateProxyRadialBlur(job.amount, job.method)
                     is ProxyJob.HslMixer -> engine.updateProxyHslMixer(job.h, job.s, job.l)
+                    is ProxyJob.GalleryFilter -> engine.updateProxyGalleryFilter(job.kind, job.amount, job.detail)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }

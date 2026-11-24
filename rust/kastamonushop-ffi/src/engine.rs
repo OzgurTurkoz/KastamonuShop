@@ -797,6 +797,88 @@ fn run_hsl_mixer_on_doc(doc: &mut Document, target_id: LayerId, hsl_hue: &[f32],
     surf.write_region_par(bounds, &data);
 }
 
+
+/// Maps a StonebridgeCraft Filter Gallery kind + normalized controls (`amount`: 0..100, `detail`: 0..100)
+/// and `scale` (proxy scale for pixel-size filters) into the exact verified PhotoCraft command & JSON.
+fn build_gallery_filter_cmd(kind: &str, amount: f32, detail: f32, scale: f32) -> Option<(&'static str, Value)> {
+    let a = (amount.clamp(0.0, 100.0) / 100.0) as f64;
+    let d = (detail.clamp(0.0, 100.0) / 100.0) as f64;
+    let sc = scale.clamp(0.1, 1.0) as f64;
+    match kind {
+        "oilPaint" => Some((
+            "filter.stylize.oilPaint",
+            json!({
+                "stylization": (0.5 + a * 8.5).clamp(0.1, 10.0),
+                "cleanliness": (1.0 + d * 8.0).clamp(0.0, 10.0),
+                "scale": (0.5 + a * 3.0).clamp(0.1, 10.0),
+                "bristleDetail": 5.0,
+                "lighting": true,
+                "angle": -60.0,
+                "shine": (0.5 + d * 3.5).clamp(0.0, 10.0)
+            }),
+        )),
+        "watercolor" => Some((
+            "filter.gallery.watercolor",
+            json!({
+                "brushDetail": (1.0 + d * 13.0).round().clamp(1.0, 14.0) as i64,
+                "shadowIntensity": (a * 8.0).round().clamp(0.0, 10.0) as i64,
+                "texture": (1.0 + a * 2.0).round().clamp(1.0, 3.0) as i64
+            }),
+        )),
+        "charcoal" => Some((
+            "filter.gallery.charcoal",
+            json!({
+                "charcoalThickness": (1.0 + a * 6.0).round().clamp(1.0, 7.0) as i64,
+                "detail": (d * 5.0).round().clamp(0.0, 5.0) as i64,
+                "lightDarkBalance": (20.0 + d * 60.0).round().clamp(0.0, 100.0) as i64
+            }),
+        )),
+        "glowingEdges" => Some((
+            "filter.gallery.glowingEdges",
+            json!({
+                "edgeWidth": (1.0 + a * 10.0).round().clamp(1.0, 14.0) as i64,
+                "edgeBrightness": (4.0 + d * 14.0).round().clamp(0.0, 20.0) as i64,
+                "smoothness": (2.0 + (1.0 - d) * 10.0).round().clamp(1.0, 15.0) as i64
+            }),
+        )),
+        "emboss" => Some((
+            "filter.stylize.emboss",
+            json!({
+                "angle": 135.0,
+                "height": ((1.0 + a * 12.0) * sc).clamp(1.0, 100.0),
+                "amount": (60.0 + d * 280.0).clamp(1.0, 500.0)
+            }),
+        )),
+        "mosaic" => Some((
+            "filter.pixelate.mosaic",
+            json!({
+                "cellSize": ((4.0 + a * 64.0) * sc).round().clamp(2.0, 200.0)
+            }),
+        )),
+        "crystallize" => Some((
+            "filter.pixelate.crystallize",
+            json!({
+                "cellSize": ((6.0 + a * 74.0) * sc).round().clamp(3.0, 300.0),
+                "seed": 42u32
+            }),
+        )),
+        "pointillize" => Some((
+            "filter.pixelate.pointillize",
+            json!({
+                "cellSize": ((4.0 + a * 44.0) * sc).round().clamp(3.0, 300.0),
+                "seed": 42u32
+            }),
+        )),
+        "colorHalftone" => Some((
+            "filter.pixelate.colorHalftone",
+            json!({
+                "maxRadius": ((4.0 + a * 26.0) * sc).round().clamp(4.0, 127.0)
+            }),
+        )),
+        _ => None,
+    }
+}
+
 #[uniffi::export]
 impl KastamonuEngine {
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
@@ -2733,6 +2815,133 @@ impl KastamonuEngine {
                     "opacity": 100.0
                 }),
             )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Generates 10 live mini-preview thumbnails of the user's ACTUAL open photo for the Filter Gallery
+    /// (`none` + 9 Artistic & Pixelate filters).
+    pub fn render_filter_gallery_thumbs(&self, thumb_size: u32) -> Result<Vec<LayerThumbnail>, EngineError> {
+        let kinds = [
+            "none",
+            "oilPaint",
+            "watercolor",
+            "charcoal",
+            "glowingEdges",
+            "emboss",
+            "mosaic",
+            "crystallize",
+            "pointillize",
+            "colorHalftone",
+        ];
+        let base_doc = {
+            let guard = self.core.lock();
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let doc = ds.doc();
+            let real_w = doc.size.width.max(1);
+            let real_h = doc.size.height.max(1);
+            let max_d = thumb_size.clamp(48, 96);
+            let scale = (max_d as f32 / real_w.max(real_h) as f32).min(1.0);
+            let tw = ((real_w as f32 * scale).round() as u32).clamp(16, max_d);
+            let th = ((real_h as f32 * scale).round() as u32).clamp(16, max_d);
+            let mut ps = Session::new();
+            ps.add_document((**doc).clone(), None);
+            ps.set_active(0);
+            if tw < real_w || th < real_h {
+                let _ = ps.execute("image.imageSize", json!({ "width": tw, "height": th, "resample": "bilinear" }));
+            }
+            ps.active().map(|d| Arc::clone(d.doc())).ok_or(EngineError::NoActiveDocument)?
+        };
+
+        let mut results = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let mut ps = Session::new();
+            ps.add_document((*base_doc).clone(), None);
+            ps.set_active(0);
+            let tid = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(id) = tid {
+                ps.set_active_layer(Some(id));
+                if let Some((cmd, params)) = build_gallery_filter_cmd(kind, 45.0, 55.0, 0.22) {
+                    let _ = ps.execute(cmd, params);
+                }
+                if let Some(ds) = ps.active() {
+                    let doc = ds.doc();
+                    let w = doc.size.width.max(1);
+                    let h = doc.size.height.max(1);
+                    if let Some(layer) = doc.layers.iter().find(|l| l.id == id) {
+                        if let LayerContent::Raster(surf) = &layer.content {
+                            let mut rgba = vec![0u8; (w * h * 4) as usize];
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let c = surf.rgba(x as i32, y as i32);
+                                    let i = ((y * w + x) * 4) as usize;
+                                    rgba[i] = (c[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 1] = (c[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 2] = (c[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 3] = (c[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                }
+                            }
+                            results.push(LayerThumbnail { width: w, height: h, rgba });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    /// 60 FPS Live Proxy Preview for Filter Gallery (Artistic & Pixelate).
+    pub fn update_proxy_gallery_filter(&self, kind: String, amount: f32, detail: f32) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        if let Some((cmd, params)) = build_gallery_filter_cmd(&kind, amount, detail, proxy.scale) {
+            let target_id = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(tid) = target_id {
+                ps.set_active_layer(Some(tid));
+                let _ = ps.execute(cmd, params);
+            }
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits a Filter Gallery effect once at full resolution (undoable).
+    pub fn apply_gallery_filter(&self, kind: String, amount: f32, detail: f32) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let Some((cmd, params)) = build_gallery_filter_cmd(&kind, amount, detail, 1.0) else {
+            guard.mark_full_dirty();
+            return self.info_from_locked(&guard);
+        };
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Filtre uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        guard
+            .session
+            .execute(cmd, params)
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
@@ -4939,5 +5148,48 @@ mod v08_automated_tests {
         let _ = eng.apply_adjustment_once("posterize".into(), r#"{"levels":5}"#.into()).expect("posterize");
         let info = eng.apply_adjustment_once("threshold".into(), r#"{"level":128}"#.into()).expect("threshold");
         assert!(info.layer_count >= 4);
+    }
+
+    #[test]
+    fn test_v120_filter_gallery_all_9_filters_apply_and_undo() {
+        let eng = test_engine();
+        let w = 96u32;
+        let h = 96u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                rgba[i] = ((x * 2) % 255) as u8;
+                rgba[i + 1] = ((y * 2) % 255) as u8;
+                rgba[i + 2] = 140;
+                rgba[i + 3] = 255;
+            }
+        }
+        eng.open_rgba_bytes("gal.png".into(), w, h, rgba).expect("open");
+
+        let kinds = [
+            "oilPaint", "watercolor", "charcoal", "glowingEdges", "emboss",
+            "mosaic", "crystallize", "pointillize", "colorHalftone",
+        ];
+        eng.begin_proxy_preview().expect("begin proxy");
+        for k in kinds {
+            eng.update_proxy_gallery_filter(k.into(), 50.0, 50.0).expect(k);
+        }
+        eng.end_proxy_preview();
+
+        for k in kinds {
+            let info = eng.apply_gallery_filter(k.into(), 45.0, 50.0).expect(k);
+            assert_eq!((info.width, info.height), (w, h));
+            let _ = eng.undo().expect("undo gallery filter");
+        }
+    }
+
+    #[test]
+    fn test_v120_filter_gallery_live_thumbs_returns_10_previews() {
+        let eng = test_engine();
+        eng.new_document("gal_thumbs".into(), 96, 72).expect("new_document");
+        let thumbs = eng.render_filter_gallery_thumbs(64).expect("gallery thumbs");
+        assert_eq!(thumbs.len(), 10, "must return Orijinal + 9 live filter preview thumbnails");
+        assert!(thumbs[0].width <= 64 && !thumbs[0].rgba.is_empty());
     }
 }
