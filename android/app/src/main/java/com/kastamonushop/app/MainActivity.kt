@@ -104,7 +104,8 @@ private enum class BottomPanel {
     SHARPEN_EDIT,
     EFFECT_MENU,
     MIRROR_EDIT,
-    LAYER_TRANSFORM
+    LAYER_TRANSFORM,
+    LAYER_FX_EDIT
 }
 
 private data class BlendModeOption(
@@ -274,7 +275,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.8.3",
+                    text = "v0.9.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -724,6 +725,27 @@ fun StonebridgeStudioScreen(
     var layerDy by remember { mutableFloatStateOf(0f) }
     var layerScalePct by remember { mutableFloatStateOf(100f) }
     var layerRotDeg by remember { mutableFloatStateOf(0f) }
+
+    // Temel + İnce Ayar & Live Brush Size Preview state
+    var showBrushFineTune by remember { mutableStateOf(false) }
+    var brushSizePreviewTick by remember { mutableIntStateOf(0) }
+    var showBrushSizeCircle by remember { mutableStateOf(false) }
+
+    // Layer Effects (fx) state (Temel + İnce Ayar)
+    var fxKind by remember { mutableStateOf("dropShadow") }
+    var fxColorHex by remember { mutableStateOf("#000000") }
+    var fxSizeVal by remember { mutableFloatStateOf(16f) }
+    var fxOpacityVal by remember { mutableFloatStateOf(75f) }
+    var fxDistanceVal by remember { mutableFloatStateOf(12f) }
+    var showFxFineTune by remember { mutableStateOf(false) }
+
+    LaunchedEffect(brushSizePreviewTick) {
+        if (brushSizePreviewTick > 0) {
+            showBrushSizeCircle = true
+            kotlinx.coroutines.delay(550L)
+            showBrushSizeCircle = false
+        }
+    }
     var showExitSaveDialog by remember { mutableStateOf(false) }
 
     // Live draggable Text layer editor state
@@ -1034,6 +1056,17 @@ fun StonebridgeStudioScreen(
                         drawLine(Color(0xFF2ED573), Offset(sx, sy - 20f), Offset(sx, sy + 20f), strokeWidth = 2.5f)
                     }
                 }
+            }
+        }
+
+        // Live Brush Size Preview Circle in center of screen when dragging Boyut slider
+        if (showBrushSizeCircle) {
+            val z = canvasViewRef?.getCurrentZoom() ?: 1f
+            val rPx = (state.brushSize * z * 0.5f).coerceIn(4f, 260f)
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val c = Offset(size.width * 0.5f, size.height * 0.42f)
+                drawCircle(color = Color(0x334F9CFF), radius = rPx, center = c)
+                drawCircle(color = Color.White, radius = rPx, center = c, style = Stroke(width = 2.5f))
             }
         }
 
@@ -1603,8 +1636,16 @@ fun StonebridgeStudioScreen(
                         expanded = showExportMenu,
                         onDismissRequest = { showExportMenu = false }
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("Cihaz Galerisine Kaydet (PNG)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) },
+                            onClick = {
+                                showExportMenu = false
+                                vm.saveToDeviceGallery(context)
+                            }
+                        )
+                        HorizontalDivider()
                         listOf(
-                            "png" to "PNG Resim (.png)",
+                            "png" to "PNG Dosya Olarak Kaydet (.png)",
                             "jpg" to "JPEG Resim (.jpg)",
                             "psd" to "Photoshop Katmanlı (.psd)",
                             "pcraft" to "StonebridgeCraft Proje (.pcraft)",
@@ -1640,6 +1681,13 @@ fun StonebridgeStudioScreen(
                         dismissLivePanelIfActive()
                         vm.redo()
                     }
+                )
+
+                TopBarButton(
+                    icon = Icons.Default.Compare,
+                    label = "Önce",
+                    selected = state.compareOriginal,
+                    onClick = { vm.toggleCompareOriginal() }
                 )
 
                 TopBarButton(
@@ -1685,24 +1733,56 @@ fun StonebridgeStudioScreen(
                     ) {
                         Text("Katmanlar", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Color.White)
                         Row {
-                            IconButton(onClick = {
+                            IconButton(onClick = { vm.addLayer() }, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Add, contentDescription = "Yeni Katman", tint = Color.White, modifier = Modifier.size(20.dp))
+                            }
+                            IconButton(onClick = { vm.deleteActiveLayer() }, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Delete, contentDescription = "Katmanı Sil", tint = Color(0xFFFF6B6B), modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                    // Synergistic Layer Quick-Actions: Taşı, fx, Yukarı, Aşağı, Çoğalt, Birleştir
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
                                 showLayers = false
                                 vm.setTool(ActiveTool.NONE)
-                                layerDx = 0f
-                                layerDy = 0f
-                                layerScalePct = 100f
-                                layerRotDeg = 0f
+                                layerDx = 0f; layerDy = 0f; layerScalePct = 100f; layerRotDeg = 0f
                                 vm.loadActiveLayerPreview()
                                 activePanel = BottomPanel.LAYER_TRANSFORM
-                            }) {
-                                Icon(Icons.Default.OpenWith, contentDescription = "Katmanı Taşı / Boyutlandır", tint = MaterialTheme.colorScheme.primary)
-                            }
-                            IconButton(onClick = { vm.addLayer() }) {
-                                Icon(Icons.Default.Add, contentDescription = "Yeni Katman", tint = Color.White)
-                            }
-                            IconButton(onClick = { vm.deleteActiveLayer() }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Katmanı Sil", tint = Color(0xFFFF6B6B))
-                            }
+                            },
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(Icons.Default.OpenWith, contentDescription = "Taşı", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                        }
+                        IconButton(
+                            onClick = {
+                                showLayers = false
+                                vm.setTool(ActiveTool.NONE)
+                                showFxFineTune = false
+                                activePanel = BottomPanel.LAYER_FX_EDIT
+                            },
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = "Efekt (fx)", tint = Color(0xFFFFD54F), modifier = Modifier.size(18.dp))
+                        }
+                        IconButton(onClick = { vm.moveLayerUp() }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.ArrowUpward, contentDescription = "Yukarı", tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
+                        IconButton(onClick = { vm.moveLayerDown() }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.ArrowDownward, contentDescription = "Aşağı", tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
+                        IconButton(onClick = { vm.duplicateActiveLayer() }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Çoğalt", tint = Color.White, modifier = Modifier.size(17.dp))
+                        }
+                        IconButton(onClick = { vm.mergeLayerDown() }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.MergeType, contentDescription = "Birleştir", tint = Color.White, modifier = Modifier.size(18.dp))
                         }
                     }
 
@@ -2159,19 +2239,39 @@ fun StonebridgeStudioScreen(
                                     vm.updateBrush(colorHex = hsvToHex(pickerH, pickerS, pickerV))
                                 }
                             } else {
-                                CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 2f..250f, defaultValue = 28f) {
-                                    vm.updateBrush(size = it)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 2f..250f, defaultValue = 28f) {
+                                            vm.updateBrush(size = it)
+                                            brushSizePreviewTick++
+                                        }
+                                    }
+                                    FilterChip(
+                                        selected = showBrushFineTune,
+                                        onClick = { showBrushFineTune = !showBrushFineTune },
+                                        label = { Text(if (showBrushFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp) }
+                                    )
                                 }
-                                CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f, defaultValue = 1f) {
-                                    vm.updateBrush(opacity = it)
-                                }
-                                CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
-                                    vm.updateBrush(hardness = it)
+                                if (showBrushFineTune) {
+                                    CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f, defaultValue = 1f) {
+                                        vm.updateBrush(opacity = it)
+                                    }
+                                    CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
+                                        vm.updateBrush(hardness = it)
+                                    }
+                                    CompactSliderRow("Akış", "${(state.brushFlow * 100).toInt()}%", state.brushFlow, 0.05f..1f, defaultValue = 1f) {
+                                        vm.updateBrush(flow = it)
+                                    }
                                 }
                             }
                         } else if (state.activeTool == ActiveTool.ERASER) {
                             CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 4f..250f, defaultValue = 28f) {
                                 vm.updateBrush(size = it)
+                                brushSizePreviewTick++
                             }
                             CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
                                 vm.updateBrush(hardness = it)
@@ -2184,6 +2284,7 @@ fun StonebridgeStudioScreen(
                         ) {
                             CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 8f..250f, defaultValue = 48f) {
                                 vm.updateBrush(size = it)
+                                brushSizePreviewTick++
                             }
                             if (state.activeTool != ActiveTool.SPOT_HEAL) {
                                 CompactSliderRow("Güç", "%${state.retouchStrength.roundToInt()}", state.retouchStrength, 10f..100f, defaultValue = 55f) {
@@ -2211,6 +2312,7 @@ fun StonebridgeStudioScreen(
                             }
                             CompactSliderRow("Boyut", "${state.brushSize.toInt()}px", state.brushSize, 8f..250f, defaultValue = 48f) {
                                 vm.updateBrush(size = it)
+                                brushSizePreviewTick++
                             }
                             CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f, defaultValue = 1f) {
                                 vm.updateBrush(opacity = it)
@@ -2286,6 +2388,16 @@ fun StonebridgeStudioScreen(
                                 }
                             )
                             if (state.selectionBounds != null) {
+                                CircularDockButton(
+                                    icon = Icons.Default.ContentCopy,
+                                    label = "Katmana Al",
+                                    onClick = { vm.layerViaCopy() }
+                                )
+                                CircularDockButton(
+                                    icon = Icons.Default.BlurOn,
+                                    label = "Yumuşat",
+                                    onClick = { vm.featherSelection(6f) }
+                                )
                                 CircularDockButton(
                                     icon = Icons.Default.CleaningServices,
                                     label = "Nesne Sil",
@@ -3233,6 +3345,98 @@ fun StonebridgeStudioScreen(
                         }
                         CompactSliderRow("Döndür", "${layerRotDeg.roundToInt()}°", layerRotDeg, -180f..180f, defaultValue = 0f) {
                             layerRotDeg = it
+                        }
+                    }
+                }
+
+                BottomPanel.LAYER_FX_EDIT -> {
+                    val activeName = state.layers.firstOrNull { it.isActive }?.name ?: "Katman"
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Katman Efektleri (fx): $activeName",
+                            subtitle = "Metin, kesilmiş nesne veya çizime tahribatsız efekt ekle",
+                            applyLabel = "Uygula",
+                            onClose = { activePanel = BottomPanel.DOCK },
+                            onApply = {
+                                vm.applyLayerEffect(fxKind, fxColorHex, fxSizeVal, fxOpacityVal, fxDistanceVal)
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "dropShadow" to "Gölge",
+                                "stroke" to "Kontur",
+                                "outerGlow" to "Işıma",
+                                "colorOverlay" to "Renk"
+                            ).forEach { (id, lbl) ->
+                                FilterChip(
+                                    selected = fxKind == id,
+                                    onClick = {
+                                        fxKind = id
+                                        if (id == "dropShadow") fxColorHex = "#000000"
+                                        else if (id == "stroke") fxColorHex = "#FFFFFF"
+                                        else if (id == "outerGlow") fxColorHex = "#4F9CFF"
+                                    },
+                                    label = { Text(lbl, fontSize = 11.sp) }
+                                )
+                            }
+                            FilterChip(
+                                selected = showFxFineTune,
+                                onClick = { showFxFineTune = !showFxFineTune },
+                                label = { Text(if (showFxFineTune) "İnce ▲" else "İnce ▼", fontSize = 11.sp) }
+                            )
+                            OutlinedButton(
+                                onClick = { vm.clearLayerEffects() },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("Temizle", fontSize = 10.sp)
+                            }
+                        }
+                        // Temel: Renk + Boyut
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            listOf("#000000", "#FFFFFF", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB").forEach { hex ->
+                                val c = Color(AndroidColor.parseColor(hex))
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(c)
+                                        .border(
+                                            width = if (fxColorHex.equals(hex, true)) 2.5.dp else 1.dp,
+                                            color = if (fxColorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
+                                            shape = CircleShape
+                                        )
+                                        .clickable { fxColorHex = hex }
+                                )
+                            }
+                        }
+                        if (fxKind != "colorOverlay") {
+                            CompactSliderRow("Boyut", "${fxSizeVal.roundToInt()}px", fxSizeVal, 1f..80f, defaultValue = 16f) {
+                                fxSizeVal = it
+                            }
+                        }
+                        if (showFxFineTune) {
+                            CompactSliderRow("Opaklık", "%${fxOpacityVal.roundToInt()}", fxOpacityVal, 5f..100f, defaultValue = 75f) {
+                                fxOpacityVal = it
+                            }
+                            if (fxKind == "dropShadow") {
+                                CompactSliderRow("Uzaklık", "${fxDistanceVal.roundToInt()}px", fxDistanceVal, 0f..80f, defaultValue = 12f) {
+                                    fxDistanceVal = it
+                                }
+                            }
                         }
                     }
                 }

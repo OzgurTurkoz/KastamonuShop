@@ -1,6 +1,9 @@
 package com.kastamonushop.app.viewmodel
 
 import android.content.ContentResolver
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -79,6 +82,7 @@ data class EditorUiState(
     val selectSubtractMode: Boolean = false,
     val cloneSourceDoc: Pair<Float, Float>? = null,
     val pickingCloneSource: Boolean = false,
+    val compareOriginal: Boolean = false,
     val statusMessage: String? = null,
     val isBusy: Boolean = false,
     val fitCameraSignal: Int = 0
@@ -910,19 +914,23 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    /** Quick-saves the current document straight into the Home screen's Saved Photos gallery. */
+    /** Quick-saves the current document as a full multi-layer `.pcraft` project + JPG preview in Home gallery. */
     fun quickSaveToGallery(context: Context, onSaved: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {
-                val bytes = engine.exportDocumentBytes("png")
+                val pcraftBytes = runCatching { engine.exportDocumentBytes("pcraft") }.getOrNull()
+                val previewBytes = runCatching { engine.exportDocumentBytes("jpg") }.getOrNull()
+                val usePcraft = pcraftBytes != null && pcraftBytes.isNotEmpty()
+                val bytes = if (usePcraft) pcraftBytes!! else engine.exportDocumentBytes("png")
+                val ext = if (usePcraft) "pcraft" else "png"
                 val doc = _uiState.value.docInfo
                 val (savedId, updated) = SavedGalleryStore.recordSavedPhoto(
                     context = context,
                     displayName = currentSavedDisplayName ?: doc?.name ?: "StonebridgeCraft",
-                    formatExt = "png",
+                    formatExt = ext,
                     exportedBytes = bytes,
-                    previewPngBytes = null,
+                    previewPngBytes = if (usePcraft) previewBytes else null,
                     width = doc?.width?.toInt() ?: 0,
                     height = doc?.height?.toInt() ?: 0,
                     existingId = currentSavedPhotoId
@@ -1324,6 +1332,156 @@ class EditorViewModel : ViewModel() {
                 NativeSurfaceBridge.nativeRenderFrame()
             }.onFailure { err ->
                 showStatus("Katman silinemedi: ${err.message}")
+            }
+        }
+    }
+
+    fun toggleCompareOriginal() {
+        val next = !_uiState.value.compareOriginal
+        _uiState.update { it.copy(compareOriginal = next) }
+        paintExecutor.execute {
+            runCatching {
+                engine.setCompareOriginal(next)
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (next) "Önce (Orijinal Fotoğraf)" else "Sonra (Düzenlenmiş)", 1400L)
+            }
+        }
+    }
+
+    fun moveLayerUp() {
+        paintExecutor.execute {
+            runCatching {
+                val layers = engine.moveLayerUp()
+                val info = engine.getDocumentInfo()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman yukarı taşındı", 1400L)
+            }.onFailure { err -> showStatus("Yukarı taşınamadı: ${err.message}", 2400L) }
+        }
+    }
+
+    fun moveLayerDown() {
+        paintExecutor.execute {
+            runCatching {
+                val layers = engine.moveLayerDown()
+                val info = engine.getDocumentInfo()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman aşağı taşındı", 1400L)
+            }.onFailure { err -> showStatus("Aşağı taşınamadı: ${err.message}", 2400L) }
+        }
+    }
+
+    fun duplicateActiveLayer() {
+        paintExecutor.execute {
+            runCatching {
+                val layers = engine.duplicateActiveLayer()
+                val info = engine.getDocumentInfo()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman çoğaltıldı", 1600L)
+            }.onFailure { err -> showStatus("Çoğaltılamadı: ${err.message}", 2400L) }
+        }
+    }
+
+    fun mergeLayerDown() {
+        paintExecutor.execute {
+            runCatching {
+                val layers = engine.mergeLayerDown()
+                val info = engine.getDocumentInfo()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Alt katmanla birleştirildi", 1600L)
+            }.onFailure { err -> showStatus("Birleştirilemedi: ${err.message}", 2600L) }
+        }
+    }
+
+    fun layerViaCopy() {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.layerViaCopy()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, selectionBounds = null, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Seçim yeni katmana kopyalandı — artık bağımsız taşıyabilirsin", 2600L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Katmana kopyalanamadı: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun featherSelection(radius: Float = 6f) {
+        paintExecutor.execute {
+            runCatching {
+                val b = engine.featherSelection(radius)
+                _uiState.update { it.copy(selectionBounds = b) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Seçim kenarı yumuşatıldı (${radius.toInt()}px)", 1600L)
+            }.onFailure { err ->
+                showStatus("Yumuşatma hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun applyLayerEffect(kind: String, colorHex: String, size: Float, opacity: Float, distance: Float) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyLayerEffect(kind, colorHex, size, opacity, distance)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman efekti uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Efekt hatası: ${err.message}", 3200L)
+            }
+        }
+    }
+
+    fun clearLayerEffects() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.clearLayerEffects()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman efektleri temizlendi", 1800L)
+            }.onFailure { err ->
+                showStatus("Efekt temizlenemedi: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    /** Saves a crisp PNG straight into Android's Photos/Gallery (`Pictures/StonebridgeCraft`) with zero permission prompts (API 29+). */
+    fun saveToDeviceGallery(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isBusy = true) }
+            showStatus("Galeriye kaydediliyor...", 0L)
+            runCatching {
+                val bytes = engine.exportDocumentBytes("png")
+                val fileName = "StonebridgeCraft_${System.currentTimeMillis()}.png"
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/StonebridgeCraft")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: error("Galeri kaydı oluşturulamadı")
+                resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    ?: error("Galeri dosyasına yazılamadı")
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Cihaz galerisine kaydedildi (Pictures/StonebridgeCraft)", 3000L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Galeri kayıt hatası: ${err.message}", 4500L)
             }
         }
     }

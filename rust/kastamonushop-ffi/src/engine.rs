@@ -134,6 +134,7 @@ pub(crate) struct EngineCore {
     live_filter: Option<LiveFilterSession>,
     proxy_preview: Option<ProxyPreviewSession>,
     transform_hidden_layer: Option<LayerId>,
+    compare_original: bool,
 }
 
 impl EngineCore {
@@ -166,6 +167,7 @@ impl EngineCore {
             live_filter: None,
             proxy_preview: None,
             transform_hidden_layer: None,
+            compare_original: false,
         }
     }
 
@@ -190,6 +192,14 @@ impl EngineCore {
         }
         let doc = self.active_document()?;
         let sz = (doc.size.width.max(1), doc.size.height.max(1));
+        if self.compare_original {
+            let mut cloned = (*doc).clone();
+            let bottom_id = cloned.layers.first().map(|l| l.id);
+            for l in &mut cloned.layers {
+                l.visible = bottom_id == Some(l.id);
+            }
+            return Some((Arc::new(cloned), sz));
+        }
         if let Some(hid) = self.transform_hidden_layer {
             let mut cloned = (*doc).clone();
             if let Some(l) = cloned.layers.iter_mut().find(|l| l.id == hid) {
@@ -1691,6 +1701,172 @@ impl KastamonuEngine {
         Ok(Some(LayerThumbnail { width: tw, height: th, rgba }))
     }
 
+    /// Instant Before/After compare mode: hides all layers except the original Background (zero undo steps).
+    pub fn set_compare_original(&self, enabled: bool) {
+        let mut guard = self.core.lock();
+        guard.compare_original = enabled;
+        guard.mark_full_dirty();
+    }
+
+    pub fn move_layer_up(&self) -> Result<Vec<LayerSummary>, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute("layer.arrange.bringForward", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        drop(guard);
+        self.get_layers()
+    }
+
+    pub fn move_layer_down(&self) -> Result<Vec<LayerSummary>, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute("layer.arrange.sendBackward", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        drop(guard);
+        self.get_layers()
+    }
+
+    pub fn duplicate_active_layer(&self) -> Result<Vec<LayerSummary>, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute("layer.duplicate", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        drop(guard);
+        self.get_layers()
+    }
+
+    pub fn merge_layer_down(&self) -> Result<Vec<LayerSummary>, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute("layer.mergeDown", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        drop(guard);
+        self.get_layers()
+    }
+
+    /// Copies the active selection onto a brand-new independent layer (`layer.new.layerViaCopy`)
+    /// so it can immediately be moved, scaled, rotated, or styled with `fx`!
+    pub fn layer_via_copy(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let has_sel = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| !s.content_bounds().is_empty()))
+            .unwrap_or(false);
+        if !has_sel {
+            return Err(EngineError::CommandFailed {
+                detail: "Önce yeni katmana kopyalanacak bir alan seç".into(),
+            });
+        }
+        // If active layer is empty (like untouched Çizim Katmanı), target primary photo layer so copy grabs pixels
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let active = ds.active_layer();
+            let active_has_px = active
+                .and_then(|id| ds.doc().layers.iter().find(|l| l.id == id))
+                .is_some_and(|l| match &l.content {
+                    LayerContent::Raster(s) => !s.content_bounds().is_empty(),
+                    _ => true,
+                });
+            if active_has_px {
+                active
+            } else {
+                find_primary_photo_raster_layer(ds.doc(), active).map(|(id, _)| id)
+            }
+        };
+        if let Some(tid) = target_id {
+            guard.session.set_active_layer(Some(tid));
+        }
+        guard
+            .session
+            .execute("layer.new.layerViaCopy", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let _ = guard.session.execute("select.deselect", json!({}));
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Softens active selection edges (`select.modify.feather`) for seamless cutouts and masks.
+    pub fn feather_selection(&self, radius: f32) -> Result<Option<SelectionBounds>, EngineError> {
+        let mut guard = self.core.lock();
+        guard
+            .session
+            .execute("select.modify.feather", json!({ "radius": radius.clamp(0.5, 100.0) as f64 }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        let b = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| s.content_bounds()))
+            .filter(|r| !r.is_empty())
+            .map(|r| SelectionBounds { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 });
+        Ok(b)
+    }
+
+    /// Applies a non-destructive PhotoCraft Layer Style (`dropShadow`, `stroke`, `outerGlow`, `colorOverlay`).
+    pub fn apply_layer_effect(
+        &self,
+        kind: String,
+        color_hex: String,
+        size: f32,
+        opacity: f32,
+        distance: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let op = opacity.clamp(5.0, 100.0) as f64;
+        let sz = size.clamp(1.0, 150.0) as f64;
+        let dist = distance.clamp(0.0, 150.0) as f64;
+        let (cmd, params) = match kind.as_str() {
+            "dropShadow" => (
+                "layer.layerStyle.dropShadow",
+                json!({ "color": color_hex, "opacity": op, "size": sz, "distance": dist, "angle": 120.0 }),
+            ),
+            "stroke" => (
+                "layer.layerStyle.stroke",
+                json!({ "color": color_hex, "opacity": op, "size": sz, "position": "outside" }),
+            ),
+            "outerGlow" => (
+                "layer.layerStyle.outerGlow",
+                json!({ "color": color_hex, "opacity": op, "size": sz }),
+            ),
+            "colorOverlay" => (
+                "layer.layerStyle.colorOverlay",
+                json!({ "color": color_hex, "opacity": op }),
+            ),
+            other => {
+                return Err(EngineError::InvalidParams {
+                    detail: format!("Bilinmeyen katman efekti: {other}"),
+                })
+            }
+        };
+        guard
+            .session
+            .execute(cmd, params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn clear_layer_effects(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        let _ = guard.session.execute("layer.layerStyle.clear", json!({}));
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     pub fn add_layer(&self, name: String) -> Result<Vec<LayerSummary>, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -2803,5 +2979,46 @@ mod v08_automated_tests {
         let bg_id = layers.iter().find(|l| l.is_background).unwrap().id;
         eng.set_transform_hidden_layer(Some(bg_id));
         eng.set_transform_hidden_layer(None);
+    }
+
+    #[test]
+    fn test_v090_layer_arrange_duplicate_merge_via_copy_and_feather() {
+        let eng = test_engine();
+        eng.new_document("v09".into(), 160, 160).expect("new_document");
+        let _ = eng.select_rect(20, 20, 60, 60, false, "replace".into()).expect("select");
+        let _ = eng.feather_selection(4.0).expect("feather");
+        let info = eng.layer_via_copy().expect("layer_via_copy");
+        assert!(info.layer_count >= 3, "new layer created from selection");
+
+        let layers_dup = eng.duplicate_active_layer().expect("duplicate");
+        assert!(layers_dup.len() >= 4);
+        let _ = eng.move_layer_down().expect("move down");
+        let _ = eng.move_layer_up().expect("move up");
+        let layers_merged = eng.merge_layer_down().expect("merge down");
+        assert_eq!(layers_merged.len(), layers_dup.len() - 1);
+    }
+
+    #[test]
+    fn test_v090_layer_effects_before_after_and_pcraft_roundtrip() {
+        let eng = test_engine();
+        eng.new_document("fx".into(), 128, 128).expect("new_document");
+        let _ = eng.select_rect(30, 30, 50, 50, false, "replace".into()).expect("sel");
+        let _ = eng.fill_selection_pixels("#FF4D4F".into()).expect("fill");
+        let _ = eng.select_deselect().expect("desel");
+
+        let _ = eng.apply_layer_effect("dropShadow".into(), "#000000".into(), 12.0, 75.0, 8.0).expect("dropShadow");
+        let _ = eng.apply_layer_effect("stroke".into(), "#FFFFFF".into(), 4.0, 100.0, 0.0).expect("stroke");
+        let _ = eng.apply_layer_effect("outerGlow".into(), "#4F9CFF".into(), 16.0, 80.0, 0.0).expect("outerGlow");
+        let _ = eng.apply_layer_effect("colorOverlay".into(), "#52C41A".into(), 1.0, 50.0, 0.0).expect("colorOverlay");
+
+        eng.set_compare_original(true);
+        eng.set_compare_original(false);
+
+        let pcraft_bytes = eng.export_document_bytes("pcraft".into()).expect("export pcraft");
+        assert!(!pcraft_bytes.is_empty());
+        let reopened = eng.open_document_bytes("saved.pcraft".into(), pcraft_bytes).expect("reopen pcraft");
+        assert!(reopened.layer_count >= 2, "multi-layer pcraft preserved all layers");
+
+        let _ = eng.clear_layer_effects().expect("clear fx");
     }
 }
