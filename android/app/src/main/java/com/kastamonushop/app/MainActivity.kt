@@ -109,7 +109,8 @@ private enum class BottomPanel {
     LAYER_FX_EDIT,
     CAMERA_LIGHT_LIVE,
     GRADIENT_EDIT,
-    SHAPE_EDIT
+    SHAPE_EDIT,
+    LIQUIFY_EDIT
 }
 
 private data class BlendModeOption(
@@ -279,7 +280,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.9.5",
+                    text = "v0.9.8",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -823,6 +824,11 @@ fun StonebridgeStudioScreen(
     var shapeCornerRadius by remember { mutableFloatStateOf(24f) }
     var shapeSides by remember { mutableIntStateOf(6) }
     var showShapeFineTune by remember { mutableStateOf(false) }
+    // v0.9.8 60 FPS Liquify (photocraft_algo::liquify) state
+    var liquifyTool by remember { mutableStateOf("forwardWarp") }
+    var liquifySize by remember { mutableFloatStateOf(120f) }
+    var liquifyPressure by remember { mutableFloatStateOf(75f) }
+    var liquifyCursorScreen by remember { mutableStateOf<Offset?>(null) }
     var textDraft by remember { mutableStateOf("StonebridgeCraft") }
     var textNormX by remember { mutableFloatStateOf(0.50f) }
     var textNormY by remember { mutableFloatStateOf(0.50f) }
@@ -957,6 +963,7 @@ fun StonebridgeStudioScreen(
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.LAYER_FX_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.CAMERA_LIGHT_LIVE -> { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU }
+                BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); liquifyCursorScreen = null; activePanel = BottomPanel.EFFECT_MENU }
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
@@ -988,6 +995,10 @@ fun StonebridgeStudioScreen(
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
+        if (activePanel != BottomPanel.LIQUIFY_EDIT) {
+            vm.cancelLiquify()
+            liquifyCursorScreen = null
+        }
     }
 
     LaunchedEffect(activePanel, curveOverlayExpanded, canvasViewRef) {
@@ -1008,6 +1019,7 @@ fun StonebridgeStudioScreen(
                 BottomPanel.CAMERA_LIGHT_LIVE,
                 BottomPanel.GRADIENT_EDIT,
                 BottomPanel.SHAPE_EDIT,
+                BottomPanel.LIQUIFY_EDIT,
                 BottomPanel.DOCK -> fitToSafeArea(pendingQuarterTurns, activePanel)
                 else -> Unit
             }
@@ -1695,19 +1707,58 @@ fun StonebridgeStudioScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(docW, docH, shapeKind, shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides) {
+                            var dragMode = 0 // 0=new, 1=handle0, 2=handle1, 3=move
+                            var lastDocX = 0f
+                            var lastDocY = 0f
                             detectDragGestures(
                                 onDragStart = { pos ->
+                                    val (c0x, c0y) = viewRef.docToScreen(docW * shapeX0Norm, docH * shapeY0Norm)
+                                    val (c1x, c1y) = viewRef.docToScreen(docW * shapeX1Norm, docH * shapeY1Norm)
+                                    val d0 = kotlin.math.hypot(pos.x - c0x, pos.y - c0y)
+                                    val d1 = kotlin.math.hypot(pos.x - c1x, pos.y - c1y)
+                                    val minX = min(c0x, c1x) - 20f
+                                    val maxX = kotlin.math.max(c0x, c1x) + 20f
+                                    val minY = min(c0y, c1y) - 20f
+                                    val maxY = kotlin.math.max(c0y, c1y) + 20f
                                     val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
-                                    shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
-                                    shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
-                                    shapeX1Norm = (shapeX0Norm + 0.04f).coerceAtMost(1f)
-                                    shapeY1Norm = (shapeY0Norm + 0.04f).coerceAtMost(1f)
+                                    lastDocX = dx
+                                    lastDocY = dy
+                                    dragMode = when {
+                                        d0 <= 68f -> 1
+                                        d1 <= 68f -> 2
+                                        pos.x in minX..maxX && pos.y in minY..maxY -> 3
+                                        else -> {
+                                            shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
+                                            shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
+                                            shapeX1Norm = (shapeX0Norm + 0.04f).coerceAtMost(1f)
+                                            shapeY1Norm = (shapeY0Norm + 0.04f).coerceAtMost(1f)
+                                            0
+                                        }
+                                    }
                                 },
                                 onDrag = { change, _ ->
                                     change.consume()
                                     val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
-                                    shapeX1Norm = (dx / docW).coerceIn(0f, 1f)
-                                    shapeY1Norm = (dy / docH).coerceIn(0f, 1f)
+                                    when (dragMode) {
+                                        1 -> {
+                                            shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
+                                            shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
+                                        }
+                                        2, 0 -> {
+                                            shapeX1Norm = (dx / docW).coerceIn(0f, 1f)
+                                            shapeY1Norm = (dy / docH).coerceIn(0f, 1f)
+                                        }
+                                        3 -> {
+                                            val dnx = (dx - lastDocX) / docW
+                                            val dny = (dy - lastDocY) / docH
+                                            lastDocX = dx
+                                            lastDocY = dy
+                                            shapeX0Norm = (shapeX0Norm + dnx).coerceIn(-0.2f, 1.2f)
+                                            shapeY0Norm = (shapeY0Norm + dny).coerceIn(-0.2f, 1.2f)
+                                            shapeX1Norm = (shapeX1Norm + dnx).coerceIn(-0.2f, 1.2f)
+                                            shapeY1Norm = (shapeY1Norm + dny).coerceIn(-0.2f, 1.2f)
+                                        }
+                                    }
                                     vm.updateProxyShape(
                                         shapeKind,
                                         docW * shapeX0Norm, docH * shapeY0Norm,
@@ -1736,6 +1787,47 @@ fun StonebridgeStudioScreen(
                     drawCircle(Color(0xFF4F9CFF), radius = 6f, center = Offset(sx0, sy0))
                     drawCircle(Color.White, radius = 10f, center = Offset(sx1, sy1))
                     drawCircle(Color(0xFF4F9CFF), radius = 6f, center = Offset(sx1, sy1))
+                }
+            }
+        }
+
+        // v0.9.8 Interactive 60 FPS On-Canvas Liquify Drag Overlay
+        if (activePanel == BottomPanel.LIQUIFY_EDIT) {
+            val viewRef = canvasViewRef
+            if (viewRef != null) {
+                androidx.compose.foundation.Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(liquifyTool, liquifySize, liquifyPressure) {
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    liquifyCursorScreen = pos
+                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
+                                    vm.onLiquifyStart(liquifyTool, liquifySize, liquifyPressure, 55f, dx, dy)
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    liquifyCursorScreen = change.position
+                                    val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
+                                    vm.onLiquifyMove(dx, dy)
+                                },
+                                onDragEnd = {
+                                    liquifyCursorScreen = null
+                                    vm.onLiquifyEnd()
+                                },
+                                onDragCancel = {
+                                    liquifyCursorScreen = null
+                                    vm.onLiquifyEnd()
+                                }
+                            )
+                        }
+                ) {
+                    val cur = liquifyCursorScreen
+                    if (cur != null) {
+                        val rPx = (liquifySize * 0.5f * viewRef.getCurrentZoom()).coerceIn(10f, 360f)
+                        drawCircle(Color.White.copy(alpha = 0.85f), radius = rPx, center = cur, style = Stroke(width = 2.2f))
+                        drawCircle(Color(0x884F9CFF), radius = (rPx - 2f).coerceAtLeast(4f), center = cur, style = Stroke(width = 1.2f))
+                    }
                 }
             }
         }
@@ -3121,11 +3213,11 @@ fun StonebridgeStudioScreen(
                             }
                         }
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text("Dolgu", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(44.dp))
+                            Text("Dolgu", fontSize = 11.sp, color = Color(0xFFDCE0EC))
                             shapeSwatches.forEach { (hex, _) ->
                                 val isSel = shapeFillHex == hex
                                 Box(
@@ -3140,11 +3232,10 @@ fun StonebridgeStudioScreen(
                                     if (hex.isEmpty()) Text("×", color = Color(0xFFFF6B6B), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
-                            Spacer(modifier = Modifier.weight(1f))
                             FilterChip(
                                 selected = showShapeFineTune,
                                 onClick = { showShapeFineTune = !showShapeFineTune },
-                                label = { Text(if (showShapeFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp) }
+                                label = { Text(if (showShapeFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) }
                             )
                         }
                         if (showShapeFineTune) {
@@ -3740,6 +3831,62 @@ fun StonebridgeStudioScreen(
                 }
 
                 // Category 5: Efekt -> [Siyah-Beyaz] [Negatif] [Ayna]
+                BottomPanel.LIQUIFY_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Sıvılaştırma (Liquify)",
+                            subtitle = "Fotoğraf üzerinde parmağınla it, şişir veya bük",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.cancelLiquify()
+                                liquifyCursorScreen = null
+                                activePanel = BottomPanel.EFFECT_MENU
+                            },
+                            onApply = {
+                                liquifyCursorScreen = null
+                                vm.commitLiquify()
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            listOf(
+                                "forwardWarp" to "İt",
+                                "bloat" to "Şişir",
+                                "pucker" to "Büz",
+                                "twirlCw" to "Burgu",
+                                "smooth" to "Yumuşat",
+                                "reconstruct" to "Geri Al"
+                            ).forEach { (id, lbl) ->
+                                FilterChip(
+                                    selected = liquifyTool == id,
+                                    onClick = { liquifyTool = id },
+                                    label = { Text(lbl, fontSize = 11.sp) }
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { vm.resetLiquify() },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("Sıfırla", fontSize = 11.sp)
+                            }
+                        }
+                        BrushSizeSliderRow("Boyut", liquifySize, minPx = 20f, maxPx = 400f, defaultPx = 120f) {
+                            liquifySize = it
+                        }
+                        CompactSliderRow("Güç", "%${liquifyPressure.roundToInt()}", liquifyPressure, 10f..100f, defaultValue = 75f) {
+                            liquifyPressure = it
+                        }
+                    }
+                }
+
                 BottomPanel.EFFECT_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -3775,6 +3922,18 @@ fun StonebridgeStudioScreen(
                                     canvasViewRef?.fitToDocument(0)
                                     pushGpuMirrorPreview(selectedMirrorMode, mirrorAxisRatio)
                                     activePanel = BottomPanel.MIRROR_EDIT
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Waves,
+                                label = "Sıvılaştır",
+                                onClick = {
+                                    liquifyTool = "forwardWarp"
+                                    val docMax = maxOf(state.docInfo?.width?.toInt() ?: 1024, state.docInfo?.height?.toInt() ?: 1024).toFloat()
+                                    liquifySize = (docMax * 0.14f).coerceIn(48f, 220f)
+                                    liquifyPressure = 75f
+                                    vm.beginLiquify()
+                                    activePanel = BottomPanel.LIQUIFY_EDIT
                                 }
                             )
                         }

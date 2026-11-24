@@ -799,6 +799,101 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+
+    // Coalesced 60 FPS Liquify live drag state
+    private val pendingLiquifyPt = AtomicReference<Pair<Float, Float>?>(null)
+    private val liquifyDrainScheduled = AtomicBoolean(false)
+
+    fun beginLiquify() {
+        dismissCompareOriginal()
+        pendingProxyJob.set(null)
+        pendingLiquifyPt.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.beginLiquifySession()
+                NativeSurfaceBridge.nativeRenderFrame()
+            }.onFailure { err ->
+                showStatus("Sıvılaştırma başlatılamadı: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun onLiquifyStart(tool: String, size: Float, pressure: Float, density: Float, docX: Float, docY: Float) {
+        pendingLiquifyPt.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.liquifyStrokeBegin(tool, size, pressure, density, docX, docY)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun onLiquifyMove(docX: Float, docY: Float) {
+        pendingLiquifyPt.set(docX to docY)
+        if (liquifyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute {
+                while (true) {
+                    val pt = pendingLiquifyPt.getAndSet(null)
+                    if (pt == null) {
+                        liquifyDrainScheduled.set(false)
+                        if (pendingLiquifyPt.get() == null) return@execute
+                        if (!liquifyDrainScheduled.compareAndSet(false, true)) return@execute
+                        continue
+                    }
+                    runCatching {
+                        engine.liquifyStrokeMove(pt.first, pt.second)
+                        NativeSurfaceBridge.nativeRenderFrame()
+                    }
+                }
+            }
+        }
+    }
+
+    fun onLiquifyEnd() {
+        paintExecutor.execute {
+            runCatching { engine.liquifyStrokeEnd() }
+        }
+    }
+
+    fun resetLiquify() {
+        pendingLiquifyPt.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.resetLiquifySession()
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Sıvılaştırma sıfırlandı", 1400L)
+            }
+        }
+    }
+
+    fun commitLiquify() {
+        pendingLiquifyPt.set(null)
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.commitLiquifySession()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Sıvılaştırma uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Sıvılaştırma hatası: ${err.message}", 2800L)
+            }
+        }
+    }
+
+    fun cancelLiquify() {
+        pendingLiquifyPt.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.cancelLiquifySession()
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
     fun endProxyPreview() {
         pendingProxyJob.set(null)
         paintExecutor.execute {

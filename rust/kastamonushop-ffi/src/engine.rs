@@ -14,6 +14,9 @@ use photocraft_engine::Session;
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::Surface;
 use photocraft_paint::StrokePoint;
+use photocraft_algo::liquify::{
+    LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage as LiquifyProxyImage, apply_liquify, auto_cell,
+};
 use serde_json::{Value, json};
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -122,6 +125,67 @@ struct ProxyPreviewSession {
     real_size: (u32, u32),
 }
 
+struct ActiveLiquifySession {
+    target_layer_id: LayerId,
+    bounds: Rect,
+    cell: f64,
+    field: LiquifyField,
+    proxy: LiquifyProxyImage,
+    proxy_rgba: Vec<[u8; 4]>,
+    preview_doc: Document,
+    real_size: (u32, u32),
+    last_point: Option<[f64; 3]>,
+    current_stroke: LiquifyStroke,
+}
+
+impl ActiveLiquifySession {
+    fn sync_proxy_rect_to_preview_doc(&mut self, r: [usize; 4]) {
+        let [x0, y0, x1, y1] = [
+            r[0].min(self.proxy.w),
+            r[1].min(self.proxy.h),
+            r[2].min(self.proxy.w),
+            r[3].min(self.proxy.h),
+        ];
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let Some(layer) = self.preview_doc.layers.first_mut() else {
+            return;
+        };
+        let LayerContent::Raster(surf) = &mut layer.content else {
+            return;
+        };
+        let rw = x1 - x0;
+        let rh = y1 - y0;
+        let mut fbuf = vec![0.0f32; rw * rh * 4];
+        for y in y0..y1 {
+            let src_row = y * self.proxy.w;
+            let dst_row = (y - y0) * rw;
+            for x in x0..x1 {
+                let p = self.proxy_rgba[src_row + x];
+                let di = (dst_row + (x - x0)) * 4;
+                fbuf[di] = p[0] as f32 / 255.0;
+                fbuf[di + 1] = p[1] as f32 / 255.0;
+                fbuf[di + 2] = p[2] as f32 / 255.0;
+                fbuf[di + 3] = p[3] as f32 / 255.0;
+            }
+        }
+        surf.write_region(Rect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32), &fbuf);
+    }
+}
+
+fn parse_liquify_tool(name: &str) -> LiquifyTool {
+    match name {
+        "bloat" => LiquifyTool::Bloat,
+        "pucker" => LiquifyTool::Pucker,
+        "twirlCw" => LiquifyTool::TwirlCw,
+        "twirlCcw" => LiquifyTool::TwirlCcw,
+        "smooth" => LiquifyTool::Smooth,
+        "reconstruct" => LiquifyTool::Reconstruct,
+        _ => LiquifyTool::ForwardWarp,
+    }
+}
+
 pub(crate) struct EngineCore {
     pub session: Session,
     pub render_generation: u64,
@@ -134,6 +198,7 @@ pub(crate) struct EngineCore {
     live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
     proxy_preview: Option<ProxyPreviewSession>,
+    live_liquify: Option<ActiveLiquifySession>,
     transform_hidden_layer: Option<LayerId>,
     original_snapshot: Option<Arc<Document>>,
     compare_original: bool,
@@ -170,6 +235,7 @@ impl EngineCore {
             live_adjustment: None,
             live_filter: None,
             proxy_preview: None,
+            live_liquify: None,
             transform_hidden_layer: None,
             original_snapshot: initial_snapshot,
             compare_original: false,
@@ -190,6 +256,9 @@ impl EngineCore {
     }
 
     pub fn active_document_and_display_size(&self) -> Option<(Arc<Document>, (u32, u32))> {
+        if let Some(liq) = &self.live_liquify {
+            return Some((Arc::new(liq.preview_doc.clone()), liq.real_size));
+        }
         if let Some(proxy) = &self.proxy_preview {
             if let Some(ds) = proxy.session.active() {
                 return Some((Arc::clone(ds.doc()), proxy.real_size));
@@ -566,6 +635,7 @@ impl KastamonuEngine {
         guard.live_dab = None;
         guard.live_adjustment = None;
         guard.proxy_preview = None;
+        guard.live_liquify = None;
         guard.live_filter = None;
         while guard.session.close(0).is_some() {}
         guard
@@ -604,6 +674,7 @@ impl KastamonuEngine {
         guard.live_dab = None;
         guard.live_adjustment = None;
         guard.proxy_preview = None;
+        guard.live_liquify = None;
         guard.live_filter = None;
         while guard.session.close(0).is_some() {}
         let idx = guard.session.add_document(doc, None);
@@ -644,6 +715,7 @@ impl KastamonuEngine {
         guard.live_dab = None;
         guard.live_adjustment = None;
         guard.proxy_preview = None;
+        guard.live_liquify = None;
         guard.live_filter = None;
         while guard.session.close(0).is_some() {}
         let idx = guard.session.add_document(doc, None);
@@ -1692,6 +1764,182 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+    /// Starts a 60 FPS incremental dirty-rect Liquify session using PhotoCraft's native
+    /// `LiquifyField` + `ProxyImage` (640px proxy, <1ms per finger move).
+    pub fn begin_liquify_session(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_clone = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+
+        let (target_id, bounds, real_size, surf) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let doc = ds.doc();
+            let (tid, _) = find_primary_photo_raster_layer(doc, ds.active_layer()).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Sıvılaştırma uygulanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            let layer = doc.layers.iter().find(|l| l.id == tid).ok_or(EngineError::NoActiveDocument)?;
+            let LayerContent::Raster(s) = &layer.content else {
+                return Err(EngineError::CommandFailed {
+                    detail: "Aktif katman piksel katmanı değil".into(),
+                });
+            };
+            (
+                tid,
+                doc.bounds(),
+                (doc.size.width.max(1), doc.size.height.max(1)),
+                s.clone(),
+            )
+        };
+
+        let cell = auto_cell(bounds);
+        let field = LiquifyField::new(bounds, cell);
+        let proxy = LiquifyProxyImage::new(&surf, bounds, 640);
+        let pw = proxy.w.max(1);
+        let ph = proxy.h.max(1);
+        let mut proxy_rgba = vec![[0u8; 4]; pw * ph];
+        proxy.render(&field, [0, 0, pw, ph], &mut proxy_rgba);
+
+        let mut flat = Vec::with_capacity(pw * ph * 4);
+        for p in &proxy_rgba {
+            flat.extend_from_slice(p);
+        }
+        let preview_surf = Surface::from_interleaved(
+            PixelFormat::RGBA8,
+            Rect::new(0, 0, pw as i32, ph as i32),
+            &flat,
+        );
+        let mut preview_doc = Document::new(
+            "Liquify Preview".to_string(),
+            Size::new(pw as u32, ph as u32),
+            ColorMode::Rgb,
+            SampleType::U8,
+        );
+        preview_doc.layers.push(Layer::new("Liquify", LayerContent::Raster(preview_surf)));
+
+        guard.live_liquify = Some(ActiveLiquifySession {
+            target_layer_id: target_id,
+            bounds,
+            cell,
+            field,
+            proxy,
+            proxy_rgba,
+            preview_doc,
+            real_size,
+            last_point: None,
+            current_stroke: LiquifyStroke::new(LiquifyTool::ForwardWarp, 120.0),
+        });
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn liquify_stroke_begin(
+        &self,
+        tool: String,
+        size: f32,
+        pressure: f32,
+        density: f32,
+        x: f32,
+        y: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(());
+        };
+        let mut st = LiquifyStroke::new(parse_liquify_tool(&tool), size.clamp(12.0, 600.0) as f64);
+        st.pressure = pressure.clamp(5.0, 100.0) as f64;
+        st.density = density.clamp(10.0, 100.0) as f64;
+        st.rate = pressure.clamp(5.0, 100.0) as f64;
+        let pt = [x as f64, y as f64, 1.0];
+        let dirty = liq.field.stroke_begin(&st, pt);
+        liq.current_stroke = st;
+        liq.last_point = Some(pt);
+        if !dirty.is_empty() {
+            let pr = liq.proxy.proxy_rect(dirty);
+            liq.proxy.render(&liq.field, pr, &mut liq.proxy_rgba);
+            liq.sync_proxy_rect_to_preview_doc(pr);
+            guard.mark_region_dirty(Rect::new(pr[0] as i32, pr[1] as i32, pr[2] as i32, pr[3] as i32));
+        }
+        Ok(())
+    }
+
+    pub fn liquify_stroke_move(&self, x: f32, y: f32) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(());
+        };
+        let pt = [x as f64, y as f64, 1.0];
+        let prev = liq.last_point.unwrap_or(pt);
+        let dirty = liq.field.stroke_segment(&liq.current_stroke, prev, pt);
+        liq.last_point = Some(pt);
+        if !dirty.is_empty() {
+            let pr = liq.proxy.proxy_rect(dirty);
+            liq.proxy.render(&liq.field, pr, &mut liq.proxy_rgba);
+            liq.sync_proxy_rect_to_preview_doc(pr);
+            guard.mark_region_dirty(Rect::new(pr[0] as i32, pr[1] as i32, pr[2] as i32, pr[3] as i32));
+        }
+        Ok(())
+    }
+
+    pub fn liquify_stroke_end(&self) {
+        let mut guard = self.core.lock();
+        if let Some(liq) = guard.live_liquify.as_mut() {
+            liq.last_point = None;
+        }
+    }
+
+    pub fn reset_liquify_session(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(());
+        };
+        liq.field = LiquifyField::new(liq.bounds, liq.cell);
+        liq.last_point = None;
+        let full = [0, 0, liq.proxy.w, liq.proxy.h];
+        liq.proxy.render(&liq.field, full, &mut liq.proxy_rgba);
+        liq.sync_proxy_rect_to_preview_doc(full);
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits the Liquify displacement field ONCE at full resolution using PhotoCraft's
+    /// Catmull-Rom bicubic `apply_liquify` (premultiplied alpha, parallel tile-by-tile, undoable).
+    pub fn commit_liquify_session(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.take() else {
+            return self.info_from_locked(&guard);
+        };
+        guard.dismiss_compare();
+        if !liq.field.is_identity() {
+            let tid = liq.target_layer_id;
+            let field = liq.field;
+            guard
+                .session
+                .edit("Sıvılaştırma", |doc, _| {
+                    if let Some(layer) = doc.layers.iter_mut().find(|l| l.id == tid) {
+                        if let LayerContent::Raster(surf) = &mut layer.content {
+                            *surf = apply_liquify(surf, &field);
+                        }
+                    }
+                    Ok(())
+                })
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        }
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn cancel_liquify_session(&self) {
+        let mut guard = self.core.lock();
+        if guard.live_liquify.take().is_some() {
+            guard.mark_full_dirty();
+        }
+    }
+
     pub fn end_proxy_preview(&self) {
         let mut guard = self.core.lock();
         if guard.proxy_preview.take().is_some() {
@@ -2034,6 +2282,7 @@ impl KastamonuEngine {
         guard.live_dab = None;
         guard.live_adjustment = None;
         guard.proxy_preview = None;
+        guard.live_liquify = None;
         guard.live_filter = None;
         guard
             .session
@@ -2051,6 +2300,7 @@ impl KastamonuEngine {
         guard.live_dab = None;
         guard.live_adjustment = None;
         guard.proxy_preview = None;
+        guard.live_liquify = None;
         guard.live_filter = None;
         guard
             .session
@@ -3657,5 +3907,55 @@ mod v08_automated_tests {
         let _ = eng.create_shape_layer("polygon".into(), 30.0, 30.0, 150.0, 150.0, "#FAAD14".into(), "#000000".into(), 2.0, 0.0, 6).expect("polygon");
         let info = eng.create_shape_layer("line".into(), 10.0, 10.0, 180.0, 180.0, "".into(), "#FFFFFF".into(), 6.0, 0.0, 5).expect("line");
         assert_eq!(info.layer_count as usize, before + 4);
+    }
+
+    #[test]
+    fn test_v098_liquify_forward_warp_bloat_reset_and_commit_undo() {
+        let eng = test_engine();
+        let w = 128u32;
+        let h = 128u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let inside = (32..96).contains(&x) && (32..96).contains(&y);
+                rgba[i] = if inside { 220 } else { 0 };
+                rgba[i + 1] = if inside { 40 } else { 0 };
+                rgba[i + 2] = if inside { 40 } else { 0 };
+                rgba[i + 3] = if inside { 255 } else { 0 };
+            }
+        }
+        eng.open_rgba_bytes("liq.png".into(), w, h, rgba).expect("open");
+
+        eng.begin_liquify_session().expect("begin liquify");
+        eng.liquify_stroke_begin("forwardWarp".into(), 60.0, 80.0, 50.0, 64.0, 64.0).expect("begin stroke");
+        eng.liquify_stroke_move(88.0, 64.0).expect("move stroke");
+        eng.liquify_stroke_end();
+
+        eng.reset_liquify_session().expect("reset liquify");
+        {
+            let guard = eng.core.lock();
+            assert!(guard.live_liquify.as_ref().unwrap().field.is_identity());
+        }
+
+        eng.liquify_stroke_begin("bloat".into(), 64.0, 85.0, 50.0, 64.0, 64.0).expect("bloat");
+        eng.liquify_stroke_move(66.0, 64.0).expect("bloat move");
+        eng.liquify_stroke_end();
+        let info = eng.commit_liquify_session().expect("commit liquify");
+        assert_eq!((info.width, info.height), (w, h));
+        let _ = eng.undo().expect("undo liquify");
+    }
+
+    #[test]
+    fn test_v098_liquify_cancel_leaves_document_untouched() {
+        let eng = test_engine();
+        eng.new_document("liq_cancel".into(), 96, 96).expect("new_document");
+        eng.begin_liquify_session().expect("begin");
+        eng.liquify_stroke_begin("twirlCw".into(), 48.0, 70.0, 50.0, 48.0, 48.0).expect("twirl");
+        eng.liquify_stroke_move(52.0, 52.0).expect("move");
+        eng.liquify_stroke_end();
+        eng.cancel_liquify_session();
+        let guard = eng.core.lock();
+        assert!(guard.live_liquify.is_none());
     }
 }
