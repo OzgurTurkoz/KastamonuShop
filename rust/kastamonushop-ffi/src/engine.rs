@@ -305,6 +305,204 @@ fn find_primary_photo_raster_layer(doc: &Document, active: Option<LayerId>) -> O
     chosen.map(|l| (l.id, l.locks.pixels))
 }
 
+/// Shared premultiplied-alpha 3-pass separable sliding-window box blur (O(1) per pixel, tiny scratch RAM).
+/// Premultiplying RGB by alpha prevents dark/white fringe halos on transparent PNG cutouts.
+fn box_blur_passes_inplace(data: &mut [f32], w: usize, h: usize, ch: usize, pass_r: usize, passes: usize) {
+    if pass_r == 0 || w < 2 || h < 2 || ch == 0 {
+        return;
+    }
+    let active_ch = ch.min(8);
+    let has_alpha = ch >= 4;
+    if has_alpha {
+        for px in data.chunks_exact_mut(ch) {
+            let a = px[3].clamp(0.0, 1.0);
+            px[0] *= a;
+            px[1] *= a;
+            px[2] *= a;
+        }
+    }
+    let mut line_buf = vec![0.0f32; w.max(h) * ch];
+    let mut acc = [0.0f32; 8];
+    let win = (2 * pass_r + 1) as f32;
+    let inv_win = 1.0 / win;
+
+    for _ in 0..passes {
+        for y in 0..h {
+            let row = y * w * ch;
+            for c in 0..active_ch {
+                let first = data[row + c];
+                acc[c] = first * (pass_r + 1) as f32;
+                for k in 1..=pass_r {
+                    acc[c] += data[row + k.min(w - 1) * ch + c];
+                }
+            }
+            for x in 0..w {
+                for c in 0..active_ch {
+                    line_buf[x * ch + c] = acc[c] * inv_win;
+                }
+                let add_x = (x + pass_r + 1).min(w - 1);
+                let sub_x = x.saturating_sub(pass_r);
+                for c in 0..active_ch {
+                    acc[c] += data[row + add_x * ch + c] - data[row + sub_x * ch + c];
+                }
+            }
+            data[row..(row + w * ch)].copy_from_slice(&line_buf[..(w * ch)]);
+        }
+
+        for x in 0..w {
+            for c in 0..active_ch {
+                let first = data[x * ch + c];
+                acc[c] = first * (pass_r + 1) as f32;
+                for k in 1..=pass_r {
+                    acc[c] += data[(k.min(h - 1) * w + x) * ch + c];
+                }
+            }
+            for y in 0..h {
+                for c in 0..active_ch {
+                    line_buf[y * ch + c] = acc[c] * inv_win;
+                }
+                let add_y = (y + pass_r + 1).min(h - 1);
+                let sub_y = y.saturating_sub(pass_r);
+                for c in 0..active_ch {
+                    acc[c] += data[(add_y * w + x) * ch + c] - data[(sub_y * w + x) * ch + c];
+                }
+            }
+            for y in 0..h {
+                let idx = (y * w + x) * ch;
+                for c in 0..active_ch {
+                    data[idx + c] = line_buf[y * ch + c];
+                }
+            }
+        }
+    }
+
+    if has_alpha {
+        for px in data.chunks_exact_mut(ch) {
+            let a = px[3].clamp(0.0, 1.0);
+            if a > 1e-4 {
+                let inv_a = 1.0 / a;
+                px[0] = (px[0] * inv_a).clamp(0.0, 1.0);
+                px[1] = (px[1] * inv_a).clamp(0.0, 1.0);
+                px[2] = (px[2] * inv_a).clamp(0.0, 1.0);
+            } else {
+                px[0] = 0.0;
+                px[1] = 0.0;
+                px[2] = 0.0;
+            }
+            px[3] = a;
+        }
+    }
+}
+
+fn run_blur_on_doc(doc: &mut Document, target_id: LayerId, radius_px: f32) {
+    if radius_px < 0.5 {
+        return;
+    }
+    let bounds = doc.bounds();
+    let w = doc.size.width as usize;
+    let h = doc.size.height as usize;
+    if w < 2 || h < 2 {
+        return;
+    }
+    let sel_mask: Option<Vec<f32>> = doc.selection.as_ref().and_then(|sel| {
+        if sel.content_bounds().is_empty() {
+            None
+        } else {
+            Some(sel.read_region(bounds))
+        }
+    });
+    let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+        return;
+    };
+    let LayerContent::Raster(surf) = &mut layer.content else {
+        return;
+    };
+    let ch = surf.format().channels();
+    let orig = surf.read_region(bounds);
+    if orig.len() < w * h * ch {
+        return;
+    }
+    let mut blurred = orig.clone();
+    let pass_r = (radius_px * 0.58).round().max(1.0) as usize;
+    box_blur_passes_inplace(&mut blurred, w, h, ch, pass_r, 3);
+
+    if let Some(mask) = sel_mask {
+        let m_ch = (mask.len() / (w * h)).max(1);
+        for i in 0..(w * h) {
+            let m = mask[i * m_ch].clamp(0.0, 1.0);
+            if m < 0.999 {
+                let base = i * ch;
+                let inv_m = 1.0 - m;
+                for c in 0..ch {
+                    blurred[base + c] = orig[base + c] * inv_m + blurred[base + c] * m;
+                }
+            }
+        }
+    }
+    surf.write_region_par(bounds, &blurred);
+}
+
+fn run_sharpen_on_doc(doc: &mut Document, target_id: LayerId, amount: f32) {
+    let strength = (amount.clamp(0.0, 250.0) / 100.0) * 1.35;
+    if strength < 0.01 {
+        return;
+    }
+    let bounds = doc.bounds();
+    let w = doc.size.width as usize;
+    let h = doc.size.height as usize;
+    if w < 3 || h < 3 {
+        return;
+    }
+    let sel_mask: Option<Vec<f32>> = doc.selection.as_ref().and_then(|sel| {
+        if sel.content_bounds().is_empty() {
+            None
+        } else {
+            Some(sel.read_region(bounds))
+        }
+    });
+    let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+        return;
+    };
+    let LayerContent::Raster(surf) = &mut layer.content else {
+        return;
+    };
+    let ch = surf.format().channels();
+    let rgb_ch = ch.min(3);
+    let orig = surf.read_region(bounds);
+    if orig.len() < w * h * ch {
+        return;
+    }
+    // Resolution-invariant Unsharp Mask radius so 512px proxy and full-res match 100% identically
+    let usm_radius = ((w.max(h) as f32) * 0.0028).clamp(1.0, 8.0);
+    let pass_r = (usm_radius * 0.58).round().max(1.0) as usize;
+    let mut blurred = orig.clone();
+    box_blur_passes_inplace(&mut blurred, w, h, ch, pass_r, 2);
+
+    let mut out = orig.clone();
+    if let Some(mask) = sel_mask {
+        let m_ch = (mask.len() / (w * h)).max(1);
+        for i in 0..(w * h) {
+            let m = mask[i * m_ch].clamp(0.0, 1.0);
+            if m > 0.001 {
+                let base = i * ch;
+                let eff = strength * m;
+                for c in 0..rgb_ch {
+                    out[base + c] = (orig[base + c] + (orig[base + c] - blurred[base + c]) * eff).clamp(0.0, 1.0);
+                }
+            }
+        }
+    } else {
+        for i in 0..(w * h) {
+            let base = i * ch;
+            for c in 0..rgb_ch {
+                out[base + c] = (orig[base + c] + (orig[base + c] - blurred[base + c]) * strength).clamp(0.0, 1.0);
+            }
+        }
+    }
+    surf.write_region_par(bounds, &out);
+}
+
+
 #[uniffi::export]
 impl KastamonuEngine {
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
@@ -923,203 +1121,6 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Shared premultiplied-alpha 3-pass separable sliding-window box blur (O(1) per pixel, tiny scratch RAM).
-    /// Premultiplying RGB by alpha prevents dark/white fringe halos on transparent PNG cutouts.
-    fn box_blur_passes_inplace(data: &mut [f32], w: usize, h: usize, ch: usize, pass_r: usize, passes: usize) {
-        if pass_r == 0 || w < 2 || h < 2 || ch == 0 {
-            return;
-        }
-        let active_ch = ch.min(8);
-        let has_alpha = ch >= 4;
-        if has_alpha {
-            for px in data.chunks_exact_mut(ch) {
-                let a = px[3].clamp(0.0, 1.0);
-                px[0] *= a;
-                px[1] *= a;
-                px[2] *= a;
-            }
-        }
-        let mut line_buf = vec![0.0f32; w.max(h) * ch];
-        let mut acc = [0.0f32; 8];
-        let win = (2 * pass_r + 1) as f32;
-        let inv_win = 1.0 / win;
-
-        for _ in 0..passes {
-            for y in 0..h {
-                let row = y * w * ch;
-                for c in 0..active_ch {
-                    let first = data[row + c];
-                    acc[c] = first * (pass_r + 1) as f32;
-                    for k in 1..=pass_r {
-                        acc[c] += data[row + k.min(w - 1) * ch + c];
-                    }
-                }
-                for x in 0..w {
-                    for c in 0..active_ch {
-                        line_buf[x * ch + c] = acc[c] * inv_win;
-                    }
-                    let add_x = (x + pass_r + 1).min(w - 1);
-                    let sub_x = x.saturating_sub(pass_r);
-                    for c in 0..active_ch {
-                        acc[c] += data[row + add_x * ch + c] - data[row + sub_x * ch + c];
-                    }
-                }
-                data[row..(row + w * ch)].copy_from_slice(&line_buf[..(w * ch)]);
-            }
-
-            for x in 0..w {
-                for c in 0..active_ch {
-                    let first = data[x * ch + c];
-                    acc[c] = first * (pass_r + 1) as f32;
-                    for k in 1..=pass_r {
-                        acc[c] += data[(k.min(h - 1) * w + x) * ch + c];
-                    }
-                }
-                for y in 0..h {
-                    for c in 0..active_ch {
-                        line_buf[y * ch + c] = acc[c] * inv_win;
-                    }
-                    let add_y = (y + pass_r + 1).min(h - 1);
-                    let sub_y = y.saturating_sub(pass_r);
-                    for c in 0..active_ch {
-                        acc[c] += data[(add_y * w + x) * ch + c] - data[(sub_y * w + x) * ch + c];
-                    }
-                }
-                for y in 0..h {
-                    let idx = (y * w + x) * ch;
-                    for c in 0..active_ch {
-                        data[idx + c] = line_buf[y * ch + c];
-                    }
-                }
-            }
-        }
-
-        if has_alpha {
-            for px in data.chunks_exact_mut(ch) {
-                let a = px[3].clamp(0.0, 1.0);
-                if a > 1e-4 {
-                    let inv_a = 1.0 / a;
-                    px[0] = (px[0] * inv_a).clamp(0.0, 1.0);
-                    px[1] = (px[1] * inv_a).clamp(0.0, 1.0);
-                    px[2] = (px[2] * inv_a).clamp(0.0, 1.0);
-                } else {
-                    px[0] = 0.0;
-                    px[1] = 0.0;
-                    px[2] = 0.0;
-                }
-                px[3] = a;
-            }
-        }
-    }
-
-    fn run_blur_on_doc(doc: &mut Document, target_id: LayerId, radius_px: f32) {
-        if radius_px < 0.5 {
-            return;
-        }
-        let bounds = doc.bounds();
-        let w = doc.size.width as usize;
-        let h = doc.size.height as usize;
-        if w < 2 || h < 2 {
-            return;
-        }
-        let sel_mask: Option<Vec<f32>> = doc.selection.as_ref().and_then(|sel| {
-            if sel.content_bounds().is_empty() {
-                None
-            } else {
-                Some(sel.read_region(bounds))
-            }
-        });
-        let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
-            return;
-        };
-        let LayerContent::Raster(surf) = &mut layer.content else {
-            return;
-        };
-        let ch = surf.format().channels();
-        let orig = surf.read_region(bounds);
-        if orig.len() < w * h * ch {
-            return;
-        }
-        let mut blurred = orig.clone();
-        let pass_r = (radius_px * 0.58).round().max(1.0) as usize;
-        Self::box_blur_passes_inplace(&mut blurred, w, h, ch, pass_r, 3);
-
-        if let Some(mask) = sel_mask {
-            let m_ch = (mask.len() / (w * h)).max(1);
-            for i in 0..(w * h) {
-                let m = mask[i * m_ch].clamp(0.0, 1.0);
-                if m < 0.999 {
-                    let base = i * ch;
-                    let inv_m = 1.0 - m;
-                    for c in 0..ch {
-                        blurred[base + c] = orig[base + c] * inv_m + blurred[base + c] * m;
-                    }
-                }
-            }
-        }
-        surf.write_region_par(bounds, &blurred);
-    }
-
-    fn run_sharpen_on_doc(doc: &mut Document, target_id: LayerId, amount: f32) {
-        let strength = (amount.clamp(0.0, 250.0) / 100.0) * 1.35;
-        if strength < 0.01 {
-            return;
-        }
-        let bounds = doc.bounds();
-        let w = doc.size.width as usize;
-        let h = doc.size.height as usize;
-        if w < 3 || h < 3 {
-            return;
-        }
-        let sel_mask: Option<Vec<f32>> = doc.selection.as_ref().and_then(|sel| {
-            if sel.content_bounds().is_empty() {
-                None
-            } else {
-                Some(sel.read_region(bounds))
-            }
-        });
-        let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
-            return;
-        };
-        let LayerContent::Raster(surf) = &mut layer.content else {
-            return;
-        };
-        let ch = surf.format().channels();
-        let rgb_ch = ch.min(3);
-        let orig = surf.read_region(bounds);
-        if orig.len() < w * h * ch {
-            return;
-        }
-        // Resolution-invariant Unsharp Mask radius so 512px proxy and full-res match 100% identically
-        let usm_radius = ((w.max(h) as f32) * 0.0028).clamp(1.0, 8.0);
-        let pass_r = (usm_radius * 0.58).round().max(1.0) as usize;
-        let mut blurred = orig.clone();
-        Self::box_blur_passes_inplace(&mut blurred, w, h, ch, pass_r, 2);
-
-        let mut out = orig.clone();
-        if let Some(mask) = sel_mask {
-            let m_ch = (mask.len() / (w * h)).max(1);
-            for i in 0..(w * h) {
-                let m = mask[i * m_ch].clamp(0.0, 1.0);
-                if m > 0.001 {
-                    let base = i * ch;
-                    let eff = strength * m;
-                    for c in 0..rgb_ch {
-                        out[base + c] = (orig[base + c] + (orig[base + c] - blurred[base + c]) * eff).clamp(0.0, 1.0);
-                    }
-                }
-            }
-        } else {
-            for i in 0..(w * h) {
-                let base = i * ch;
-                for c in 0..rgb_ch {
-                    out[base + c] = (orig[base + c] + (orig[base + c] - blurred[base + c]) * strength).clamp(0.0, 1.0);
-                }
-            }
-        }
-        surf.write_region_par(bounds, &out);
-    }
-
     /// Low-memory O(1)-per-pixel 3-pass separable Box/Gaussian Blur with transparency & selection-mask parity.
     pub fn apply_blur_fast(&self, radius: f32) -> Result<DocumentInfo, EngineError> {
         let r = radius.clamp(0.0, 80.0);
@@ -1138,7 +1139,7 @@ impl KastamonuEngine {
         guard
             .session
             .edit("Bulanıklaştırma", |doc, _| {
-                Self::run_blur_on_doc(doc, target_id, r);
+                run_blur_on_doc(doc, target_id, r);
                 Ok(())
             })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -1164,7 +1165,7 @@ impl KastamonuEngine {
         guard
             .session
             .edit("Keskinleştirme", |doc, _| {
-                Self::run_sharpen_on_doc(doc, target_id, amt);
+                run_sharpen_on_doc(doc, target_id, amt);
                 Ok(())
             })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -1262,7 +1263,7 @@ impl KastamonuEngine {
                 .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
             if let Some(tid) = target_id {
                 let _ = ps.edit("Proxy Blur", |doc, _| {
-                    Self::run_blur_on_doc(doc, tid, scaled_r);
+                    run_blur_on_doc(doc, tid, scaled_r);
                     Ok(())
                 });
             }
@@ -1290,7 +1291,7 @@ impl KastamonuEngine {
                 .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
             if let Some(tid) = target_id {
                 let _ = ps.edit("Proxy Sharpen", |doc, _| {
-                    Self::run_sharpen_on_doc(doc, tid, amount);
+                    run_sharpen_on_doc(doc, tid, amount);
                     Ok(())
                 });
             }
