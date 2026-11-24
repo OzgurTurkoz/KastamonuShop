@@ -162,6 +162,14 @@ class EditorViewModel : ViewModel() {
             val cornerRadius: Float,
             val sides: UInt
         ) : ProxyJob()
+        data class CinemaLook(
+            val preset: String,
+            val intensity: Float,
+            val vignette: Float,
+            val grain: Float
+        ) : ProxyJob()
+        data class MotionBlur(val angle: Float, val distance: Float) : ProxyJob()
+        data class RadialBlur(val amount: Float, val method: String) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -649,6 +657,9 @@ class EditorViewModel : ViewModel() {
                         job.kind, job.x0, job.y0, job.x1, job.y1,
                         job.fillHex, job.strokeHex, job.strokeWidth, job.cornerRadius, job.sides
                     )
+                    is ProxyJob.CinemaLook -> engine.updateProxyCinemaLook(job.preset, job.intensity, job.vignette, job.grain)
+                    is ProxyJob.MotionBlur -> engine.updateProxyMotionBlur(job.angle, job.distance)
+                    is ProxyJob.RadialBlur -> engine.updateProxyRadialBlur(job.amount, job.method)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
@@ -890,6 +901,104 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 engine.cancelLiquifySession()
                 NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+
+    fun applyAutoEnhance(mode: String, label: String) {
+        dismissCompareOriginal()
+        pendingProxyJob.set(null)
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyAutoEnhance(mode)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("$label uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Oto İyileştirme hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun updateProxyCinemaLook(preset: String, intensity: Float, vignette: Float, grain: Float) {
+        pendingProxyJob.set(ProxyJob.CinemaLook(preset, intensity, vignette, grain))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyCinemaLook(preset: String, intensity: Float, vignette: Float, grain: Float) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyCinemaLook(preset, intensity, vignette, grain)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Sinema stili uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Sinema stili hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun updateProxyMotionBlur(angle: Float, distance: Float) {
+        pendingProxyJob.set(ProxyJob.MotionBlur(angle, distance))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyMotionBlur(angle: Float, distance: Float) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyMotionBlur(angle, distance)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Hareket bulanıklığı uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Hareket bulanıklığı hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun updateProxyRadialBlur(amount: Float, method: String) {
+        pendingProxyJob.set(ProxyJob.RadialBlur(amount, method))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyRadialBlur(amount: Float, method: String) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyRadialBlur(amount, method)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Radyal bulanıklık uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Radyal bulanıklık hatası: ${err.message}", 2600L)
             }
         }
     }

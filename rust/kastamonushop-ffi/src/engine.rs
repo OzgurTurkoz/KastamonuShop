@@ -627,6 +627,37 @@ fn build_shape_params(
     Value::Object(obj)
 }
 
+
+fn build_cinema_look_params(preset: &str, intensity: f32, vignette: f32, grain: f32) -> Value {
+    let k = (intensity.clamp(0.0, 100.0) / 100.0) as f64;
+    let (exp, con, hi, sh, temp, tint, clar, deh, vib, sat) = match preset {
+        "golden" => (0.20, 14.0, -18.0, 22.0, 34.0, 6.0, 12.0, 8.0, 26.0, 10.0),
+        "tealOrange" => (0.05, 22.0, -24.0, 18.0, -16.0, -4.0, 18.0, 14.0, 28.0, 8.0),
+        "noir" => (0.10, 36.0, -15.0, -10.0, 0.0, 0.0, 28.0, 18.0, 0.0, -100.0),
+        "vivid" => (0.12, 18.0, -12.0, 16.0, 6.0, 2.0, 20.0, 12.0, 42.0, 22.0),
+        "vintage" => (0.08, -8.0, -28.0, 26.0, 22.0, 10.0, -6.0, -10.0, -14.0, -18.0),
+        "cyber" => (-0.08, 28.0, -10.0, 14.0, -30.0, 24.0, 24.0, 20.0, 38.0, 18.0),
+        _ => (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    };
+    json!({
+        "exposure": exp * k,
+        "contrast": con * k,
+        "highlights": hi * k,
+        "shadows": sh * k,
+        "temperature": temp * k,
+        "tint": tint * k,
+        "clarity": clar * k,
+        "dehaze": deh * k,
+        "vibrance": vib * k,
+        "saturation": sat * k,
+        "vignetteAmount": vignette.clamp(-100.0, 100.0) as f64,
+        "grainAmount": grain.clamp(0.0, 100.0) as f64,
+        "grainSize": 28.0,
+        "grainRoughness": 50.0,
+        "seed": 42u32
+    })
+}
+
 #[uniffi::export]
 impl KastamonuEngine {
     pub fn new_document(&self, name: String, width: u32, height: u32) -> Result<DocumentInfo, EngineError> {
@@ -1938,6 +1969,222 @@ impl KastamonuEngine {
         if guard.live_liquify.take().is_some() {
             guard.mark_full_dirty();
         }
+    }
+
+    /// One-tap Smart Auto Enhance using PhotoCraft's native `image.autoTone`, `image.autoColor`, or `image.autoContrast`.
+    pub fn apply_auto_enhance(&self, mode: String) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.live_liquify = None;
+        guard.dismiss_compare();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Otomatik iyileştirme uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        let cmd = match mode.as_str() {
+            "color" => "image.autoColor",
+            "contrast" => "image.autoContrast",
+            _ => "image.autoTone",
+        };
+        guard
+            .session
+            .execute(cmd, json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// 60 FPS Live Proxy Preview for Cinematic Looks + Vignette + Film Grain (`filter.cameraRaw`).
+    pub fn update_proxy_cinema_look(
+        &self,
+        preset: String,
+        intensity: f32,
+        vignette: f32,
+        grain: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let target_id = ps
+            .active()
+            .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+        if let Some(tid) = target_id {
+            ps.set_active_layer(Some(tid));
+            let params = build_cinema_look_params(&preset, intensity, vignette, grain);
+            let _ = ps.execute("filter.cameraRaw", params);
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits Cinematic Look + Vignette + Film Grain once at full resolution.
+    pub fn apply_cinema_look(
+        &self,
+        preset: String,
+        intensity: f32,
+        vignette: f32,
+        grain: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Sinema stili uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        let params = build_cinema_look_params(&preset, intensity, vignette, grain);
+        guard
+            .session
+            .execute("filter.cameraRaw", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// 60 FPS Live Proxy Preview for Motion Blur (`filter.blur.motionBlur`).
+    pub fn update_proxy_motion_blur(&self, angle: f32, distance: f32) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let scaled_dist = (distance.clamp(0.0, 200.0) * proxy.scale).round().clamp(0.0, 120.0);
+        if scaled_dist >= 1.0 {
+            let target_id = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(tid) = target_id {
+                ps.set_active_layer(Some(tid));
+                let _ = ps.execute(
+                    "filter.blur.motionBlur",
+                    json!({ "angle": angle.clamp(-180.0, 180.0) as f64, "distance": scaled_dist as f64 }),
+                );
+            }
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits Motion Blur (`filter.blur.motionBlur`) at full resolution.
+    pub fn apply_motion_blur(&self, angle: f32, distance: f32) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Hareket bulanıklığı uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        guard
+            .session
+            .execute(
+                "filter.blur.motionBlur",
+                json!({
+                    "angle": angle.clamp(-180.0, 180.0) as f64,
+                    "distance": distance.clamp(1.0, 200.0) as f64
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// 60 FPS Live Proxy Preview for Radial Blur (`filter.blur.radialBlur`, zoom or spin).
+    pub fn update_proxy_radial_blur(&self, amount: f32, method: String) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let amt = amount.round().clamp(0.0, 100.0);
+        if amt >= 1.0 {
+            let target_id = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(tid) = target_id {
+                ps.set_active_layer(Some(tid));
+                let m = if method == "spin" { "spin" } else { "zoom" };
+                let _ = ps.execute(
+                    "filter.blur.radialBlur",
+                    json!({ "amount": amt as i64, "method": m, "quality": "draft", "centerX": 0.5, "centerY": 0.5 }),
+                );
+            }
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits Radial Blur (`filter.blur.radialBlur`) at full resolution.
+    pub fn apply_radial_blur(&self, amount: f32, method: String) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Radyal bulanıklık uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        let m = if method == "spin" { "spin" } else { "zoom" };
+        guard
+            .session
+            .execute(
+                "filter.blur.radialBlur",
+                json!({
+                    "amount": amount.round().clamp(1.0, 100.0) as i64,
+                    "method": m,
+                    "quality": "good",
+                    "centerX": 0.5,
+                    "centerY": 0.5
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
     }
 
     pub fn end_proxy_preview(&self) {
@@ -3957,5 +4204,52 @@ mod v08_automated_tests {
         eng.cancel_liquify_session();
         let guard = eng.core.lock();
         assert!(guard.live_liquify.is_none());
+    }
+
+    #[test]
+    fn test_v099_auto_enhance_tone_color_contrast() {
+        let eng = test_engine();
+        let w = 64u32;
+        let h = 64u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                rgba[i] = (60 + x * 2) as u8;
+                rgba[i + 1] = (70 + y) as u8;
+                rgba[i + 2] = 90;
+                rgba[i + 3] = 255;
+            }
+        }
+        eng.open_rgba_bytes("auto.png".into(), w, h, rgba).expect("open");
+        for mode in ["tone", "color", "contrast"] {
+            let info = eng.apply_auto_enhance(mode.into()).expect("auto enhance");
+            assert_eq!((info.width, info.height), (w, h));
+            let _ = eng.undo().expect("undo auto");
+        }
+    }
+
+    #[test]
+    fn test_v099_cinema_look_vignette_grain_proxy_and_apply() {
+        let eng = test_engine();
+        eng.new_document("cinema".into(), 128, 128).expect("new_document");
+        eng.begin_proxy_preview().expect("begin proxy");
+        eng.update_proxy_cinema_look("tealOrange".into(), 80.0, -35.0, 20.0).expect("proxy cinema");
+        eng.end_proxy_preview();
+        let info = eng.apply_cinema_look("golden".into(), 90.0, -30.0, 15.0).expect("apply cinema");
+        assert_eq!((info.width, info.height), (128, 128));
+    }
+
+    #[test]
+    fn test_v099_motion_and_radial_blur_proxy_and_apply() {
+        let eng = test_engine();
+        eng.new_document("blurs".into(), 128, 128).expect("new_document");
+        eng.begin_proxy_preview().expect("begin proxy");
+        eng.update_proxy_motion_blur(45.0, 24.0).expect("proxy motion");
+        eng.update_proxy_radial_blur(15.0, "zoom".into()).expect("proxy radial");
+        eng.end_proxy_preview();
+        let _ = eng.apply_motion_blur(30.0, 18.0).expect("apply motion");
+        let info = eng.apply_radial_blur(12.0, "spin".into()).expect("apply radial");
+        assert_eq!((info.width, info.height), (128, 128));
     }
 }

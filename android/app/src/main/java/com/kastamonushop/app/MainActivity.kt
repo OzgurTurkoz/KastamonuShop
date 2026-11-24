@@ -110,7 +110,11 @@ private enum class BottomPanel {
     CAMERA_LIGHT_LIVE,
     GRADIENT_EDIT,
     SHAPE_EDIT,
-    LIQUIFY_EDIT
+    LIQUIFY_EDIT,
+    AUTO_ENHANCE_MENU,
+    CINEMA_LOOK_EDIT,
+    MOTION_BLUR_EDIT,
+    RADIAL_BLUR_EDIT
 }
 
 private data class BlendModeOption(
@@ -280,7 +284,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.9.8",
+                    text = "v0.9.9",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -829,6 +833,15 @@ fun StonebridgeStudioScreen(
     var liquifySize by remember { mutableFloatStateOf(120f) }
     var liquifyPressure by remember { mutableFloatStateOf(75f) }
     var liquifyCursorScreen by remember { mutableStateOf<Offset?>(null) }
+    // v0.9.9 Cinematic Looks + Vignette/Grain & Motion/Radial Blur state
+    var cinemaPreset by remember { mutableStateOf("golden") }
+    var cinemaIntensity by remember { mutableFloatStateOf(80f) }
+    var cinemaVignette by remember { mutableFloatStateOf(-25f) }
+    var cinemaGrain by remember { mutableFloatStateOf(12f) }
+    var motionBlurAngle by remember { mutableFloatStateOf(0f) }
+    var motionBlurDistance by remember { mutableFloatStateOf(24f) }
+    var radialBlurAmount by remember { mutableFloatStateOf(14f) }
+    var radialBlurMethod by remember { mutableStateOf("zoom") }
     var textDraft by remember { mutableStateOf("StonebridgeCraft") }
     var textNormX by remember { mutableFloatStateOf(0.50f) }
     var textNormY by remember { mutableFloatStateOf(0.50f) }
@@ -963,7 +976,190 @@ fun StonebridgeStudioScreen(
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.LAYER_FX_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.CAMERA_LIGHT_LIVE -> { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU }
+                BottomPanel.AUTO_ENHANCE_MENU -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Akıllı İyileştir",
+                            subtitle = "Tek dokunuşla otomatik ton, renk veya kontrast",
+                            onClose = { activePanel = BottomPanel.ADJUST_MENU }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            CircularDockButton(
+                                icon = Icons.Default.AutoFixHigh,
+                                label = "Oto Ton",
+                                onClick = {
+                                    vm.applyAutoEnhance("tone", "Oto Ton")
+                                    activePanel = BottomPanel.DOCK
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.ColorLens,
+                                label = "Oto Renk",
+                                onClick = {
+                                    vm.applyAutoEnhance("color", "Oto Renk")
+                                    activePanel = BottomPanel.DOCK
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Contrast,
+                                label = "Oto Kontrast",
+                                onClick = {
+                                    vm.applyAutoEnhance("contrast", "Oto Kontrast")
+                                    activePanel = BottomPanel.DOCK
+                                }
+                            )
+                        }
+                    }
+                }
+
+                BottomPanel.CINEMA_LOOK_EDIT -> {
+                    val pushCinema = {
+                        vm.updateProxyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
+                    }
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Sinematik Stiller",
+                            subtitle = "60 FPS canlı görünüm + Vinyet & Film Greni",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.EFFECT_MENU
+                            },
+                            onApply = {
+                                vm.applyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "none" to "Doğal",
+                                "golden" to "Altın Saat",
+                                "tealOrange" to "Sinema",
+                                "noir" to "Film S&B",
+                                "vivid" to "Canlı Pop",
+                                "vintage" to "Retro",
+                                "cyber" to "Gece Neon"
+                            ).forEach { (id, lbl) ->
+                                FilterChip(
+                                    selected = cinemaPreset == id,
+                                    onClick = { cinemaPreset = id; pushCinema() },
+                                    label = { Text(lbl, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        if (cinemaPreset != "none") {
+                            CompactSliderRow("Şiddet", "%${cinemaIntensity.roundToInt()}", cinemaIntensity, 0f..100f, defaultValue = 80f) {
+                                cinemaIntensity = it; pushCinema()
+                            }
+                        }
+                        CompactSliderRow("Vinyet", "${cinemaVignette.roundToInt()}", cinemaVignette, -100f..100f, defaultValue = 0f) {
+                            cinemaVignette = it; pushCinema()
+                        }
+                        CompactSliderRow("Film Greni", "%${cinemaGrain.roundToInt()}", cinemaGrain, 0f..100f, defaultValue = 0f) {
+                            cinemaGrain = it; pushCinema()
+                        }
+                    }
+                }
+
+                BottomPanel.MOTION_BLUR_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Hareket Bulanıklığı",
+                            subtitle = "Hız ve aksiyon yönlü 60 FPS canlı önizleme",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.FILTER_MENU
+                            },
+                            onApply = {
+                                if (motionBlurDistance < 1f) {
+                                    vm.endProxyPreview()
+                                } else {
+                                    vm.applyMotionBlur(motionBlurAngle, motionBlurDistance)
+                                }
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Mesafe", "${motionBlurDistance.roundToInt()}px", motionBlurDistance, 0f..160f, defaultValue = 24f) {
+                            motionBlurDistance = it
+                            vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
+                        }
+                        CompactSliderRow("Açı", "${motionBlurAngle.roundToInt()}°", motionBlurAngle, -180f..180f, defaultValue = 0f) {
+                            motionBlurAngle = it
+                            vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
+                        }
+                    }
+                }
+
+                BottomPanel.RADIAL_BLUR_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Radyal Bulanıklık",
+                            subtitle = "Merkeze odaklanan Zoom veya Dönüş efekti",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.FILTER_MENU
+                            },
+                            onApply = {
+                                if (radialBlurAmount < 1f) {
+                                    vm.endProxyPreview()
+                                } else {
+                                    vm.applyRadialBlur(radialBlurAmount, radialBlurMethod)
+                                }
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = radialBlurMethod == "zoom",
+                                onClick = {
+                                    radialBlurMethod = "zoom"
+                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
+                                },
+                                label = { Text("Yakınlaş (Zoom)", fontSize = 11.sp) }
+                            )
+                            FilterChip(
+                                selected = radialBlurMethod == "spin",
+                                onClick = {
+                                    radialBlurMethod = "spin"
+                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
+                                },
+                                label = { Text("Döndür (Spin)", fontSize = 11.sp) }
+                            )
+                        }
+                        CompactSliderRow("Şiddet", "${radialBlurAmount.roundToInt()}", radialBlurAmount, 0f..80f, defaultValue = 14f) {
+                            radialBlurAmount = it
+                            vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
+                        }
+                    }
+                }
+
                 BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); liquifyCursorScreen = null; activePanel = BottomPanel.EFFECT_MENU }
+                BottomPanel.AUTO_ENHANCE_MENU -> activePanel = BottomPanel.ADJUST_MENU
+                BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU }
+                BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU }
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
@@ -991,7 +1187,10 @@ fun StonebridgeStudioScreen(
             activePanel == BottomPanel.LAYER_FX_EDIT ||
             activePanel == BottomPanel.CAMERA_LIGHT_LIVE ||
             activePanel == BottomPanel.GRADIENT_EDIT ||
-            activePanel == BottomPanel.SHAPE_EDIT
+            activePanel == BottomPanel.SHAPE_EDIT ||
+            activePanel == BottomPanel.CINEMA_LOOK_EDIT ||
+            activePanel == BottomPanel.MOTION_BLUR_EDIT ||
+            activePanel == BottomPanel.RADIAL_BLUR_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -1020,6 +1219,9 @@ fun StonebridgeStudioScreen(
                 BottomPanel.GRADIENT_EDIT,
                 BottomPanel.SHAPE_EDIT,
                 BottomPanel.LIQUIFY_EDIT,
+                BottomPanel.CINEMA_LOOK_EDIT,
+                BottomPanel.MOTION_BLUR_EDIT,
+                BottomPanel.RADIAL_BLUR_EDIT,
                 BottomPanel.DOCK -> fitToSafeArea(pendingQuarterTurns, activePanel)
                 else -> Unit
             }
@@ -2924,6 +3126,11 @@ fun StonebridgeStudioScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             CircularDockButton(
+                                icon = Icons.Default.AutoFixHigh,
+                                label = "Oto",
+                                onClick = { activePanel = BottomPanel.AUTO_ENHANCE_MENU }
+                            )
+                            CircularDockButton(
                                 icon = Icons.Default.WbSunny,
                                 label = "Kamera",
                                 onClick = {
@@ -3776,6 +3983,28 @@ fun StonebridgeStudioScreen(
                                     activePanel = BottomPanel.SHARPEN_EDIT
                                 }
                             )
+                            CircularDockButton(
+                                icon = Icons.Default.FastForward,
+                                label = "Hareket",
+                                onClick = {
+                                    motionBlurAngle = 0f
+                                    motionBlurDistance = 24f
+                                    vm.beginProxyPreview()
+                                    vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
+                                    activePanel = BottomPanel.MOTION_BLUR_EDIT
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.BlurCircular,
+                                label = "Radyal",
+                                onClick = {
+                                    radialBlurAmount = 14f
+                                    radialBlurMethod = "zoom"
+                                    vm.beginProxyPreview()
+                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
+                                    activePanel = BottomPanel.RADIAL_BLUR_EDIT
+                                }
+                            )
                         }
                     }
                 }
@@ -3934,6 +4163,19 @@ fun StonebridgeStudioScreen(
                                     liquifyPressure = 75f
                                     vm.beginLiquify()
                                     activePanel = BottomPanel.LIQUIFY_EDIT
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.MovieFilter,
+                                label = "Sinema",
+                                onClick = {
+                                    cinemaPreset = "golden"
+                                    cinemaIntensity = 80f
+                                    cinemaVignette = -25f
+                                    cinemaGrain = 12f
+                                    vm.beginProxyPreview()
+                                    vm.updateProxyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
+                                    activePanel = BottomPanel.CINEMA_LOOK_EDIT
                                 }
                             )
                         }
