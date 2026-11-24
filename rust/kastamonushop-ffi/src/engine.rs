@@ -2664,8 +2664,9 @@ impl KastamonuEngine {
                         for px in x0..=x1 {
                             let dx = (px as f32 + 0.5) - cx;
                             let dist = (dx * dx + dy * dy).sqrt();
-                            if dist <= radius {
-                                let edge = if radius <= 1.5 { if dist <= radius + 0.35 { 1.0 } else { 0.0 } } else { ((radius - dist) * 0.5).clamp(0.0, 1.0) };
+                            let hit_r = radius.max(0.75);
+                            if dist <= hit_r {
+                                let edge = if radius <= 1.5 { 1.0 } else { ((radius - dist) * 0.5).clamp(0.0, 1.0) };
                                 let idx = row + (px - roi.x0) as usize;
                                 if subtract {
                                     buf[idx] = (buf[idx] * (1.0 - edge)).clamp(0.0, 1.0);
@@ -2677,7 +2678,7 @@ impl KastamonuEngine {
                     }
                 };
 
-                let step = (radius * 0.35).max(2.0);
+                let step = (radius * 0.35).max(0.5);
                 stamp_disc(samples[0].x, samples[0].y);
                 for win in samples.windows(2) {
                     let (a, b) = (&win[0], &win[1]);
