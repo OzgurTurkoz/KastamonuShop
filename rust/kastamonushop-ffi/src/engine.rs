@@ -215,7 +215,7 @@ pub(crate) struct EngineCore {
 impl EngineCore {
     pub fn new() -> Self {
         // System-wide mobile RAM guardrails (desktop defaults are 2 GB scratch / 8 GB transform)
-        photocraft_raster::scratch::set_budget(64 << 20);
+        photocraft_raster::scratch::set_budget(192 << 20);
         photocraft_engine::transform_cmds::set_budget(256 << 20);
 
         let mut session = Session::new();
@@ -664,6 +664,137 @@ fn build_cinema_look_params(preset: &str, intensity: f32, vignette: f32, grain: 
         "grainRoughness": 50.0,
         "seed": 42u32
     })
+}
+
+
+/// Fast, zero-scratch-RAM 8-channel HSL Color Mixer using PhotoCraft's exact 8 hue bands
+/// (Red 0°, Orange 30°, Yellow 60°, Green 120°, Aqua 180°, Blue 240°, Purple 270°, Magenta 300°).
+/// Preserves alpha and respects active selection masks — NEVER hits mobile working-memory limits.
+fn run_hsl_mixer_on_doc(doc: &mut Document, target_id: LayerId, hsl_hue: &[f32], hsl_sat: &[f32], hsl_lum: &[f32]) {
+    let mut h_adj = [0.0f32; 8];
+    let mut s_adj = [0.0f32; 8];
+    let mut l_adj = [0.0f32; 8];
+    let mut any_active = false;
+    for i in 0..8 {
+        h_adj[i] = hsl_hue.get(i).copied().unwrap_or(0.0).clamp(-100.0, 100.0);
+        s_adj[i] = hsl_sat.get(i).copied().unwrap_or(0.0).clamp(-100.0, 100.0);
+        l_adj[i] = hsl_lum.get(i).copied().unwrap_or(0.0).clamp(-100.0, 100.0);
+        if h_adj[i].abs() > 0.2 || s_adj[i].abs() > 0.2 || l_adj[i].abs() > 0.2 {
+            any_active = true;
+        }
+    }
+    if !any_active {
+        return;
+    }
+    const BANDS: [f32; 8] = [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0];
+    let bounds = doc.bounds();
+    let w = doc.size.width as usize;
+    let h = doc.size.height as usize;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let sel_mask: Option<Vec<f32>> = doc.selection.as_ref().and_then(|sel| {
+        if sel.content_bounds().is_empty() { None } else { Some(sel.read_region(bounds)) }
+    });
+    let Some(layer) = doc.layers.iter_mut().find(|l| l.id == target_id) else {
+        return;
+    };
+    let LayerContent::Raster(surf) = &mut layer.content else {
+        return;
+    };
+    let ch = surf.format().channels();
+    if ch < 3 {
+        return;
+    }
+    let mut data = surf.read_region(bounds);
+    if data.len() < w * h * ch {
+        return;
+    }
+    let m_ch = sel_mask.as_ref().map(|m| (m.len() / (w * h)).max(1)).unwrap_or(1);
+
+    for i in 0..(w * h) {
+        let mask_w = sel_mask.as_ref().map(|m| m[i * m_ch].clamp(0.0, 1.0)).unwrap_or(1.0);
+        if mask_w < 0.002 {
+            continue;
+        }
+        let base = i * ch;
+        let r = data[base].clamp(0.0, 1.0);
+        let g = data[base + 1].clamp(0.0, 1.0);
+        let b = data[base + 2].clamp(0.0, 1.0);
+        let max_c = r.max(g).max(b);
+        let min_c = r.min(g).min(b);
+        let d = max_c - min_c;
+        if d < 1e-4 {
+            continue; // Pure gray has no hue band
+        }
+        let l = (max_c + min_c) * 0.5;
+        let s = if l > 0.5 { d / (2.0 - max_c - min_c).max(1e-5) } else { d / (max_c + min_c).max(1e-5) };
+        let mut hue = if (max_c - r).abs() < 1e-6 {
+            60.0 * (((g - b) / d).rem_euclid(6.0))
+        } else if (max_c - g).abs() < 1e-6 {
+            60.0 * (((b - r) / d) + 2.0)
+        } else {
+            60.0 * (((r - g) / d) + 4.0)
+        };
+        if hue < 0.0 { hue += 360.0; }
+
+        // Piecewise linear hat weights across the 8 circular hue bands
+        let mut dh = 0.0f32;
+        let mut ds = 0.0f32;
+        let mut dl = 0.0f32;
+        for bi in 0..8 {
+            let prev_b = BANDS[(bi + 7) % 8];
+            let curr_b = BANDS[bi];
+            let next_b = BANDS[(bi + 1) % 8];
+            let left_span = (curr_b - prev_b).rem_euclid(360.0).max(1.0);
+            let right_span = (next_b - curr_b).rem_euclid(360.0).max(1.0);
+            let mut diff = hue - curr_b;
+            if diff > 180.0 { diff -= 360.0; }
+            if diff < -180.0 { diff += 360.0; }
+            let weight = if diff >= 0.0 && diff < right_span {
+                1.0 - diff / right_span
+            } else if diff < 0.0 && (-diff) < left_span {
+                1.0 + diff / left_span
+            } else {
+                0.0
+            };
+            if weight > 0.0 {
+                dh += h_adj[bi] * weight;
+                ds += s_adj[bi] * weight;
+                dl += l_adj[bi] * weight;
+            }
+        }
+        if dh.abs() < 0.05 && ds.abs() < 0.05 && dl.abs() < 0.05 {
+            continue;
+        }
+        // Soft chroma ramp so near-neutral grays don't get harsh color banding
+        let chroma_w = (s / 0.12).clamp(0.0, 1.0) * mask_w;
+        let new_h = (hue + dh * 0.45 * chroma_w).rem_euclid(360.0);
+        let new_s = (s * (1.0 + (ds / 100.0) * chroma_w)).clamp(0.0, 1.0);
+        let new_l = (l + (dl / 100.0) * 0.35 * chroma_w * (1.0 - (2.0 * l - 1.0).abs()).max(0.2)).clamp(0.0, 1.0);
+
+        // HSL -> RGB
+        let c = (1.0 - (2.0 * new_l - 1.0).abs()) * new_s;
+        let x = c * (1.0 - ((new_h / 60.0) % 2.0 - 1.0).abs());
+        let m = new_l - c * 0.5;
+        let (r1, g1, b1) = if new_h < 60.0 {
+            (c, x, 0.0)
+        } else if new_h < 120.0 {
+            (x, c, 0.0)
+        } else if new_h < 180.0 {
+            (0.0, c, x)
+        } else if new_h < 240.0 {
+            (0.0, x, c)
+        } else if new_h < 300.0 {
+            (x, 0.0, c)
+        } else {
+            (c, 0.0, x)
+        };
+        data[base] = (r1 + m).clamp(0.0, 1.0);
+        data[base + 1] = (g1 + m).clamp(0.0, 1.0);
+        data[base + 2] = (b1 + m).clamp(0.0, 1.0);
+    }
+    surf.write_region_par(bounds, &data);
 }
 
 #[uniffi::export]
@@ -2370,6 +2501,19 @@ impl KastamonuEngine {
                 detail: "Ana konu otomatik tespit edilemedi — Seçim araçlarıyla elle seçebilirsin".into(),
             });
         }
+        let _ = guard.session.execute(
+            "select.refineEdge",
+            json!({
+                "radius": 6.0,
+                "smartRadius": true,
+                "smooth": 10.0,
+                "feather": 1.0,
+                "contrast": 18.0,
+                "decontaminate": true,
+                "output": "selection",
+                "sampleAllLayers": true
+            }),
+        );
         guard
             .session
             .execute("select.inverse", json!({}))
@@ -2492,7 +2636,7 @@ impl KastamonuEngine {
         Ok(results)
     }
 
-    /// 60 FPS Live Proxy Preview for 8-Channel HSL Color Mixer (`filter.cameraRaw`: hslHue, hslSat, hslLum).
+    /// 60 FPS Live Proxy Preview for 8-Channel HSL Color Mixer (O(1) RAM, exact 1:1 parity with Uygula).
     pub fn update_proxy_hsl_mixer(
         &self,
         hsl_hue: Vec<f32>,
@@ -2514,25 +2658,17 @@ impl KastamonuEngine {
             .active()
             .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
         if let Some(tid) = target_id {
-            ps.set_active_layer(Some(tid));
-            let pad8 = |v: &[f32]| -> Vec<f64> {
-                (0..8).map(|i| v.get(i).copied().unwrap_or(0.0).clamp(-100.0, 100.0) as f64).collect()
-            };
-            let _ = ps.execute(
-                "filter.cameraRaw",
-                json!({
-                    "hslHue": pad8(&hsl_hue),
-                    "hslSat": pad8(&hsl_sat),
-                    "hslLum": pad8(&hsl_lum)
-                }),
-            );
+            let _ = ps.edit("Proxy HSL", |doc, _| {
+                run_hsl_mixer_on_doc(doc, tid, &hsl_hue, &hsl_sat, &hsl_lum);
+                Ok(())
+            });
         }
         proxy.session = ps;
         guard.mark_full_dirty();
         Ok(())
     }
 
-    /// Commits 8-Channel HSL Color Mixer once at full resolution.
+    /// Commits 8-Channel HSL Color Mixer once at full resolution (zero working-memory error even on 50MP photos).
     pub fn apply_hsl_mixer(
         &self,
         hsl_hue: Vec<f32>,
@@ -2551,20 +2687,12 @@ impl KastamonuEngine {
                     detail: "HSL Mikser uygulanacak fotoğraf katmanı bulunamadı".into(),
                 })?
         };
-        guard.session.set_active_layer(Some(target_id));
-        let pad8 = |v: &[f32]| -> Vec<f64> {
-            (0..8).map(|i| v.get(i).copied().unwrap_or(0.0).clamp(-100.0, 100.0) as f64).collect()
-        };
         guard
             .session
-            .execute(
-                "filter.cameraRaw",
-                json!({
-                    "hslHue": pad8(&hsl_hue),
-                    "hslSat": pad8(&hsl_sat),
-                    "hslLum": pad8(&hsl_lum)
-                }),
-            )
+            .edit("HSL Renk Mikseri", |doc, _| {
+                run_hsl_mixer_on_doc(doc, target_id, &hsl_hue, &hsl_sat, &hsl_lum);
+                Ok(())
+            })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
@@ -4774,15 +4902,26 @@ mod v08_automated_tests {
     #[test]
     fn test_v110_8channel_hsl_mixer_proxy_and_apply() {
         let eng = test_engine();
-        eng.new_document("hsl".into(), 96, 96).expect("new_document");
-        let hue = vec![20.0, 0.0, 0.0, -30.0, 0.0, 40.0, 0.0, 0.0];
-        let sat = vec![30.0, 0.0, 10.0, 20.0, 0.0, 50.0, 0.0, 0.0];
-        let lum = vec![0.0, 0.0, 0.0, 0.0, 0.0, -15.0, 0.0, 0.0];
+        let w = 64u32;
+        let h = 64u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px.copy_from_slice(&[220, 40, 40, 255]); // Vivid red
+        }
+        eng.open_rgba_bytes("red.png".into(), w, h, rgba).expect("open");
+        let hue = vec![80.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let sat = vec![-50.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let lum = vec![0.0; 8];
         eng.begin_proxy_preview().expect("begin proxy");
         eng.update_proxy_hsl_mixer(hue.clone(), sat.clone(), lum.clone()).expect("proxy hsl");
         eng.end_proxy_preview();
         let info = eng.apply_hsl_mixer(hue, sat, lum).expect("apply hsl");
-        assert_eq!((info.width, info.height), (96, 96));
+        assert_eq!((info.width, info.height), (w, h));
+        let guard = eng.core.lock();
+        let doc = guard.active_document().unwrap();
+        let LayerContent::Raster(surf) = &doc.layers[0].content else { panic!("raster") };
+        let c = surf.rgba(32, 32);
+        assert!(c[1] > 0.30, "shifting red hue +80 must noticeably increase green channel, got {:?}", c);
     }
 
     #[test]

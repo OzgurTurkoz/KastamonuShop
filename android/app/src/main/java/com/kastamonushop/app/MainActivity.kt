@@ -288,7 +288,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.1.0",
+                    text = "v1.1.1",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -865,6 +865,7 @@ fun StonebridgeStudioScreen(
     var posterMode by remember { mutableStateOf(true) }
     var posterLevels by remember { mutableFloatStateOf(6f) }
     var threshLevel by remember { mutableFloatStateOf(128f) }
+    var posterTouched by remember { mutableStateOf(false) }
     var textDraft by remember { mutableStateOf("StonebridgeCraft") }
     var textNormX by remember { mutableFloatStateOf(0.50f) }
     var textNormY by remember { mutableFloatStateOf(0.50f) }
@@ -3338,8 +3339,8 @@ fun StonebridgeStudioScreen(
                                     posterMode = true
                                     posterLevels = 6f
                                     threshLevel = 128f
+                                    posterTouched = false
                                     vm.beginProxyPreview()
-                                    vm.updateProxyAdjustment("posterize", """{"levels":6}""")
                                     activePanel = BottomPanel.POSTER_THRESH_LIVE
                                 }
                             )
@@ -4076,23 +4077,32 @@ fun StonebridgeStudioScreen(
                     isPoster = posterMode,
                     onMode = { isP ->
                         posterMode = isP
-                        if (isP) vm.updateProxyAdjustment("posterize", """{"levels":${posterLevels.roundToInt()}}""")
-                        else vm.updateProxyAdjustment("threshold", """{"level":${threshLevel.roundToInt()}}""")
+                        if (posterTouched) {
+                            if (isP) vm.updateProxyAdjustment("posterize", """{"levels":${posterLevels.roundToInt()}}""")
+                            else vm.updateProxyAdjustment("threshold", """{"level":${threshLevel.roundToInt()}}""")
+                        }
                     },
                     posterLevels = posterLevels,
                     onPosterLevels = {
+                        posterTouched = true
                         posterLevels = it
                         vm.updateProxyAdjustment("posterize", """{"levels":${it.roundToInt()}}""")
                     },
                     threshLevel = threshLevel,
                     onThreshLevel = {
+                        posterTouched = true
                         threshLevel = it
                         vm.updateProxyAdjustment("threshold", """{"level":${it.roundToInt()}}""")
                     },
                     onClose = { vm.endProxyPreview(); activePanel = BottomPanel.ADJUST_MENU },
                     onApply = {
-                        if (posterMode) vm.applyAdjustmentOnce("posterize", """{"levels":${posterLevels.roundToInt()}}""", "Posterize")
-                        else vm.applyAdjustmentOnce("threshold", """{"level":${threshLevel.roundToInt()}}""", "Eşik")
+                        if (!posterTouched) {
+                            vm.endProxyPreview()
+                        } else if (posterMode) {
+                            vm.applyAdjustmentOnce("posterize", """{"levels":${posterLevels.roundToInt()}}""", "Posterize")
+                        } else {
+                            vm.applyAdjustmentOnce("threshold", """{"level":${threshLevel.roundToInt()}}""", "Eşik")
+                        }
                         activePanel = BottomPanel.DOCK
                     }
                 )
