@@ -114,6 +114,7 @@ pub struct VulkanRenderer {
     has_selection: bool,
     cached_blit_bg: Option<wgpu::BindGroup>,
     doc_tex_size: (u32, u32),
+    display_doc_size: (u32, u32),
     last_rendered_gen: u64,
 }
 
@@ -337,6 +338,7 @@ impl VulkanRenderer {
             has_selection: false,
             cached_blit_bg: None,
             doc_tex_size: (0, 0),
+            display_doc_size: (1, 1),
             last_rendered_gen: 0,
         })
     }
@@ -377,8 +379,8 @@ impl VulkanRenderer {
             dims: [
                 self.config.width as f32,
                 self.config.height as f32,
-                self.doc_tex_size.0 as f32,
-                self.doc_tex_size.1 as f32,
+                self.display_doc_size.0.max(1) as f32,
+                self.display_doc_size.1.max(1) as f32,
             ],
             camera: [camera.pan_x, camera.pan_y, camera.zoom, camera.rotation_rad],
             style: [16.0, 0.10, 0.10, 0.12],
@@ -467,6 +469,7 @@ impl VulkanRenderer {
     pub fn render_frame(
         &mut self,
         doc: &Document,
+        display_size: (u32, u32),
         generation: u64,
         force_full: bool,
         dirty_rect: Option<Rect>,
@@ -475,6 +478,7 @@ impl VulkanRenderer {
     ) -> Result<(), String> {
         let doc_w = doc.size.width.max(1);
         let doc_h = doc.size.height.max(1);
+        self.display_doc_size = (display_size.0.max(1), display_size.1.max(1));
         let mut need_full = force_full || self.doc_texture.is_none();
 
         if self.doc_tex_size != (doc_w, doc_h) || self.doc_texture.is_none() {

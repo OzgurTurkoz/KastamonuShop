@@ -51,7 +51,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,7 +102,8 @@ private enum class BottomPanel {
     BLUR_EDIT,
     SHARPEN_EDIT,
     EFFECT_MENU,
-    MIRROR_EDIT
+    MIRROR_EDIT,
+    LAYER_TRANSFORM
 }
 
 private data class BlendModeOption(
@@ -270,7 +273,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.8.1",
+                    text = "v0.8.2",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -645,7 +648,9 @@ fun StonebridgeStudioScreen(
 ) {
     val state by vm.uiState.collectAsState()
     val layerThumbs by vm.layerThumbnails.collectAsState()
+    val activeLayerPrev by vm.activeLayerPreview.collectAsState()
     val context = LocalContext.current
+    val density = LocalDensity.current
 
     var showLayers by remember { mutableStateOf(false) }
     var activePanel by remember { mutableStateOf(BottomPanel.DOCK) }
@@ -698,10 +703,12 @@ fun StonebridgeStudioScreen(
     }
 
     fun pushCurveGpu(y0: Float, y1: Float, y2: Float, y3: Float, y4: Float) {
-        val active = abs(y0 - 0.0f) > 0.005f || abs(y1 - 0.25f) > 0.005f ||
-            abs(y2 - 0.50f) > 0.005f || abs(y3 - 0.75f) > 0.005f || abs(y4 - 1.0f) > 0.005f
-        NativeSurfaceBridge.nativeSetCurvePreview(y0, y1, y2, y3, y4, active)
-        NativeSurfaceBridge.nativeRenderFrame()
+        val by = (y0 * 255f).roundToInt().coerceIn(0, 255)
+        val sy = (y1 * 255f).roundToInt().coerceIn(0, 255)
+        val my = (y2 * 255f).roundToInt().coerceIn(0, 255)
+        val hy = (y3 * 255f).roundToInt().coerceIn(0, 255)
+        val wy = (y4 * 255f).roundToInt().coerceIn(0, 255)
+        vm.updateProxyAdjustment("curves", """{"points":[[0,$by],[64,$sy],[128,$my],[192,$hy],[255,$wy]]}""")
     }
 
     // 4 normalized corners (TL, TR, BR, BL) in document space (0..1) for 60 FPS Perspective Crop
@@ -710,6 +717,12 @@ fun StonebridgeStudioScreen(
     var pBr by remember { mutableStateOf(Offset(0.88f, 0.88f)) }
     var pBl by remember { mutableStateOf(Offset(0.12f, 0.88f)) }
     var draggingCornerIdx by remember { mutableIntStateOf(-1) }
+
+    // Independent active layer Move / Scale / Rotate state
+    var layerDx by remember { mutableFloatStateOf(0f) }
+    var layerDy by remember { mutableFloatStateOf(0f) }
+    var layerScalePct by remember { mutableFloatStateOf(100f) }
+    var layerRotDeg by remember { mutableFloatStateOf(0f) }
     var showExitSaveDialog by remember { mutableStateOf(false) }
 
     // Live draggable Text layer editor state
@@ -752,6 +765,24 @@ fun StonebridgeStudioScreen(
         NativeSurfaceBridge.nativeRenderFrame()
     }
 
+    fun bottomInsetPxForPanel(panel: BottomPanel): Float {
+        val dpVal = when (panel) {
+            BottomPanel.DOCK -> 112f
+            BottomPanel.CURVES_LIVE -> 340f
+            BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE -> 250f
+            BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT, BottomPanel.MIRROR_EDIT, BottomPanel.LAYER_TRANSFORM -> 240f
+            BottomPanel.PERSPECTIVE_CROP_EDIT, BottomPanel.CROP_RATIO_EDIT, BottomPanel.TEXT_EDIT -> 220f
+            else -> 190f
+        }
+        return with(density) { dpVal.dp.toPx() }
+    }
+
+    fun fitToSafeArea(turns: Int = pendingQuarterTurns, panel: BottomPanel = activePanel) {
+        val topPx = with(density) { 96.dp.toPx() }
+        val botPx = bottomInsetPxForPanel(panel)
+        canvasViewRef?.fitToDocument(turns, topPx, botPx)
+    }
+
     fun clearGpuPreview() {
         pendingQuarterTurns = 0
         pendingFlipH = false
@@ -761,7 +792,8 @@ fun StonebridgeStudioScreen(
         NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
         curveOverlayExpanded = false
         NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
-        canvasViewRef?.fitToDocument(0)
+        vm.endProxyPreview()
+        fitToSafeArea(0, BottomPanel.DOCK)
     }
 
     fun clearAdjustGpuPreviewOnly() {
@@ -769,7 +801,7 @@ fun StonebridgeStudioScreen(
         NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
         curveOverlayExpanded = false
         NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
-        NativeSurfaceBridge.nativeRenderFrame()
+        vm.endProxyPreview()
     }
 
     fun pushGpuTransformPreview(turns: Int, flipH: Boolean, flipV: Boolean) {
@@ -834,7 +866,27 @@ fun StonebridgeStudioScreen(
 
     LaunchedEffect(state.fitCameraSignal, canvasViewRef) {
         if (state.fitCameraSignal > 0 && canvasViewRef != null) {
-            canvasViewRef?.fitToDocument(0)
+            fitToSafeArea(0, activePanel)
+        }
+    }
+
+    LaunchedEffect(activePanel, curveOverlayExpanded, canvasViewRef) {
+        if (canvasViewRef != null) {
+            when (activePanel) {
+                BottomPanel.CURVES_LIVE,
+                BottomPanel.PERSPECTIVE_CROP_EDIT,
+                BottomPanel.CROP_RATIO_EDIT,
+                BottomPanel.MIRROR_EDIT,
+                BottomPanel.LIGHT_LIVE,
+                BottomPanel.COLOR_LIVE,
+                BottomPanel.LEVELS_LIVE,
+                BottomPanel.COLOR_BAL_LIVE,
+                BottomPanel.BLUR_EDIT,
+                BottomPanel.SHARPEN_EDIT,
+                BottomPanel.LAYER_TRANSFORM,
+                BottomPanel.DOCK -> fitToSafeArea(pendingQuarterTurns, activePanel)
+                else -> Unit
+            }
         }
     }
 
@@ -1335,6 +1387,61 @@ fun StonebridgeStudioScreen(
             }
         }
 
+        // Interactive 60 FPS Active Layer Move / Scale / Rotate Overlay
+        if (activePanel == BottomPanel.LAYER_TRANSFORM) {
+            val view = canvasViewRef
+            val prev = activeLayerPrev
+            if (view != null && prev != null) {
+                val _tick = cameraTick
+                val b = prev.first
+                val z = view.getCurrentZoom().coerceAtLeast(0.05f)
+                val cxDoc = (b.x0 + b.x1) * 0.5f + layerDx
+                val cyDoc = (b.y0 + b.y1) * 0.5f + layerDy
+                val halfW = (b.x1 - b.x0).coerceAtLeast(10) * 0.5f * (layerScalePct / 100f)
+                val halfH = (b.y1 - b.y0).coerceAtLeast(10) * 0.5f * (layerScalePct / 100f)
+                val (sCx, sCy) = view.docToScreen(cxDoc, cyDoc)
+                val boxW = halfW * 2f * z
+                val boxH = halfH * 2f * z
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(z) {
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                layerDx += dragAmount.x / z
+                                layerDy += dragAmount.y / z
+                            }
+                        }
+                ) {
+                    val boxWDp = with(density) { boxW.toDp() }
+                    val boxHDp = with(density) { boxH.toDp() }
+                    Box(
+                        modifier = Modifier
+                            .offset {
+                                androidx.compose.ui.unit.IntOffset(
+                                    (sCx - boxW * 0.5f).roundToInt(),
+                                    (sCy - boxH * 0.5f).roundToInt()
+                                )
+                            }
+                            .size(boxWDp, boxHDp)
+                            .graphicsLayer { rotationZ = layerRotDeg }
+                            .border(2.dp, Color(0xFF4F9CFF), RoundedCornerShape(4.dp))
+                    ) {
+                        prev.second?.let { bmp ->
+                            Image(
+                                bitmap = bmp,
+                                contentDescription = "Aktif katman önizleme",
+                                contentScale = ContentScale.FillBounds,
+                                alpha = 0.72f,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         if (activePanel == BottomPanel.TEXT_EDIT) {
             val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
             val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
@@ -1530,7 +1637,7 @@ fun StonebridgeStudioScreen(
                 TopBarButton(
                     icon = Icons.Default.CenterFocusStrong,
                     label = "Ortala",
-                    onClick = { canvasViewRef?.fitToDocument(pendingQuarterTurns) }
+                    onClick = { fitToSafeArea(pendingQuarterTurns, activePanel) }
                 )
 
                 TopBarButton(
@@ -1570,6 +1677,18 @@ fun StonebridgeStudioScreen(
                     ) {
                         Text("Katmanlar", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Color.White)
                         Row {
+                            IconButton(onClick = {
+                                showLayers = false
+                                vm.setTool(ActiveTool.NONE)
+                                layerDx = 0f
+                                layerDy = 0f
+                                layerScalePct = 100f
+                                layerRotDeg = 0f
+                                vm.loadActiveLayerPreview()
+                                activePanel = BottomPanel.LAYER_TRANSFORM
+                            }) {
+                                Icon(Icons.Default.OpenWith, contentDescription = "Katmanı Taşı / Boyutlandır", tint = MaterialTheme.colorScheme.primary)
+                            }
                             IconButton(onClick = { vm.addLayer() }) {
                                 Icon(Icons.Default.Add, contentDescription = "Yeni Katman", tint = Color.White)
                             }
@@ -2329,7 +2448,7 @@ fun StonebridgeStudioScreen(
                                 onClick = {
                                     brightnessVal = 0f
                                     contrastVal = 0f
-                                    NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                                    vm.beginProxyPreview()
                                     activePanel = BottomPanel.LIGHT_LIVE
                                 }
                             )
@@ -2339,7 +2458,7 @@ fun StonebridgeStudioScreen(
                                 onClick = {
                                     hueVal = 0f
                                     saturationVal = 0f
-                                    NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                                    vm.beginProxyPreview()
                                     activePanel = BottomPanel.COLOR_LIVE
                                 }
                             )
@@ -2350,7 +2469,7 @@ fun StonebridgeStudioScreen(
                                     levelsBlackVal = 0f
                                     levelsGammaVal = 1f
                                     levelsWhiteVal = 255f
-                                    NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
+                                    vm.beginProxyPreview()
                                     activePanel = BottomPanel.LEVELS_LIVE
                                 }
                             )
@@ -2361,7 +2480,7 @@ fun StonebridgeStudioScreen(
                                     cbCyanRedVal = 0f
                                     cbMagentaGreenVal = 0f
                                     cbYellowBlueVal = 0f
-                                    NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
+                                    vm.beginProxyPreview()
                                     activePanel = BottomPanel.COLOR_BAL_LIVE
                                 }
                             )
@@ -2375,7 +2494,7 @@ fun StonebridgeStudioScreen(
                                     curveHighVal = 0.75f
                                     curveWhiteVal = 1.0f
                                     curveOverlayExpanded = false
-        NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
+                                    vm.beginProxyPreview()
                                     activePanel = BottomPanel.CURVES_LIVE
                                 }
                             )
@@ -2411,13 +2530,11 @@ fun StonebridgeStudioScreen(
                         )
                         CompactSliderRow("Parlaklık", "${brightnessVal.roundToInt()}", brightnessVal, -100f..100f, defaultValue = 0f) {
                             brightnessVal = it
-                            NativeSurfaceBridge.nativeSetAdjustPreview(brightnessVal, contrastVal, 0f, 0f, 0f, 0f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxyAdjustment("brightnessContrast", """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
                         }
                         CompactSliderRow("Kontrast", "${contrastVal.roundToInt()}", contrastVal, -50f..100f, defaultValue = 0f) {
                             contrastVal = it
-                            NativeSurfaceBridge.nativeSetAdjustPreview(brightnessVal, contrastVal, 0f, 0f, 0f, 0f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxyAdjustment("brightnessContrast", """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
                         }
                     }
                 }
@@ -2450,13 +2567,11 @@ fun StonebridgeStudioScreen(
                         )
                         CompactSliderRow("Canlılık", "${saturationVal.roundToInt()}", saturationVal, -100f..100f, defaultValue = 0f) {
                             saturationVal = it
-                            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, saturationVal, hueVal, 0f, 0f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxyAdjustment("hueSaturation", """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
                         }
                         CompactSliderRow("Renk Tonu", "${hueVal.roundToInt()}°", hueVal, -180f..180f, defaultValue = 0f) {
                             hueVal = it
-                            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, saturationVal, hueVal, 0f, 0f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxyAdjustment("hueSaturation", """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
                         }
                     }
                 }
@@ -2492,18 +2607,15 @@ fun StonebridgeStudioScreen(
                         )
                         CompactSliderRow("Siyahlar", "${levelsBlackVal.roundToInt()}", levelsBlackVal, 0f..180f, defaultValue = 0f) {
                             levelsBlackVal = it.coerceAtMost(levelsWhiteVal - 15f)
-                            NativeSurfaceBridge.nativeSetTonePreview(levelsBlackVal / 255f, levelsGammaVal, levelsWhiteVal / 255f, 0f, 0f, 0f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal); vm.updateProxyAdjustment("levels", """{"inBlack":${levelsBlackVal.roundToInt()},"gamma":$gStr,"inWhite":${levelsWhiteVal.roundToInt()}}""")
                         }
                         CompactSliderRow("Orta Ton", String.format(java.util.Locale.US, "%.2f", levelsGammaVal), levelsGammaVal, 0.25f..2.5f, defaultValue = 1f) {
                             levelsGammaVal = it
-                            NativeSurfaceBridge.nativeSetTonePreview(levelsBlackVal / 255f, levelsGammaVal, levelsWhiteVal / 255f, 0f, 0f, 0f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal); vm.updateProxyAdjustment("levels", """{"inBlack":${levelsBlackVal.roundToInt()},"gamma":$gStr,"inWhite":${levelsWhiteVal.roundToInt()}}""")
                         }
                         CompactSliderRow("Beyazlar", "${levelsWhiteVal.roundToInt()}", levelsWhiteVal, 75f..255f, defaultValue = 255f) {
                             levelsWhiteVal = it.coerceAtLeast(levelsBlackVal + 15f)
-                            NativeSurfaceBridge.nativeSetTonePreview(levelsBlackVal / 255f, levelsGammaVal, levelsWhiteVal / 255f, 0f, 0f, 0f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal); vm.updateProxyAdjustment("levels", """{"inBlack":${levelsBlackVal.roundToInt()},"gamma":$gStr,"inWhite":${levelsWhiteVal.roundToInt()}}""")
                         }
                     }
                 }
@@ -2539,18 +2651,15 @@ fun StonebridgeStudioScreen(
                         )
                         CompactSliderRow("Camgöbeği / Kırmızı", "${cbCyanRedVal.roundToInt()}", cbCyanRedVal, -100f..100f, defaultValue = 0f) {
                             cbCyanRedVal = it
-                            NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, cbCyanRedVal / 100f, cbMagentaGreenVal / 100f, cbYellowBlueVal / 100f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxyAdjustment("colorBalance", """{"midtones":[${cbCyanRedVal.roundToInt()},${cbMagentaGreenVal.roundToInt()},${cbYellowBlueVal.roundToInt()}],"preserveLuminosity":true}""")
                         }
                         CompactSliderRow("Macenta / Yeşil", "${cbMagentaGreenVal.roundToInt()}", cbMagentaGreenVal, -100f..100f, defaultValue = 0f) {
                             cbMagentaGreenVal = it
-                            NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, cbCyanRedVal / 100f, cbMagentaGreenVal / 100f, cbYellowBlueVal / 100f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxyAdjustment("colorBalance", """{"midtones":[${cbCyanRedVal.roundToInt()},${cbMagentaGreenVal.roundToInt()},${cbYellowBlueVal.roundToInt()}],"preserveLuminosity":true}""")
                         }
                         CompactSliderRow("Sarı / Mavi", "${cbYellowBlueVal.roundToInt()}", cbYellowBlueVal, -100f..100f, defaultValue = 0f) {
                             cbYellowBlueVal = it
-                            NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, cbCyanRedVal / 100f, cbMagentaGreenVal / 100f, cbYellowBlueVal / 100f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxyAdjustment("colorBalance", """{"midtones":[${cbCyanRedVal.roundToInt()},${cbMagentaGreenVal.roundToInt()},${cbYellowBlueVal.roundToInt()}],"preserveLuminosity":true}""")
                         }
                     }
                 }
@@ -2611,9 +2720,7 @@ fun StonebridgeStudioScreen(
                                     )
                                     .clickable {
                                         curveOverlayExpanded = !curveOverlayExpanded
-                                        if (curveOverlayExpanded) {
-                                            canvasViewRef?.fitToDocument(0)
-                                        }
+                                        fitToSafeArea(0, BottomPanel.CURVES_LIVE)
                                     }
                             ) {
                                 Canvas(modifier = Modifier.fillMaxSize().padding(6.dp)) {
@@ -2902,7 +3009,7 @@ fun StonebridgeStudioScreen(
                                 label = "Bulanık",
                                 onClick = {
                                     blurRadiusVal = 0f
-                                    NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                                    vm.beginProxyPreview()
                                     activePanel = BottomPanel.BLUR_EDIT
                                 }
                             )
@@ -2911,7 +3018,7 @@ fun StonebridgeStudioScreen(
                                 label = "Keskin",
                                 onClick = {
                                     sharpenAmountVal = 0f
-                                    NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
+                                    vm.beginProxyPreview()
                                     activePanel = BottomPanel.SHARPEN_EDIT
                                 }
                             )
@@ -2939,8 +3046,7 @@ fun StonebridgeStudioScreen(
                         )
                         CompactSliderRow("Yarıçap", "${blurRadiusVal.roundToInt()}px", blurRadiusVal, 0f..60f, defaultValue = 0f) {
                             blurRadiusVal = it
-                            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, blurRadiusVal, 0f)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxyBlur(blurRadiusVal)
                         }
                     }
                 }
@@ -2965,8 +3071,7 @@ fun StonebridgeStudioScreen(
                         )
                         CompactSliderRow("Güç", "%${sharpenAmountVal.roundToInt()}", sharpenAmountVal, 0f..250f, defaultValue = 0f) {
                             sharpenAmountVal = it
-                            NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, sharpenAmountVal)
-                            NativeSurfaceBridge.nativeRenderFrame()
+                            vm.updateProxySharpen(sharpenAmountVal)
                         }
                     }
                 }
@@ -3085,6 +3190,34 @@ fun StonebridgeStudioScreen(
                         ) {
                             mirrorAxisRatio = it
                             pushGpuMirrorPreview(selectedMirrorMode, it)
+                        }
+                    }
+                }
+
+                BottomPanel.LAYER_TRANSFORM -> {
+                    val activeName = state.layers.firstOrNull { it.isActive }?.name ?: "Aktif Katman"
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Katmanı Taşı: $activeName",
+                            subtitle = "Tek parmakla taşı · Boyut ve Döndür ile hizala",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.clearActiveLayerPreview()
+                                activePanel = BottomPanel.DOCK
+                            },
+                            onApply = {
+                                vm.transformActiveLayer(layerDx, layerDy, layerScalePct, layerRotDeg)
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Boyut", "%${layerScalePct.roundToInt()}", layerScalePct, 15f..250f, defaultValue = 100f) {
+                            layerScalePct = it
+                        }
+                        CompactSliderRow("Döndür", "${layerRotDeg.roundToInt()}°", layerRotDeg, -180f..180f, defaultValue = 0f) {
+                            layerRotDeg = it
                         }
                     }
                 }

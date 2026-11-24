@@ -122,16 +122,22 @@ class VulkanCanvasView(
 
     fun getCurrentZoom(): Float = zoom
 
-    fun fitToDocument(previewQuarterTurnsCw: Int = 0) {
+    fun fitToDocument(
+        previewQuarterTurnsCw: Int = 0,
+        topInsetPx: Float = 0f,
+        bottomInsetPx: Float = 0f
+    ) {
         val (rawW, rawH) = getDocSize()
         val turns = ((previewQuarterTurnsCw % 4) + 4) % 4
         val effW = if (turns % 2 == 1) rawH else rawW
         val effH = if (turns % 2 == 1) rawW else rawH
         val viewW = width.coerceAtLeast(1).toFloat()
         val viewH = height.coerceAtLeast(1).toFloat()
-        val fitZoom = min(viewW / effW.coerceAtLeast(1), viewH / effH.coerceAtLeast(1)) * 0.86f
+        val availH = (viewH - topInsetPx - bottomInsetPx).coerceAtLeast(120f)
+        val padFactor = if (bottomInsetPx > 10f) 0.90f else 0.86f
+        val fitZoom = min(viewW / effW.coerceAtLeast(1), availH / effH.coerceAtLeast(1)) * padFactor
         panX = 0f
-        panY = 0f
+        panY = (topInsetPx - bottomInsetPx) * 0.5f
         zoom = fitZoom.coerceIn(0.05f, 16f)
         rotationRad = (turns * (PI / 2.0)).toFloat()
         NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)

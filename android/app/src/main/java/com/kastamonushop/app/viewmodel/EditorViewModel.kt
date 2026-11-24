@@ -113,6 +113,18 @@ class EditorViewModel : ViewModel() {
     // Prevents rapid Spot Healing swipes from piling up on paintExecutor
     private val spotHealInFlight = AtomicBoolean(false)
 
+    // Coalesced 60 FPS Exact Proxy Preview queue (100% WYSIWYG parity for all adjustments & filters)
+    private sealed class ProxyJob {
+        data class Adjust(val kind: String, val paramsJson: String) : ProxyJob()
+        data class Blur(val radius: Float) : ProxyJob()
+        data class Sharpen(val amount: Float) : ProxyJob()
+    }
+    private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
+    private val proxyDrainScheduled = AtomicBoolean(false)
+
+    private val _activeLayerPreview = MutableStateFlow<Pair<SelectionBounds, ImageBitmap?>?>(null)
+    val activeLayerPreview: StateFlow<Pair<SelectionBounds, ImageBitmap?>?> = _activeLayerPreview.asStateFlow()
+
     @Volatile
     private var currentSavedPhotoId: String? = null
     @Volatile
@@ -441,6 +453,118 @@ class EditorViewModel : ViewModel() {
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("Perspektif hatası: ${err.message}", 4200L)
+            }
+        }
+    }
+
+    // --- 60 FPS Exact Proxy Preview Engine ("Genel Güç") ---
+    fun beginProxyPreview() {
+        pendingProxyJob.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.beginProxyPreview()
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun updateProxyAdjustment(kind: String, paramsJson: String) {
+        pendingProxyJob.set(ProxyJob.Adjust(kind, paramsJson))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun updateProxyBlur(radius: Float) {
+        pendingProxyJob.set(ProxyJob.Blur(radius))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun updateProxySharpen(amount: Float) {
+        pendingProxyJob.set(ProxyJob.Sharpen(amount))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    private fun drainPendingProxyJobs() {
+        while (true) {
+            val job = pendingProxyJob.getAndSet(null)
+            if (job == null) {
+                proxyDrainScheduled.set(false)
+                if (pendingProxyJob.get() == null) return
+                if (!proxyDrainScheduled.compareAndSet(false, true)) return
+                continue
+            }
+            runCatching {
+                when (job) {
+                    is ProxyJob.Adjust -> engine.updateProxyAdjustment(job.kind, job.paramsJson)
+                    is ProxyJob.Blur -> engine.updateProxyBlur(job.radius)
+                    is ProxyJob.Sharpen -> engine.updateProxySharpen(job.amount)
+                }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun endProxyPreview() {
+        pendingProxyJob.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.endProxyPreview()
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    // --- Independent Active Layer Move / Scale / Rotate ---
+    fun loadActiveLayerPreview() {
+        paintExecutor.execute {
+            runCatching {
+                val bounds = engine.getActiveLayerBounds()
+                val active = engine.getLayers().firstOrNull { it.isActive }
+                var bmpImg: ImageBitmap? = null
+                if (active != null) {
+                    val thumb = runCatching { engine.getLayerThumbnail(active.id, 128u) }.getOrNull()
+                    if (thumb != null) {
+                        val w = thumb.width.toInt()
+                        val h = thumb.height.toInt()
+                        if (w > 0 && h > 0 && thumb.rgba.size >= w * h * 4) {
+                            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                            bmp.copyPixelsFromBuffer(ByteBuffer.wrap(thumb.rgba))
+                            bmpImg = bmp.asImageBitmap()
+                        }
+                    }
+                }
+                if (bounds != null) {
+                    _activeLayerPreview.value = bounds to bmpImg
+                } else {
+                    _activeLayerPreview.value = null
+                }
+            }
+        }
+    }
+
+    fun clearActiveLayerPreview() {
+        _activeLayerPreview.value = null
+    }
+
+    fun transformActiveLayer(dx: Float, dy: Float, scalePct: Float, rotateDeg: Float) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.transformActiveLayer(dx, dy, scalePct, rotateDeg)
+                val layers = engine.getLayers()
+                _activeLayerPreview.value = null
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman taşındı / boyutlandırıldı", 1800L)
+            }.onFailure { err ->
+                _activeLayerPreview.value = null
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Katman dönüştürme hatası: ${err.message}", 3800L)
             }
         }
     }
