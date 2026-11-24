@@ -284,7 +284,7 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    private fun showStatus(msg: String, autoHideMs: Long = 3000L) {
+    fun showStatus(msg: String, autoHideMs: Long = 3000L) {
         statusAutoHideJob?.cancel()
         _uiState.update { it.copy(statusMessage = msg) }
         if (autoHideMs > 0) {
