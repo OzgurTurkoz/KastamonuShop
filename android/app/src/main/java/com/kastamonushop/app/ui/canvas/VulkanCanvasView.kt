@@ -158,7 +158,7 @@ class VulkanCanvasView(
         return (px + cx + panX) to (py + cy + panY)
     }
 
-    private fun screenToDoc(sx: Float, sy: Float): Pair<Float, Float> {
+    fun screenToDoc(sx: Float, sy: Float): Pair<Float, Float> {
         val (docW, docH) = getDocSize()
         val cx = width * 0.5f
         val cy = height * 0.5f
