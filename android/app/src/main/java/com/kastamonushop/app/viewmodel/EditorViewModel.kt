@@ -83,6 +83,8 @@ data class EditorUiState(
     val cloneSourceDoc: Pair<Float, Float>? = null,
     val pickingCloneSource: Boolean = false,
     val compareOriginal: Boolean = false,
+    val liquifyCanUndo: Boolean = false,
+    val liquifyCanRedo: Boolean = false,
     val statusMessage: String? = null,
     val isBusy: Boolean = false,
     val fitCameraSignal: Int = 0
@@ -189,6 +191,45 @@ class EditorViewModel : ViewModel() {
 
     private val _layerThumbnails = MutableStateFlow<Map<ULong, ImageBitmap>>(emptyMap())
     val layerThumbnails: StateFlow<Map<ULong, ImageBitmap>> = _layerThumbnails.asStateFlow()
+
+    private val _loupeBitmap = MutableStateFlow<ImageBitmap?>(null)
+    val loupeBitmap: StateFlow<ImageBitmap?> = _loupeBitmap.asStateFlow()
+    private val pendingLoupeReq = AtomicReference<Triple<Float, Float, Float>?>(null)
+    private val loupeDrainScheduled = AtomicBoolean(false)
+
+    fun updateLoupe(docX: Float, docY: Float, halfExtentPx: Float) {
+        pendingLoupeReq.set(Triple(docX, docY, halfExtentPx))
+        if (loupeDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute {
+                while (true) {
+                    val req = pendingLoupeReq.getAndSet(null)
+                    if (req == null) {
+                        loupeDrainScheduled.set(false)
+                        if (pendingLoupeReq.get() == null) return@execute
+                        if (!loupeDrainScheduled.compareAndSet(false, true)) return@execute
+                        continue
+                    }
+                    runCatching {
+                        val patch = engine.sampleLoupePatch(req.first, req.second, req.third, 64u)
+                        if (patch != null) {
+                            val w = patch.width.toInt()
+                            val h = patch.height.toInt()
+                            if (w > 0 && h > 0 && patch.rgba.size >= w * h * 4) {
+                                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                                bmp.copyPixelsFromBuffer(ByteBuffer.wrap(patch.rgba))
+                                _loupeBitmap.value = bmp.asImageBitmap()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun hideLoupe() {
+        pendingLoupeReq.set(null)
+        _loupeBitmap.value = null
+    }
 
     private val _uiState = MutableStateFlow(
         EditorUiState(engineVersion = engineVersionInfo())
@@ -822,6 +863,7 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 engine.beginLiquifySession()
+                _uiState.update { it.copy(liquifyCanUndo = false, liquifyCanRedo = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
             }.onFailure { err ->
                 showStatus("Sıvılaştırma başlatılamadı: ${err.message}", 2600L)
@@ -834,6 +876,8 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 engine.liquifyStrokeBegin(tool, size, pressure, density, docX, docY)
+                val hs = engine.getLiquifyHistoryState()
+                _uiState.update { it.copy(liquifyCanUndo = hs.canUndo, liquifyCanRedo = hs.canRedo) }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
         }
@@ -871,6 +915,8 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             runCatching {
                 engine.resetLiquifySession()
+                val hs = engine.getLiquifyHistoryState()
+                _uiState.update { it.copy(liquifyCanUndo = hs.canUndo, liquifyCanRedo = hs.canRedo) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 showStatus("Sıvılaştırma sıfırlandı", 1400L)
             }
@@ -884,7 +930,7 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 val info = engine.commitLiquifySession()
                 val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                _uiState.update { it.copy(docInfo = info, layers = layers, liquifyCanUndo = false, liquifyCanRedo = false, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 refreshLayerThumbnails()
                 showStatus("Sıvılaştırma uygulandı", 1800L)
@@ -895,8 +941,31 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun liquifyUndo() {
+        pendingLiquifyPt.set(null)
+        paintExecutor.execute {
+            runCatching {
+                val hs = engine.liquifyUndo()
+                _uiState.update { it.copy(liquifyCanUndo = hs.canUndo, liquifyCanRedo = hs.canRedo) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun liquifyRedo() {
+        pendingLiquifyPt.set(null)
+        paintExecutor.execute {
+            runCatching {
+                val hs = engine.liquifyRedo()
+                _uiState.update { it.copy(liquifyCanUndo = hs.canUndo, liquifyCanRedo = hs.canRedo) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
     fun cancelLiquify() {
         pendingLiquifyPt.set(null)
+        _uiState.update { it.copy(liquifyCanUndo = false, liquifyCanRedo = false) }
         paintExecutor.execute {
             runCatching {
                 engine.cancelLiquifySession()

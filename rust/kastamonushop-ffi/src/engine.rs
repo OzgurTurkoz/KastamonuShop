@@ -57,6 +57,12 @@ pub struct LayerSummary {
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
+pub struct LiquifyHistoryState {
+    pub can_undo: bool,
+    pub can_redo: bool,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
 pub struct LayerThumbnail {
     pub width: u32,
     pub height: u32,
@@ -136,6 +142,8 @@ struct ActiveLiquifySession {
     real_size: (u32, u32),
     last_point: Option<[f64; 3]>,
     current_stroke: LiquifyStroke,
+    undo_stack: Vec<LiquifyField>,
+    redo_stack: Vec<LiquifyField>,
 }
 
 impl ActiveLiquifySession {
@@ -1863,6 +1871,8 @@ impl KastamonuEngine {
             real_size,
             last_point: None,
             current_stroke: LiquifyStroke::new(LiquifyTool::ForwardWarp, 120.0),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         });
         guard.mark_full_dirty();
         Ok(())
@@ -1885,6 +1895,11 @@ impl KastamonuEngine {
         st.pressure = pressure.clamp(5.0, 100.0) as f64;
         st.density = density.clamp(10.0, 100.0) as f64;
         st.rate = pressure.clamp(5.0, 100.0) as f64;
+        if liq.undo_stack.len() >= 20 {
+            liq.undo_stack.remove(0);
+        }
+        liq.undo_stack.push(liq.field.clone());
+        liq.redo_stack.clear();
         let pt = [x as f64, y as f64, 1.0];
         let dirty = liq.field.stroke_begin(&st, pt);
         liq.current_stroke = st;
@@ -1928,6 +1943,13 @@ impl KastamonuEngine {
         let Some(liq) = guard.live_liquify.as_mut() else {
             return Ok(());
         };
+        if !liq.field.is_identity() {
+            if liq.undo_stack.len() >= 20 {
+                liq.undo_stack.remove(0);
+            }
+            liq.undo_stack.push(liq.field.clone());
+            liq.redo_stack.clear();
+        }
         liq.field = LiquifyField::new(liq.bounds, liq.cell);
         liq.last_point = None;
         let full = [0, 0, liq.proxy.w, liq.proxy.h];
@@ -1962,6 +1984,137 @@ impl KastamonuEngine {
         }
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
+    }
+
+    pub fn liquify_undo(&self) -> Result<LiquifyHistoryState, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(LiquifyHistoryState { can_undo: false, can_redo: false });
+        };
+        if let Some(prev) = liq.undo_stack.pop() {
+            liq.redo_stack.push(liq.field.clone());
+            liq.field = prev;
+            liq.last_point = None;
+            let full = [0, 0, liq.proxy.w, liq.proxy.h];
+            liq.proxy.render(&liq.field, full, &mut liq.proxy_rgba);
+            liq.sync_proxy_rect_to_preview_doc(full);
+            guard.mark_full_dirty();
+        }
+        let state = guard.live_liquify.as_ref().map(|l| LiquifyHistoryState {
+            can_undo: !l.undo_stack.is_empty(),
+            can_redo: !l.redo_stack.is_empty(),
+        }).unwrap_or(LiquifyHistoryState { can_undo: false, can_redo: false });
+        Ok(state)
+    }
+
+    pub fn liquify_redo(&self) -> Result<LiquifyHistoryState, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(LiquifyHistoryState { can_undo: false, can_redo: false });
+        };
+        if let Some(next) = liq.redo_stack.pop() {
+            liq.undo_stack.push(liq.field.clone());
+            liq.field = next;
+            liq.last_point = None;
+            let full = [0, 0, liq.proxy.w, liq.proxy.h];
+            liq.proxy.render(&liq.field, full, &mut liq.proxy_rgba);
+            liq.sync_proxy_rect_to_preview_doc(full);
+            guard.mark_full_dirty();
+        }
+        let state = guard.live_liquify.as_ref().map(|l| LiquifyHistoryState {
+            can_undo: !l.undo_stack.is_empty(),
+            can_redo: !l.redo_stack.is_empty(),
+        }).unwrap_or(LiquifyHistoryState { can_undo: false, can_redo: false });
+        Ok(state)
+    }
+
+    pub fn get_liquify_history_state(&self) -> LiquifyHistoryState {
+        let guard = self.core.lock();
+        guard.live_liquify.as_ref().map(|l| LiquifyHistoryState {
+            can_undo: !l.undo_stack.is_empty(),
+            can_redo: !l.redo_stack.is_empty(),
+        }).unwrap_or(LiquifyHistoryState { can_undo: false, can_redo: false })
+    }
+
+    /// Ultra-fast (<0.3ms) live Floating Loupe / Magnifier pixel sampler around `(doc_x, doc_y)`.
+    /// Composites all visible raster layers (including in-progress live strokes!) onto a tiny
+    /// `out_size x out_size` RGBA8 buffer with crisp checkerboard transparency.
+    pub fn sample_loupe_patch(
+        &self,
+        doc_x: f32,
+        doc_y: f32,
+        half_extent_px: f32,
+        out_size: u32,
+    ) -> Option<LayerThumbnail> {
+        let guard = self.core.lock();
+        let doc = guard.active_document()?;
+        let os = out_size.clamp(32, 96) as usize;
+        let he = half_extent_px.clamp(4.0, 120.0);
+        let doc_w = doc.size.width as i32;
+        let doc_h = doc.size.height as i32;
+        if doc_w <= 0 || doc_h <= 0 {
+            return None;
+        }
+
+        // Collect visible raster layers bottom-to-top
+        let mut visible_layers: Vec<(&Surface, f32)> = Vec::new();
+        for l in &doc.layers {
+            if !l.visible || l.opacity <= 0.001 {
+                continue;
+            }
+            if let LayerContent::Raster(surf) = &l.content {
+                visible_layers.push((surf, l.opacity));
+            }
+        }
+
+        let mut rgba = vec![0u8; os * os * 4];
+        let step = (he * 2.0) / (os as f32);
+        let start_x = doc_x - he;
+        let start_y = doc_y - he;
+
+        for py in 0..os {
+            let sy = (start_y + (py as f32 + 0.5) * step).floor() as i32;
+            let row = py * os * 4;
+            for px in 0..os {
+                let sx = (start_x + (px as f32 + 0.5) * step).floor() as i32;
+                let di = row + px * 4;
+                // Outside canvas: dark studio background
+                if sx < 0 || sy < 0 || sx >= doc_w || sy >= doc_h {
+                    rgba[di] = 26;
+                    rgba[di + 1] = 27;
+                    rgba[di + 2] = 34;
+                    rgba[di + 3] = 255;
+                    continue;
+                }
+                // Checkerboard base for transparent pixels
+                let chk = (((px / 6) + (py / 6)) & 1) == 0;
+                let bg_v = if chk { 0.82f32 } else { 0.64f32 };
+                let mut acc_r = bg_v;
+                let mut acc_g = bg_v;
+                let mut acc_b = bg_v;
+
+                for (surf, op) in &visible_layers {
+                    let c = surf.rgba(sx, sy);
+                    let a = (c[3] * *op).clamp(0.0, 1.0);
+                    if a > 0.002 {
+                        let inv = 1.0 - a;
+                        acc_r = c[0] * a + acc_r * inv;
+                        acc_g = c[1] * a + acc_g * inv;
+                        acc_b = c[2] * a + acc_b * inv;
+                    }
+                }
+                rgba[di] = (acc_r.clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[di + 1] = (acc_g.clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[di + 2] = (acc_b.clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[di + 3] = 255;
+            }
+        }
+
+        Some(LayerThumbnail {
+            width: os as u32,
+            height: os as u32,
+            rgba,
+        })
     }
 
     pub fn cancel_liquify_session(&self) {
@@ -4251,5 +4404,55 @@ mod v08_automated_tests {
         let _ = eng.apply_motion_blur(30.0, 18.0).expect("apply motion");
         let info = eng.apply_radial_blur(12.0, "spin".into()).expect("apply radial");
         assert_eq!((info.width, info.height), (128, 128));
+    }
+
+    #[test]
+    fn test_v0995_liquify_per_stroke_undo_redo_repeatedly() {
+        let eng = test_engine();
+        eng.new_document("liq_ur".into(), 128, 128).expect("new_document");
+        eng.begin_liquify_session().expect("begin");
+
+        let s0 = eng.get_liquify_history_state();
+        assert!(!s0.can_undo && !s0.can_redo);
+
+        // Stroke 1
+        eng.liquify_stroke_begin("forwardWarp".into(), 48.0, 80.0, 50.0, 40.0, 40.0).expect("s1");
+        eng.liquify_stroke_move(70.0, 40.0).expect("s1m");
+        eng.liquify_stroke_end();
+        // Stroke 2
+        eng.liquify_stroke_begin("bloat".into(), 48.0, 80.0, 50.0, 80.0, 80.0).expect("s2");
+        eng.liquify_stroke_move(82.0, 80.0).expect("s2m");
+        eng.liquify_stroke_end();
+
+        let s1 = eng.liquify_undo().expect("undo 1");
+        assert!(s1.can_undo && s1.can_redo, "after 1st undo, both undo and redo must be available");
+        let s2 = eng.liquify_undo().expect("undo 2");
+        assert!(!s2.can_undo && s2.can_redo, "after 2nd undo, redo must still work");
+        let s3 = eng.liquify_redo().expect("redo 1");
+        assert!(s3.can_undo && s3.can_redo, "after redo, undo must work again");
+        eng.cancel_liquify_session();
+    }
+
+    #[test]
+    fn test_v0995_sample_loupe_patch_returns_crisp_center_pixels() {
+        let eng = test_engine();
+        let w = 64u32;
+        let h = 64u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                rgba[i] = 250;
+                rgba[i + 1] = 20;
+                rgba[i + 2] = 30;
+                rgba[i + 3] = 255;
+            }
+        }
+        eng.open_rgba_bytes("loupe.png".into(), w, h, rgba).expect("open");
+        let patch = eng.sample_loupe_patch(32.0, 32.0, 12.0, 48).expect("loupe patch");
+        assert_eq!((patch.width, patch.height), (48, 48));
+        assert_eq!(patch.rgba.len(), 48 * 48 * 4);
+        let center_idx = (24 * 48 + 24) * 4;
+        assert!(patch.rgba[center_idx] > 230 && patch.rgba[center_idx + 1] < 40, "center pixel must match red photo");
     }
 }

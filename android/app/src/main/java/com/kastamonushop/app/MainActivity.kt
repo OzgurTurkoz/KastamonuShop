@@ -16,6 +16,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -284,7 +285,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v0.9.9",
+                    text = "v0.9.9.5",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -689,6 +690,8 @@ fun StonebridgeStudioScreen(
 ) {
     val state by vm.uiState.collectAsState()
     val layerThumbs by vm.layerThumbnails.collectAsState()
+    val loupeBitmap by vm.loupeBitmap.collectAsState()
+    var loupeScreenPos by remember { mutableStateOf<Offset?>(null) }
     val activeLayerPrev by vm.activeLayerPreview.collectAsState()
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -1147,6 +1150,25 @@ fun StonebridgeStudioScreen(
                     onSelectRectCommit = { rx, ry, rw, rh -> vm.selectRect(rx, ry, rw, rh) },
                     onSelectWandTap = { dx, dy -> vm.selectMagicWand(dx, dy) },
                     onCloneSourcePick = { dx, dy -> vm.setCloneSource(dx, dy) },
+                    onLoupePointer = { sx, sy, dx, dy, active ->
+                        val tool = vm.uiState.value.activeTool
+                        val needsLoupe = tool == ActiveTool.EYEDROPPER ||
+                            tool == ActiveTool.CLONE_STAMP ||
+                            (vm.uiState.value.brushSize <= 24f && (
+                                tool == ActiveTool.BRUSH || tool == ActiveTool.ERASER ||
+                                tool == ActiveTool.SPOT_HEAL || tool == ActiveTool.SMUDGE ||
+                                tool == ActiveTool.DODGE || tool == ActiveTool.BURN ||
+                                tool == ActiveTool.SELECT_BRUSH_ADD || tool == ActiveTool.SELECT_BRUSH_SUB
+                            ))
+                        if (active && needsLoupe) {
+                            loupeScreenPos = Offset(sx, sy)
+                            val halfExt = if (tool == ActiveTool.EYEDROPPER) 12f else (vm.uiState.value.brushSize * 1.15f).coerceIn(12f, 44f)
+                            vm.updateLoupe(dx, dy, halfExt)
+                        } else if (loupeScreenPos != null) {
+                            loupeScreenPos = null
+                            vm.hideLoupe()
+                        }
+                    },
                     onCameraChanged = { cameraTick++ }
                 ).also { canvasViewRef = it }
             }
@@ -1504,20 +1526,22 @@ fun StonebridgeStudioScreen(
                                     }
                                     draggingCornerIdx = bestIdx
                                 },
-                                onDragEnd = { draggingCornerIdx = -1 },
-                                onDragCancel = { draggingCornerIdx = -1 },
+                                onDragEnd = { draggingCornerIdx = -1; loupeScreenPos = null; vm.hideLoupe() },
+                                onDragCancel = { draggingCornerIdx = -1; loupeScreenPos = null; vm.hideLoupe() },
                                 onDrag = { change, dragAmount ->
                                     if (draggingCornerIdx in 0..3) {
                                         change.consume()
                                         val z = view.getCurrentZoom().coerceAtLeast(0.05f)
                                         val dnX = dragAmount.x / (docW * z)
                                         val dnY = dragAmount.y / (docH * z)
-                                        when (draggingCornerIdx) {
-                                            0 -> pTl = Offset((pTl.x + dnX).coerceIn(0f, 1f), (pTl.y + dnY).coerceIn(0f, 1f))
-                                            1 -> pTr = Offset((pTr.x + dnX).coerceIn(0f, 1f), (pTr.y + dnY).coerceIn(0f, 1f))
-                                            2 -> pBr = Offset((pBr.x + dnX).coerceIn(0f, 1f), (pBr.y + dnY).coerceIn(0f, 1f))
-                                            3 -> pBl = Offset((pBl.x + dnX).coerceIn(0f, 1f), (pBl.y + dnY).coerceIn(0f, 1f))
+                                        val cornerPt = when (draggingCornerIdx) {
+                                            0 -> { pTl = Offset((pTl.x + dnX).coerceIn(0f, 1f), (pTl.y + dnY).coerceIn(0f, 1f)); pTl }
+                                            1 -> { pTr = Offset((pTr.x + dnX).coerceIn(0f, 1f), (pTr.y + dnY).coerceIn(0f, 1f)); pTr }
+                                            2 -> { pBr = Offset((pBr.x + dnX).coerceIn(0f, 1f), (pBr.y + dnY).coerceIn(0f, 1f)); pBr }
+                                            else -> { pBl = Offset((pBl.x + dnX).coerceIn(0f, 1f), (pBl.y + dnY).coerceIn(0f, 1f)); pBl }
                                         }
+                                        loupeScreenPos = change.position
+                                        vm.updateLoupe(cornerPt.x * docW, cornerPt.y * docH, (min(docW, docH) * 0.035f).coerceIn(16f, 64f))
                                     }
                                 }
                             )
@@ -1821,27 +1845,64 @@ fun StonebridgeStudioScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(liquifyTool, liquifySize, liquifyPressure) {
-                            detectDragGestures(
-                                onDragStart = { pos ->
-                                    liquifyCursorScreen = pos
-                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
-                                    vm.onLiquifyStart(liquifyTool, liquifySize, liquifyPressure, 55f, dx, dy)
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    liquifyCursorScreen = change.position
-                                    val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
-                                    vm.onLiquifyMove(dx, dy)
-                                },
-                                onDragEnd = {
-                                    liquifyCursorScreen = null
-                                    vm.onLiquifyEnd()
-                                },
-                                onDragCancel = {
-                                    liquifyCursorScreen = null
-                                    vm.onLiquifyEnd()
+                            androidx.compose.foundation.gestures.awaitEachGesture {
+                                val firstDown = awaitFirstDown(requireUnconsumed = false)
+                                var singleStrokeActive = false
+                                var pinchActive = false
+                                var prevDist = 0f
+                                var prevCentroid = Offset.Zero
+                                val downPos = firstDown.position
+
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val pressed = event.changes.filter { it.pressed }
+                                    if (pressed.isEmpty()) {
+                                        if (singleStrokeActive) {
+                                            vm.onLiquifyEnd()
+                                        }
+                                        liquifyCursorScreen = null
+                                        break
+                                    }
+                                    if (pressed.size >= 2) {
+                                        if (singleStrokeActive) {
+                                            vm.onLiquifyEnd()
+                                            singleStrokeActive = false
+                                        }
+                                        liquifyCursorScreen = null
+                                        val p0 = pressed[0].position
+                                        val p1 = pressed[1].position
+                                        val dist = kotlin.math.hypot((p1.x - p0.x).toDouble(), (p1.y - p0.y).toDouble()).toFloat().coerceAtLeast(1f)
+                                        val centroid = Offset((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f)
+                                        if (pinchActive && prevDist > 1f) {
+                                            val zf = (dist / prevDist).coerceIn(0.85f, 1.18f)
+                                            viewRef.applyExternalPinchPan(zf, centroid.x - prevCentroid.x, centroid.y - prevCentroid.y)
+                                        }
+                                        prevDist = dist
+                                        prevCentroid = centroid
+                                        pinchActive = true
+                                        pressed.forEach { it.consume() }
+                                    } else if (!pinchActive) {
+                                        val ch = pressed[0]
+                                        val pos = ch.position
+                                        ch.consume()
+                                        if (!singleStrokeActive) {
+                                            val moved = kotlin.math.hypot((pos.x - downPos.x).toDouble(), (pos.y - downPos.y).toDouble()).toFloat()
+                                            if (moved > 3f || liquifyTool == "bloat" || liquifyTool == "pucker" || liquifyTool == "twirlCw") {
+                                                singleStrokeActive = true
+                                                liquifyCursorScreen = pos
+                                                val (dx0, dy0) = viewRef.screenToDoc(downPos.x, downPos.y)
+                                                vm.onLiquifyStart(liquifyTool, liquifySize, liquifyPressure, 55f, dx0, dy0)
+                                                val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
+                                                vm.onLiquifyMove(dx, dy)
+                                            }
+                                        } else {
+                                            liquifyCursorScreen = pos
+                                            val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
+                                            vm.onLiquifyMove(dx, dy)
+                                        }
+                                    }
                                 }
-                            )
+                            }
                         }
                 ) {
                     val cur = liquifyCursorScreen
@@ -1852,6 +1913,18 @@ fun StonebridgeStudioScreen(
                     }
                 }
             }
+        }
+
+        // v0.9.9.5 Floating Touch-Point Magnifier / Loupe (Fine Brush, Eyedropper, Clone Stamp, Perspective Crop)
+        val lPos = loupeScreenPos
+        val lBmp = loupeBitmap
+        if (lPos != null && lBmp != null) {
+            FloatingLoupeOverlay(
+                fingerScreenPos = lPos,
+                loupeBitmap = lBmp,
+                isEyedropper = state.activeTool == ActiveTool.EYEDROPPER,
+                eyedropperColorHex = state.colorHex
+            )
         }
 
         // Exit Save Confirmation Dialog ("Bu fotoğrafı kaydetmek istiyor musun?")
@@ -2002,20 +2075,28 @@ fun StonebridgeStudioScreen(
                 TopBarButton(
                     icon = Icons.AutoMirrored.Filled.Undo,
                     label = "Geri",
-                    enabled = state.docInfo?.canUndo == true,
+                    enabled = if (activePanel == BottomPanel.LIQUIFY_EDIT) state.liquifyCanUndo else (state.docInfo?.canUndo == true),
                     onClick = {
-                        dismissLivePanelIfActive()
-                        vm.undo()
+                        if (activePanel == BottomPanel.LIQUIFY_EDIT) {
+                            vm.liquifyUndo()
+                        } else {
+                            dismissLivePanelIfActive()
+                            vm.undo()
+                        }
                     }
                 )
 
                 TopBarButton(
                     icon = Icons.AutoMirrored.Filled.Redo,
                     label = "İleri",
-                    enabled = state.docInfo?.canRedo == true,
+                    enabled = if (activePanel == BottomPanel.LIQUIFY_EDIT) state.liquifyCanRedo else (state.docInfo?.canRedo == true),
                     onClick = {
-                        dismissLivePanelIfActive()
-                        vm.redo()
+                        if (activePanel == BottomPanel.LIQUIFY_EDIT) {
+                            vm.liquifyRedo()
+                        } else {
+                            dismissLivePanelIfActive()
+                            vm.redo()
+                        }
                     }
                 )
 
@@ -4225,5 +4306,81 @@ private fun LiquifyEditPanel(
         }
         BrushSizeSliderRow("Boyut", size, minPx = 20f, maxPx = 400f, defaultPx = 120f, onChange = onSize)
         CompactSliderRow("Güç", "%${pressure.roundToInt()}", pressure, 10f..100f, 75f, onChange = onPressure)
+    }
+}
+
+@Composable
+private fun FloatingLoupeOverlay(
+    fingerScreenPos: Offset,
+    loupeBitmap: ImageBitmap,
+    isEyedropper: Boolean,
+    eyedropperColorHex: String
+) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    val screenW = with(density) { config.screenWidthDp.dp.toPx() }
+    val loupeSizeDp = 112.dp
+    val loupePx = with(density) { loupeSizeDp.toPx() }
+    val offsetAbovePx = with(density) { 118.dp.toPx() }
+    val topSafePx = with(density) { 86.dp.toPx() }
+    val marginPx = with(density) { 12.dp.toPx() }
+
+    val targetX = (fingerScreenPos.x - loupePx * 0.5f).coerceIn(marginPx, (screenW - loupePx - marginPx).coerceAtLeast(marginPx))
+    val targetY = if (fingerScreenPos.y - offsetAbovePx - loupePx * 0.5f >= topSafePx) {
+        fingerScreenPos.y - offsetAbovePx - loupePx * 0.5f
+    } else {
+        topSafePx
+    }
+    val finalX = if (fingerScreenPos.y - offsetAbovePx - loupePx * 0.5f < topSafePx) {
+        if (fingerScreenPos.x < screenW * 0.5f) (screenW - loupePx - marginPx) else marginPx
+    } else targetX
+
+    val ringColor = remember(isEyedropper, eyedropperColorHex) {
+        if (isEyedropper) {
+            runCatching { Color(AndroidColor.parseColor(eyedropperColorHex)) }.getOrDefault(Color.White)
+        } else {
+            Color(0xFF4F9CFF)
+        }
+    }
+
+    Column(
+        modifier = Modifier.offset { androidx.compose.ui.unit.IntOffset(finalX.roundToInt(), targetY.roundToInt()) },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(loupeSizeDp)
+                .clip(CircleShape)
+                .background(Color(0xFF1A1B22))
+                .border(3.dp, ringColor, CircleShape)
+                .border(1.dp, Color.White, CircleShape)
+        ) {
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                drawImage(
+                    image = loupeBitmap,
+                    dstSize = androidx.compose.ui.unit.IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                    filterQuality = androidx.compose.ui.graphics.FilterQuality.None
+                )
+                val cx = size.width * 0.5f
+                val cy = size.height * 0.5f
+                val arm = 12f
+                drawLine(Color.Black.copy(alpha = 0.75f), Offset(cx - arm, cy), Offset(cx + arm, cy), strokeWidth = 3.5f)
+                drawLine(Color.Black.copy(alpha = 0.75f), Offset(cx, cy - arm), Offset(cx, cy + arm), strokeWidth = 3.5f)
+                drawLine(Color.White, Offset(cx - arm + 1f, cy), Offset(cx + arm - 1f, cy), strokeWidth = 1.6f)
+                drawLine(Color.White, Offset(cx, cy - arm + 1f), Offset(cx, cy + arm - 1f), strokeWidth = 1.6f)
+            }
+        }
+        if (isEyedropper) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Surface(shape = RoundedCornerShape(10.dp), color = Color(0xEE14151B)) {
+                Text(
+                    text = eyedropperColorHex.uppercase(),
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
     }
 }

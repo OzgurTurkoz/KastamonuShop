@@ -61,6 +61,7 @@ class VulkanCanvasView(
     private val onSelectRectCommit: (Int, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     private val onSelectWandTap: (Float, Float) -> Unit = { _, _ -> },
     private val onCloneSourcePick: (Float, Float) -> Unit = { _, _ -> },
+    private val onLoupePointer: (Float, Float, Float, Float, Boolean) -> Unit = { _, _, _, _, _ -> },
     private val onCameraChanged: () -> Unit = {}
 ) : SurfaceView(context), SurfaceHolder.Callback {
 
@@ -173,6 +174,15 @@ class VulkanCanvasView(
         return dx to dy
     }
 
+    fun applyExternalPinchPan(zoomFactor: Float, panDx: Float, panDy: Float) {
+        zoom = (zoom * zoomFactor).coerceIn(0.10f, 32f)
+        panX += panDx
+        panY += panDy
+        NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
+        NativeSurfaceBridge.nativeRenderFrame()
+        onCameraChanged()
+    }
+
     private fun updateMirrorRatioFromScreen(sx: Float, sy: Float) {
         val (docW, docH) = getDocSize()
         val (dx, dy) = screenToDoc(sx, sy)
@@ -258,6 +268,7 @@ class VulkanCanvasView(
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.pointerCount >= 2) {
+            onLoupePointer(0f, 0f, 0f, 0f, false)
             val x0 = event.getX(0)
             val y0 = event.getY(0)
             val x1 = event.getX(1)
@@ -361,6 +372,7 @@ class VulkanCanvasView(
                     eyedropperActive = true
                     val (dx, dy) = screenToDoc(event.x, event.y)
                     onEyedropperSample(dx, dy)
+                    onLoupePointer(event.x, event.y, dx, dy, true)
                 } else if (isRetouchActive()) {
                     retouchActive = true
                     retouchBuffer.clear()
@@ -369,6 +381,7 @@ class VulkanCanvasView(
                     lastSampleDocY = sample.y
                     retouchBuffer.add(sample)
                     onRetouchPreview(event.x to event.y)
+                    onLoupePointer(event.x, event.y, sample.x, sample.y, true)
                 } else if (isDrawingActive() && isRulerEnabled()) {
                     rulerActive = true
                     rulerStartScreenX = event.x
@@ -388,6 +401,7 @@ class VulkanCanvasView(
                     lastSampleDocX = sample.x
                     lastSampleDocY = sample.y
                     onStrokeBegin(sample)
+                    onLoupePointer(event.x, event.y, sample.x, sample.y, true)
                 }
             }
             MotionEvent.ACTION_MOVE -> {
@@ -408,6 +422,7 @@ class VulkanCanvasView(
                 if (eyedropperActive) {
                     val (dx, dy) = screenToDoc(event.x, event.y)
                     onEyedropperSample(dx, dy)
+                    onLoupePointer(event.x, event.y, dx, dy, true)
                     return true
                 }
                 if (retouchActive) {
@@ -416,6 +431,7 @@ class VulkanCanvasView(
                         retouchBuffer.add(sample)
                     }
                     onRetouchPreview(event.x to event.y)
+                    onLoupePointer(event.x, event.y, sample.x, sample.y, true)
                     return true
                 }
                 if (rulerActive) {
@@ -457,8 +473,10 @@ class VulkanCanvasView(
                 if (batch.isNotEmpty()) {
                     onStrokeMove(batch)
                 }
+                onLoupePointer(event.x, event.y, cur.x, cur.y, true)
             }
             MotionEvent.ACTION_UP -> {
+                onLoupePointer(0f, 0f, 0f, 0f, false)
                 mirrorDragActive = false
                 textDragActive = false
                 if (selectDragActive) {
@@ -488,6 +506,7 @@ class VulkanCanvasView(
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
+                onLoupePointer(0f, 0f, 0f, 0f, false)
                 mirrorDragActive = false
                 textDragActive = false
                 eyedropperActive = false
