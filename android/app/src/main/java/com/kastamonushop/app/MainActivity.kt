@@ -975,2314 +975,85 @@ fun StonebridgeStudioScreen(
                 BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> activePanel = BottomPanel.CROP_MENU
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.LAYER_FX_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.DOCK }
-                BottomPanel.CAMERA_LIGHT_LIVE -> { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU }
-                BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); liquifyCursorScreen = null; activePanel = BottomPanel.EFFECT_MENU }
-                BottomPanel.AUTO_ENHANCE_MENU -> activePanel = BottomPanel.ADJUST_MENU
-                BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU }
-                BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU }
-                else -> activePanel = BottomPanel.DOCK
-            }
-        } else {
-            showExitSaveDialog = true
-        }
-    }
-
-    LaunchedEffect(state.fitCameraSignal, canvasViewRef) {
-        if (state.fitCameraSignal > 0 && canvasViewRef != null) {
-            fitToSafeArea(0, activePanel)
-        }
-    }
-
-    LaunchedEffect(activePanel) {
-        if (activePanel != BottomPanel.DOCK && state.compareOriginal) {
-            vm.dismissCompareOriginal()
-        }
-        val isProxyPanel = activePanel == BottomPanel.LIGHT_LIVE ||
-            activePanel == BottomPanel.COLOR_LIVE ||
-            activePanel == BottomPanel.LEVELS_LIVE ||
-            activePanel == BottomPanel.COLOR_BAL_LIVE ||
-            activePanel == BottomPanel.CURVES_LIVE ||
-            activePanel == BottomPanel.BLUR_EDIT ||
-            activePanel == BottomPanel.SHARPEN_EDIT ||
-            activePanel == BottomPanel.LAYER_FX_EDIT ||
-            activePanel == BottomPanel.CAMERA_LIGHT_LIVE ||
-            activePanel == BottomPanel.GRADIENT_EDIT ||
-            activePanel == BottomPanel.SHAPE_EDIT ||
-            activePanel == BottomPanel.CINEMA_LOOK_EDIT ||
-            activePanel == BottomPanel.MOTION_BLUR_EDIT ||
-            activePanel == BottomPanel.RADIAL_BLUR_EDIT
-        if (!isProxyPanel) {
-            vm.endProxyPreview()
-        }
-        if (activePanel != BottomPanel.LIQUIFY_EDIT) {
-            vm.cancelLiquify()
-            liquifyCursorScreen = null
-        }
-    }
-
-    LaunchedEffect(activePanel, curveOverlayExpanded, canvasViewRef) {
-        if (canvasViewRef != null) {
-            when (activePanel) {
-                BottomPanel.CURVES_LIVE,
-                BottomPanel.PERSPECTIVE_CROP_EDIT,
-                BottomPanel.CROP_RATIO_EDIT,
-                BottomPanel.MIRROR_EDIT,
-                BottomPanel.LIGHT_LIVE,
-                BottomPanel.COLOR_LIVE,
-                BottomPanel.LEVELS_LIVE,
-                BottomPanel.COLOR_BAL_LIVE,
-                BottomPanel.BLUR_EDIT,
-                BottomPanel.SHARPEN_EDIT,
-                BottomPanel.LAYER_TRANSFORM,
-                BottomPanel.LAYER_FX_EDIT,
-                BottomPanel.CAMERA_LIGHT_LIVE,
-                BottomPanel.GRADIENT_EDIT,
-                BottomPanel.SHAPE_EDIT,
-                BottomPanel.LIQUIFY_EDIT,
-                BottomPanel.CINEMA_LOOK_EDIT,
-                BottomPanel.MOTION_BLUR_EDIT,
-                BottomPanel.RADIAL_BLUR_EDIT,
-                BottomPanel.DOCK -> fitToSafeArea(pendingQuarterTurns, activePanel)
-                else -> Unit
-            }
-        }
-    }
-
-    val openDocLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            dismissLivePanelIfActive()
-            vm.openDocumentFromUri(context.contentResolver, uri, asLayer = openAsLayer)
-        }
-    }
-
-    val imageChooserLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { res ->
-        val uri = if (res.resultCode == Activity.RESULT_OK) res.data?.data else null
-        if (uri != null) {
-            dismissLivePanelIfActive()
-            vm.openDocumentFromUri(context.contentResolver, uri, asLayer = openAsLayer)
-        }
-    }
-
-    val exportDocLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("*/*")
-    ) { uri ->
-        if (uri != null) {
-            vm.exportDocumentToUri(context, uri, pendingExportFormat)
-        }
-    }
-
-    // Keep latest mirror state accessible to VulkanCanvasView touch callbacks
-    val currentPanelState by rememberUpdatedState(activePanel)
-    val currentMirrorModeState by rememberUpdatedState(selectedMirrorMode)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                VulkanCanvasView(
-                    context = ctx,
-                    getDocSize = {
-                        val d = vm.uiState.value.docInfo
-                        (d?.width?.toInt() ?: 2048) to (d?.height?.toInt() ?: 2048)
-                    },
-                    getBrushSize = { vm.uiState.value.brushSize },
-                    isDrawingActive = {
-                        val st = vm.uiState.value
-                        val t = st.activeTool
-                        t == ActiveTool.BRUSH || t == ActiveTool.ERASER ||
-                            t == ActiveTool.SMUDGE || t == ActiveTool.DODGE || t == ActiveTool.BURN ||
-                            (t == ActiveTool.CLONE_STAMP && !st.pickingCloneSource)
-                    },
-                    isRetouchActive = {
-                        val t = vm.uiState.value.activeTool
-                        t == ActiveTool.SPOT_HEAL ||
-                            t == ActiveTool.SELECT_QUICK ||
-                            t == ActiveTool.SELECT_BRUSH_ADD ||
-                            t == ActiveTool.SELECT_BRUSH_SUB
-                    },
-                    isEyedropperActive = { vm.uiState.value.activeTool == ActiveTool.EYEDROPPER },
-                    isRulerEnabled = { vm.uiState.value.rulerEnabled },
-                    isMirrorDragActive = { currentPanelState == BottomPanel.MIRROR_EDIT },
-                    isMirrorVerticalAxis = { currentMirrorModeState.isVerticalAxis },
-                    isTextDragActive = { currentPanelState == BottomPanel.TEXT_EDIT },
-                    isSelectRectActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_RECT },
-                    isSelectWandActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_WAND },
-                    isCloneSourcePickActive = {
-                        val st = vm.uiState.value
-                        st.activeTool == ActiveTool.CLONE_STAMP && st.pickingCloneSource
-                    },
-                    onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
-                    onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
-                    onStrokeEnd = { vm.finishLiveStroke() },
-                    onStrokeCancel = { vm.cancelLiveStroke() },
-                    onRetouchPreview = { pos -> retouchCursor = pos },
-                    onRetouchCommit = { samples ->
-                        val t = vm.uiState.value.activeTool
-                        if (t == ActiveTool.SELECT_QUICK || t == ActiveTool.SELECT_BRUSH_ADD || t == ActiveTool.SELECT_BRUSH_SUB) {
-                            vm.applySelectionStroke(samples)
-                        } else {
-                            vm.applyRetouchStroke(samples)
-                        }
-                    },
-                    onRulerPreview = { preview -> rulerPreview = preview },
-                    onRulerStrokeCommit = { samples -> vm.commitRulerStroke(samples) },
-                    onEyedropperSample = { dx, dy -> vm.sampleColorAt(dx, dy) },
-                    onMirrorAxisDrag = { ratio ->
-                        mirrorAxisRatio = ratio
-                        pushGpuMirrorPreview(currentMirrorModeState, ratio)
-                    },
-                    onTextPositionDrag = { nx, ny ->
-                        textNormX = nx
-                        textNormY = ny
-                    },
-                    onSelectRectPreview = { arr -> selectPreviewRect = arr },
-                    onSelectRectCommit = { rx, ry, rw, rh -> vm.selectRect(rx, ry, rw, rh) },
-                    onSelectWandTap = { dx, dy -> vm.selectMagicWand(dx, dy) },
-                    onCloneSourcePick = { dx, dy -> vm.setCloneSource(dx, dy) },
-                    onCameraChanged = { cameraTick++ }
-                ).also { canvasViewRef = it }
-            }
-        )
-
-        // Live Selection Box & Active Selection Indicator
-        selectPreviewRect?.let { r ->
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val left = min(r[0], r[2])
-                val top = min(r[1], r[3])
-                val w = kotlin.math.abs(r[2] - r[0])
-                val h = kotlin.math.abs(r[3] - r[1])
-                if (state.selectEllipse) {
-                    drawOval(
-                        color = Color(0xFF4F9CFF),
-                        topLeft = Offset(left, top),
-                        size = Size(w, h),
-                        style = Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f)))
-                    )
-                } else {
-                    drawRect(
-                        color = Color(0xFF4F9CFF),
-                        topLeft = Offset(left, top),
-                        size = Size(w, h),
-                        style = Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f)))
-                    )
-                }
-            }
-        }
-        // Active selection pixel mask & organic contour are rendered at 60 FPS directly in blit.wgsl
-        // Clone Stamp Source Crosshair
-        if (state.activeTool == ActiveTool.CLONE_STAMP) {
-            state.cloneSourceDoc?.let { (cx, cy) ->
-                val view = canvasViewRef
-                if (view != null) {
-                    val _tick = cameraTick
-                    val (sx, sy) = view.docToScreen(cx, cy)
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        drawCircle(color = Color(0xFF2ED573), radius = 14f, center = Offset(sx, sy), style = Stroke(width = 2.5f))
-                        drawLine(Color(0xFF2ED573), Offset(sx - 20f, sy), Offset(sx + 20f, sy), strokeWidth = 2.5f)
-                        drawLine(Color(0xFF2ED573), Offset(sx, sy - 20f), Offset(sx, sy + 20f), strokeWidth = 2.5f)
-                    }
-                }
-            }
-        }
-
-        // Live Brush Size Preview Circle in center of screen when dragging Boyut slider
-        if (showBrushSizeCircle) {
-            val z = canvasViewRef?.getCurrentZoom() ?: 1f
-            val rPx = (state.brushSize * z * 0.5f).coerceIn(4f, 260f)
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val c = Offset(size.width * 0.5f, size.height * 0.42f)
-                drawCircle(color = Color(0x334F9CFF), radius = rPx, center = c)
-                drawCircle(color = Color.White, radius = rPx, center = c, style = Stroke(width = 2.5f))
-            }
-        }
-
-        // Live Ruler Straight-Line Guide Overlay
-        rulerPreview?.let { line ->
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val guideColor = if (line.isSnapped) Color(0xFF2ED573) else Color(0xFF4F9CFF)
-                drawLine(
-                    color = guideColor,
-                    start = Offset(line.startX, line.startY),
-                    end = Offset(line.endX, line.endY),
-                    strokeWidth = 4f,
-                    pathEffect = if (line.isSnapped) null else PathEffect.dashPathEffect(floatArrayOf(16f, 10f))
-                )
-                drawCircle(color = Color.White, radius = 8f, center = Offset(line.startX, line.startY))
-                drawCircle(color = guideColor, radius = 8f, center = Offset(line.endX, line.endY))
-            }
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 68.dp),
-                shape = RoundedCornerShape(14.dp),
-                color = if (line.isSnapped) Color(0xDD1E462F) else Color(0xDD1A2333)
-            ) {
-                Text(
-                    text = if (line.isSnapped) "Cetvel · ${line.angleDeg}° (Hizalandı)" else "Cetvel · ${line.angleDeg}°",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
-                )
-            }
-        }
-
-        // 60 FPS Dashed Mirror Axis Overlay with Finger Drag Handle
-        if (activePanel == BottomPanel.MIRROR_EDIT) {
-            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-            val viewRef = canvasViewRef
-            val tick = cameraTick
-            if (viewRef != null && tick >= 0) {
-                val (p0, p1) = if (selectedMirrorMode.isVerticalAxis) {
-                    val ax = docW * mirrorAxisRatio
-                    viewRef.docToScreen(ax, 0f) to viewRef.docToScreen(ax, docH)
-                } else {
-                    val ay = docH * mirrorAxisRatio
-                    viewRef.docToScreen(0f, ay) to viewRef.docToScreen(docW, ay)
-                }
-                val midX = (p0.first + p1.first) * 0.5f
-                val midY = (p0.second + p1.second) * 0.5f
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 12f))
-                    drawLine(
-                        color = Color(0x99000000),
-                        start = Offset(p0.first, p0.second),
-                        end = Offset(p1.first, p1.second),
-                        strokeWidth = 6f,
-                        pathEffect = dash
-                    )
-                    drawLine(
-                        color = Color.White,
-                        start = Offset(p0.first, p0.second),
-                        end = Offset(p1.first, p1.second),
-                        strokeWidth = 3f,
-                        pathEffect = dash
-                    )
-                    // Center drag handle ring so user knows they can drag right on the photo
-                    drawCircle(color = Color(0xCC19191E), radius = 16f, center = Offset(midX, midY))
-                    drawCircle(color = Color.White, radius = 16f, center = Offset(midX, midY), style = Stroke(width = 3f))
-                    drawCircle(color = Color(0xFF4F9CFF), radius = 6f, center = Offset(midX, midY))
-                }
-            }
-        }
-
-        // Live Crop Frame Overlay when in CROP_RATIO_EDIT
-        if (activePanel == BottomPanel.CROP_RATIO_EDIT) {
-            val docW = state.docInfo?.width?.toInt() ?: 2048
-            val docH = state.docInfo?.height?.toInt() ?: 2048
-            val rect = remember(docW, docH, selectedCropPreset, cropScale) {
-                computeCropRect(docW, docH, selectedCropPreset.ratio, cropScale)
-            }
-            val viewRef = canvasViewRef
-            val tick = cameraTick
-            if (viewRef != null && tick >= 0) {
-                val (sx0, sy0) = viewRef.docToScreen(rect[0].toFloat(), rect[1].toFloat())
-                val (sx1, sy1) = viewRef.docToScreen((rect[0] + rect[2]).toFloat(), (rect[1] + rect[3]).toFloat())
-                val left = min(sx0, sx1)
-                val top = min(sy0, sy1)
-                val boxW = abs(sx1 - sx0)
-                val boxH = abs(sy1 - sy0)
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val dim = Color(0x88000000)
-                    drawRect(dim, topLeft = Offset(0f, 0f), size = Size(size.width, top.coerceAtLeast(0f)))
-                    drawRect(dim, topLeft = Offset(0f, top + boxH), size = Size(size.width, (size.height - top - boxH).coerceAtLeast(0f)))
-                    drawRect(dim, topLeft = Offset(0f, top), size = Size(left.coerceAtLeast(0f), boxH))
-                    drawRect(dim, topLeft = Offset(left + boxW, top), size = Size((size.width - left - boxW).coerceAtLeast(0f), boxH))
-                    val gridColor = Color(0x66FFFFFF)
-                    for (i in 1..2) {
-                        val gx = left + boxW * (i / 3f)
-                        val gy = top + boxH * (i / 3f)
-                        drawLine(gridColor, Offset(gx, top), Offset(gx, top + boxH), strokeWidth = 1.5f)
-                        drawLine(gridColor, Offset(left, gy), Offset(left + boxW, gy), strokeWidth = 1.5f)
-                    }
-                    drawRect(
-                        color = Color.White,
-                        topLeft = Offset(left, top),
-                        size = Size(boxW, boxH),
-                        style = Stroke(width = 3.5f)
-                    )
-                }
-            }
-        }
-
-        // Clean loading indicator while decoding/baking heavy 12MP images
-        if (state.isBusy) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0x66111217)),
-                contentAlignment = Alignment.Center
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = Color(0xEE1E2028),
-                    tonalElevation = 10.dp
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.5.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text("İşleniyor...", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    }
-                }
-            }
-        }
-
-        // Live Retouch brush ring indicator while dragging
-        retouchCursor?.let { (cx, cy) ->
-            val zoom = canvasViewRef?.getCurrentZoom() ?: 1f
-            val rPx = (state.brushSize * 0.5f * zoom).coerceIn(10f, 180f)
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(color = Color(0x88000000), radius = rPx + 2f, center = Offset(cx, cy), style = Stroke(width = 4f))
-                drawCircle(color = Color.White, radius = rPx, center = Offset(cx, cy), style = Stroke(width = 2.5f))
-            }
-        }
-
-        // 60 FPS Live Draggable Text Preview overlay
-        // Interactive 60 FPS Full-Canvas Draggable Tone Curve Overlay (toggled by tapping the mini curve box)
-        if (activePanel == BottomPanel.CURVES_LIVE && curveOverlayExpanded) {
-            val view = canvasViewRef
-            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-            if (view != null) {
-                val _tick = cameraTick
-                val (rawL, rawT) = view.docToScreen(0f, 0f)
-                val (rawR, rawB) = view.docToScreen(docW, docH)
-                val boxL = min(rawL, rawR)
-                val boxR = kotlin.math.max(rawL, rawR)
-                val boxT = min(rawT, rawB)
-                val boxB = kotlin.math.max(rawT, rawB)
-                val boxW = (boxR - boxL).coerceAtLeast(120f)
-                val boxH = (boxB - boxT).coerceAtLeast(120f)
-
-                val knotXs = floatArrayOf(0f, 0.25f, 0.50f, 0.75f, 1.0f)
-                fun knotScreen(idx: Int, yNorm: Float): Offset =
-                    Offset(boxL + knotXs[idx] * boxW, boxB - yNorm * boxH)
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(boxL, boxT, boxW, boxH) {
-                            detectDragGestures(
-                                onDragStart = { pos ->
-                                    val ys = floatArrayOf(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
-                                    var bestIdx = -1
-                                    var bestDist = 110f
-                                    for (i in 0..4) {
-                                        val pt = knotScreen(i, ys[i])
-                                        val d = kotlin.math.hypot((pos.x - pt.x).toDouble(), (pos.y - pt.y).toDouble()).toFloat()
-                                        if (d < bestDist) {
-                                            bestDist = d
-                                            bestIdx = i
-                                        }
-                                    }
-                                    // If tapped directly near the curve between nodes, pick nearest X node
-                                    if (bestIdx == -1 && pos.x in (boxL - 36f)..(boxR + 36f) && pos.y in (boxT - 36f)..(boxB + 36f)) {
-                                        val nx = ((pos.x - boxL) / boxW).coerceIn(0f, 1f)
-                                        bestIdx = (nx * 4f).roundToInt().coerceIn(0, 4)
-                                    }
-                                    draggingCurveNode = bestIdx
-                                },
-                                onDragEnd = { draggingCurveNode = -1 },
-                                onDragCancel = { draggingCurveNode = -1 },
-                                onDrag = { change, _ ->
-                                    if (draggingCurveNode in 0..4) {
-                                        change.consume()
-                                        val ny = ((boxB - change.position.y) / boxH).coerceIn(0f, 1f)
-                                        when (draggingCurveNode) {
-                                            0 -> curveBlackVal = ny
-                                            1 -> curveShadowVal = ny
-                                            2 -> curveMidVal = ny
-                                            3 -> curveHighVal = ny
-                                            4 -> curveWhiteVal = ny
-                                        }
-                                        pushCurveGpu(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
-                                    }
-                                }
-                            )
-                        }
-                ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        // Dashed outer frame over the photo
-                        drawRect(
-                            color = Color(0xBBFFFFFF),
-                            topLeft = Offset(boxL, boxT),
-                            size = Size(boxW, boxH),
-                            style = Stroke(width = 2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)))
-                        )
-                        // Subtle 4x4 grid + diagonal reference
-                        for (g in 1..3) {
-                            val t = g / 4f
-                            drawLine(Color(0x33FFFFFF), Offset(boxL + boxW * t, boxT), Offset(boxL + boxW * t, boxB), 1f)
-                            drawLine(Color(0x33FFFFFF), Offset(boxL, boxT + boxH * t), Offset(boxR, boxT + boxH * t), 1f)
-                        }
-                        drawLine(Color(0x44FFFFFF), Offset(boxL, boxB), Offset(boxR, boxT), 1.5f)
-
-                        // Smooth 64-step cubic Hermite spline curve (matches blit.wgsl 1:1!)
-                        val path = Path()
-                        val steps = 64
-                        for (i in 0..steps) {
-                            val x = i.toFloat() / steps.toFloat()
-                            val y = evalHermiteCurve(x, curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
-                            val sx = boxL + x * boxW
-                            val sy = boxB - y * boxH
-                            if (i == 0) path.moveTo(sx, sy) else path.lineTo(sx, sy)
-                        }
-                        drawPath(path, color = Color(0xCC000000), style = Stroke(width = 6f))
-                        drawPath(path, color = Color.White, style = Stroke(width = 3f))
-
-                        // 5 large draggable translucent circular handles
-                        val ys = floatArrayOf(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal)
-                        for (i in 0..4) {
-                            val pt = knotScreen(i, ys[i])
-                            val active = draggingCurveNode == i
-                            drawCircle(
-                                color = if (active) Color(0xAA4F9CFF) else Color(0x66FFFFFF),
-                                radius = if (active) 30f else 24f,
-                                center = pt
-                            )
-                            drawCircle(
-                                color = if (active) Color(0xFF4F9CFF) else Color.White,
-                                radius = if (active) 30f else 24f,
-                                center = pt,
-                                style = Stroke(width = 2.5f)
-                            )
-                            drawCircle(color = Color.White, radius = 5f, center = pt)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Interactive 60 FPS 4-Corner Perspective Crop Overlay
-        if (activePanel == BottomPanel.PERSPECTIVE_CROP_EDIT) {
-            val view = canvasViewRef
-            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-            if (view != null) {
-                val _tick = cameraTick
-                fun toScreen(n: Offset): Offset {
-                    val (sx, sy) = view.docToScreen(n.x * docW, n.y * docH)
-                    return Offset(sx, sy)
-                }
-                val sTl = toScreen(pTl)
-                val sTr = toScreen(pTr)
-                val sBr = toScreen(pBr)
-                val sBl = toScreen(pBl)
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(docW, docH, _tick) {
-                            detectDragGestures(
-                                onDragStart = { pos ->
-                                    val pts = listOf(toScreen(pTl), toScreen(pTr), toScreen(pBr), toScreen(pBl))
-                                    var bestIdx = -1
-                                    var bestDist = 96f
-                                    pts.forEachIndexed { i, pt ->
-                                        val d = kotlin.math.hypot((pos.x - pt.x).toDouble(), (pos.y - pt.y).toDouble()).toFloat()
-                                        if (d < bestDist) {
-                                            bestDist = d
-                                            bestIdx = i
-                                        }
-                                    }
-                                    draggingCornerIdx = bestIdx
-                                },
-                                onDragEnd = { draggingCornerIdx = -1 },
-                                onDragCancel = { draggingCornerIdx = -1 },
-                                onDrag = { change, dragAmount ->
-                                    if (draggingCornerIdx in 0..3) {
-                                        change.consume()
-                                        val z = view.getCurrentZoom().coerceAtLeast(0.05f)
-                                        val dnX = dragAmount.x / (docW * z)
-                                        val dnY = dragAmount.y / (docH * z)
-                                        when (draggingCornerIdx) {
-                                            0 -> pTl = Offset((pTl.x + dnX).coerceIn(0f, 1f), (pTl.y + dnY).coerceIn(0f, 1f))
-                                            1 -> pTr = Offset((pTr.x + dnX).coerceIn(0f, 1f), (pTr.y + dnY).coerceIn(0f, 1f))
-                                            2 -> pBr = Offset((pBr.x + dnX).coerceIn(0f, 1f), (pBr.y + dnY).coerceIn(0f, 1f))
-                                            3 -> pBl = Offset((pBl.x + dnX).coerceIn(0f, 1f), (pBl.y + dnY).coerceIn(0f, 1f))
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val quad = Path().apply {
-                            moveTo(sTl.x, sTl.y)
-                            lineTo(sTr.x, sTr.y)
-                            lineTo(sBr.x, sBr.y)
-                            lineTo(sBl.x, sBl.y)
-                            close()
-                        }
-                        drawPath(quad, color = Color(0xFF4F9CFF), style = Stroke(width = 4f))
-                        // 3x3 perspective grid inside the quad
-                        for (k in 1..2) {
-                            val t = k / 3f
-                            val topPt = Offset(sTl.x + (sTr.x - sTl.x) * t, sTl.y + (sTr.y - sTl.y) * t)
-                            val botPt = Offset(sBl.x + (sBr.x - sBl.x) * t, sBl.y + (sBr.y - sBl.y) * t)
-                            drawLine(Color(0x88FFFFFF), topPt, botPt, strokeWidth = 1.5f)
-                            val leftPt = Offset(sTl.x + (sBl.x - sTl.x) * t, sTl.y + (sBl.y - sTl.y) * t)
-                            val rightPt = Offset(sTr.x + (sBr.x - sTr.x) * t, sTr.y + (sBr.y - sTr.y) * t)
-                            drawLine(Color(0x88FFFFFF), leftPt, rightPt, strokeWidth = 1.5f)
-                        }
-                        listOf(sTl, sTr, sBr, sBl).forEachIndexed { i, pt ->
-                            val active = draggingCornerIdx == i
-                            drawCircle(
-                                color = if (active) Color(0xFF2ED573) else Color(0xFF4F9CFF),
-                                radius = if (active) 24f else 18f,
-                                center = pt
-                            )
-                            drawCircle(color = Color.White, radius = 8f, center = pt)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Interactive 60 FPS Active Layer Move / Scale / Rotate Overlay
-        if (activePanel == BottomPanel.LAYER_TRANSFORM) {
-            val view = canvasViewRef
-            val prev = activeLayerPrev
-            if (view != null && prev != null) {
-                val _tick = cameraTick
-                val b = prev.first
-                val z = view.getCurrentZoom().coerceAtLeast(0.05f)
-                val cxDoc = (b.x0 + b.x1) * 0.5f + layerDx
-                val cyDoc = (b.y0 + b.y1) * 0.5f + layerDy
-                val halfW = (b.x1 - b.x0).coerceAtLeast(10) * 0.5f * (layerScalePct / 100f)
-                val halfH = (b.y1 - b.y0).coerceAtLeast(10) * 0.5f * (layerScalePct / 100f)
-                val (sCx, sCy) = view.docToScreen(cxDoc, cyDoc)
-                val boxW = halfW * 2f * z
-                val boxH = halfH * 2f * z
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(z) {
-                            detectTransformGestures { _, pan, zoomChange, rotationChange ->
-                                layerDx += pan.x / z
-                                layerDy += pan.y / z
-                                if (zoomChange != 1f) {
-                                    layerScalePct = (layerScalePct * zoomChange).coerceIn(15f, 300f)
-                                }
-                                if (rotationChange != 0f) {
-                                    val nextRot = layerRotDeg + rotationChange
-                                    layerRotDeg = ((nextRot + 180f) % 360f + 360f) % 360f - 180f
-                                }
-                            }
-                        }
-                ) {
-                    val boxWDp = with(density) { boxW.toDp() }
-                    val boxHDp = with(density) { boxH.toDp() }
-                    Box(
-                        modifier = Modifier
-                            .offset {
-                                androidx.compose.ui.unit.IntOffset(
-                                    (sCx - boxW * 0.5f).roundToInt(),
-                                    (sCy - boxH * 0.5f).roundToInt()
-                                )
-                            }
-                            .size(boxWDp, boxHDp)
-                            .graphicsLayer { rotationZ = layerRotDeg }
-                            .border(2.dp, Color(0xFF4F9CFF), RoundedCornerShape(4.dp))
-                    ) {
-                        prev.second?.let { bmp ->
-                            Image(
-                                bitmap = bmp,
-                                contentDescription = "Aktif katman",
-                                contentScale = ContentScale.FillBounds,
-                                alpha = 1.0f,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        if (activePanel == BottomPanel.TEXT_EDIT) {
-            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-            val viewRef = canvasViewRef
-            val tick = cameraTick
-            if (viewRef != null && tick >= 0) {
-                val (sx, sy) = viewRef.docToScreen(docW * textNormX, docH * textNormY)
-                val density = androidx.compose.ui.platform.LocalDensity.current
-                val previewSp = ((textSizePx * viewRef.getCurrentZoom()) / density.fontScale / density.density).coerceIn(10f, 72f)
-                val previewColor = remember(textColorHex) {
-                    runCatching { Color(AndroidColor.parseColor(textColorHex)) }.getOrDefault(Color.White)
-                }
-                Box(
-                    modifier = Modifier
-                        .onSizeChanged { textBoxSize = it }
-                        .offset {
-                            val halfW = if (textBoxSize.width > 0) textBoxSize.width / 2f else 90f
-                            val halfH = if (textBoxSize.height > 0) textBoxSize.height / 2f else 24f
-                            val maxX = (viewRef.width - textBoxSize.width - 12).coerceAtLeast(12)
-                            val clampedX = (sx - halfW).roundToInt().coerceIn(12, maxX)
-                            val clampedY = (sy - halfH).roundToInt().coerceAtLeast(12)
-                            androidx.compose.ui.unit.IntOffset(clampedX, clampedY)
-                        }
-                        .widthIn(max = 300.dp)
-                        .border(1.5.dp, Color(0xAA4F9CFF), RoundedCornerShape(8.dp))
-                        .background(Color(0x44111217), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = textDraft.ifBlank { "Metin..." },
-                        color = previewColor,
-                        fontSize = previewSp.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 3
-                    )
-                }
-            }
-        }
-
-        // v0.9.5 Interactive On-Canvas Gradient Start/End Drag Overlay (60 FPS Live Proxy)
-        if (activePanel == BottomPanel.GRADIENT_EDIT) {
-            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-            val viewRef = canvasViewRef
-            val tick = cameraTick
-            if (viewRef != null && tick >= 0) {
-                val (ax, ay) = viewRef.docToScreen(docW * gradFromNormX, docH * gradFromNormY)
-                val (bx, by) = viewRef.docToScreen(docW * gradToNormX, docH * gradToNormY)
-                val startCol = remember(gradStartHex) { runCatching { Color(AndroidColor.parseColor(gradStartHex)) }.getOrDefault(Color(0xFF4F9CFF)) }
-                val endCol = remember(gradEndHex) { runCatching { Color(AndroidColor.parseColor(gradEndHex)) }.getOrDefault(Color(0xFFFF4D4F)) }
-                androidx.compose.foundation.Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(docW, docH, gradStyle, gradStartHex, gradEndHex, gradOpacity) {
-                            detectDragGestures(
-                                onDragStart = { pos ->
-                                    val dA = kotlin.math.hypot(pos.x - ax, pos.y - ay)
-                                    val dB = kotlin.math.hypot(pos.x - bx, pos.y - by)
-                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
-                                    if (dA > 70f && dB > 70f) {
-                                        gradFromNormX = (dx / docW).coerceIn(0f, 1f)
-                                        gradFromNormY = (dy / docH).coerceIn(0f, 1f)
-                                        gradToNormX = gradFromNormX
-                                        gradToNormY = gradFromNormY
-                                    }
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    val p = change.position
-                                    val (dx, dy) = viewRef.screenToDoc(p.x, p.y)
-                                    val nx = (dx / docW).coerceIn(0f, 1f)
-                                    val ny = (dy / docH).coerceIn(0f, 1f)
-                                    val (curAx, curAy) = viewRef.docToScreen(docW * gradFromNormX, docH * gradFromNormY)
-                                    val (curBx, curBy) = viewRef.docToScreen(docW * gradToNormX, docH * gradToNormY)
-                                    if (kotlin.math.hypot(p.x - curAx, p.y - curAy) < kotlin.math.hypot(p.x - curBx, p.y - curBy)) {
-                                        gradFromNormX = nx
-                                        gradFromNormY = ny
-                                    } else {
-                                        gradToNormX = nx
-                                        gradToNormY = ny
-                                    }
-                                    vm.updateProxyGradient(
-                                        docW * gradFromNormX, docH * gradFromNormY,
-                                        docW * gradToNormX, docH * gradToNormY,
-                                        gradStyle, gradStartHex, gradEndHex, gradOpacity
-                                    )
-                                }
-                            )
-                        }
-                ) {
-                    drawLine(Color.White.copy(alpha = 0.85f), Offset(ax, ay), Offset(bx, by), strokeWidth = 3f)
-                    drawCircle(Color.White, radius = 16f, center = Offset(ax, ay))
-                    drawCircle(startCol, radius = 12f, center = Offset(ax, ay))
-                    drawCircle(Color.White, radius = 16f, center = Offset(bx, by))
-                    drawCircle(endCol, radius = 12f, center = Offset(bx, by))
-                }
-            }
-        }
-
-        // v0.9.5 Interactive On-Canvas Vector Shape Draw/Resize Overlay (60 FPS Live Proxy)
-        if (activePanel == BottomPanel.SHAPE_EDIT) {
-            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-            val viewRef = canvasViewRef
-            val tick = cameraTick
-            if (viewRef != null && tick >= 0) {
-                val (sx0, sy0) = viewRef.docToScreen(docW * shapeX0Norm, docH * shapeY0Norm)
-                val (sx1, sy1) = viewRef.docToScreen(docW * shapeX1Norm, docH * shapeY1Norm)
-                androidx.compose.foundation.Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(docW, docH, shapeKind, shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides) {
-                            var dragMode = 0 // 0=new, 1=handle0, 2=handle1, 3=move
-                            var lastDocX = 0f
-                            var lastDocY = 0f
-                            detectDragGestures(
-                                onDragStart = { pos ->
-                                    val (c0x, c0y) = viewRef.docToScreen(docW * shapeX0Norm, docH * shapeY0Norm)
-                                    val (c1x, c1y) = viewRef.docToScreen(docW * shapeX1Norm, docH * shapeY1Norm)
-                                    val d0 = kotlin.math.hypot(pos.x - c0x, pos.y - c0y)
-                                    val d1 = kotlin.math.hypot(pos.x - c1x, pos.y - c1y)
-                                    val minX = min(c0x, c1x) - 20f
-                                    val maxX = kotlin.math.max(c0x, c1x) + 20f
-                                    val minY = min(c0y, c1y) - 20f
-                                    val maxY = kotlin.math.max(c0y, c1y) + 20f
-                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
-                                    lastDocX = dx
-                                    lastDocY = dy
-                                    dragMode = when {
-                                        d0 <= 68f -> 1
-                                        d1 <= 68f -> 2
-                                        pos.x in minX..maxX && pos.y in minY..maxY -> 3
-                                        else -> {
-                                            shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
-                                            shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
-                                            shapeX1Norm = (shapeX0Norm + 0.04f).coerceAtMost(1f)
-                                            shapeY1Norm = (shapeY0Norm + 0.04f).coerceAtMost(1f)
-                                            0
-                                        }
-                                    }
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
-                                    when (dragMode) {
-                                        1 -> {
-                                            shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
-                                            shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
-                                        }
-                                        2, 0 -> {
-                                            shapeX1Norm = (dx / docW).coerceIn(0f, 1f)
-                                            shapeY1Norm = (dy / docH).coerceIn(0f, 1f)
-                                        }
-                                        3 -> {
-                                            val dnx = (dx - lastDocX) / docW
-                                            val dny = (dy - lastDocY) / docH
-                                            lastDocX = dx
-                                            lastDocY = dy
-                                            shapeX0Norm = (shapeX0Norm + dnx).coerceIn(-0.2f, 1.2f)
-                                            shapeY0Norm = (shapeY0Norm + dny).coerceIn(-0.2f, 1.2f)
-                                            shapeX1Norm = (shapeX1Norm + dnx).coerceIn(-0.2f, 1.2f)
-                                            shapeY1Norm = (shapeY1Norm + dny).coerceIn(-0.2f, 1.2f)
-                                        }
-                                    }
-                                    vm.updateProxyShape(
-                                        shapeKind,
-                                        docW * shapeX0Norm, docH * shapeY0Norm,
-                                        docW * shapeX1Norm, docH * shapeY1Norm,
-                                        shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
-                                    )
-                                }
-                            )
-                        }
-                ) {
-                    val lx = min(sx0, sx1)
-                    val ty = min(sy0, sy1)
-                    val rw = abs(sx1 - sx0).coerceAtLeast(4f)
-                    val rh = abs(sy1 - sy0).coerceAtLeast(4f)
-                    if (shapeKind == "line") {
-                        drawLine(Color(0xCC4F9CFF), Offset(sx0, sy0), Offset(sx1, sy1), strokeWidth = 2.5f)
-                    } else {
-                        drawRect(
-                            color = Color(0xCC4F9CFF),
-                            topLeft = Offset(lx, ty),
-                            size = androidx.compose.ui.geometry.Size(rw, rh),
-                            style = Stroke(width = 2f)
-                        )
-                    }
-                    drawCircle(Color.White, radius = 10f, center = Offset(sx0, sy0))
-                    drawCircle(Color(0xFF4F9CFF), radius = 6f, center = Offset(sx0, sy0))
-                    drawCircle(Color.White, radius = 10f, center = Offset(sx1, sy1))
-                    drawCircle(Color(0xFF4F9CFF), radius = 6f, center = Offset(sx1, sy1))
-                }
-            }
-        }
-
-        // v0.9.8 Interactive 60 FPS On-Canvas Liquify Drag Overlay
-        if (activePanel == BottomPanel.LIQUIFY_EDIT) {
-            val viewRef = canvasViewRef
-            if (viewRef != null) {
-                androidx.compose.foundation.Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(liquifyTool, liquifySize, liquifyPressure) {
-                            detectDragGestures(
-                                onDragStart = { pos ->
-                                    liquifyCursorScreen = pos
-                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
-                                    vm.onLiquifyStart(liquifyTool, liquifySize, liquifyPressure, 55f, dx, dy)
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    liquifyCursorScreen = change.position
-                                    val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
-                                    vm.onLiquifyMove(dx, dy)
-                                },
-                                onDragEnd = {
-                                    liquifyCursorScreen = null
-                                    vm.onLiquifyEnd()
-                                },
-                                onDragCancel = {
-                                    liquifyCursorScreen = null
-                                    vm.onLiquifyEnd()
-                                }
-                            )
-                        }
-                ) {
-                    val cur = liquifyCursorScreen
-                    if (cur != null) {
-                        val rPx = (liquifySize * 0.5f * viewRef.getCurrentZoom()).coerceIn(10f, 360f)
-                        drawCircle(Color.White.copy(alpha = 0.85f), radius = rPx, center = cur, style = Stroke(width = 2.2f))
-                        drawCircle(Color(0x884F9CFF), radius = (rPx - 2f).coerceAtLeast(4f), center = cur, style = Stroke(width = 1.2f))
-                    }
-                }
-            }
-        }
-
-        // Exit Save Confirmation Dialog ("Bu fotoğrafı kaydetmek istiyor musun?")
-        if (showExitSaveDialog) {
-            AlertDialog(
-                onDismissRequest = { showExitSaveDialog = false },
-                containerColor = Color(0xFF232530),
-                titleContentColor = Color.White,
-                textContentColor = Color(0xFFD8DCE8),
-                title = { Text("Fotoğrafı Kaydet", fontWeight = FontWeight.SemiBold) },
-                text = { Text("Bu fotoğrafı kaydetmek istiyor musun? Evet dersen Kaydedilen Fotoğraflar bölümüne eklenir.") },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            showExitSaveDialog = false
-                            clearGpuPreview()
-                            vm.quickSaveToGallery(context) {
-                                onGoHome()
-                            }
-                        }
-                    ) {
-                        Text("Evet")
-                    }
-                },
-                dismissButton = {
-                    OutlinedButton(
-                        onClick = {
-                            showExitSaveDialog = false
-                            clearGpuPreview()
-                            onGoHome()
-                        }
-                    ) {
-                        Text("Hayır", color = Color.White)
-                    }
-                }
-            )
-        }
-
-        // Slim Top Bar
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp)
-                .fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-            tonalElevation = 6.dp
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                TopBarButton(
-                    icon = Icons.Default.Home,
-                    label = "Ana",
-                    onClick = {
-                        dismissLivePanelIfActive()
-                        showExitSaveDialog = true
+                BottomPanel.CAMERA_LIGHT_LIVE -> CameraLightPanel(
+                    exposure = camExposureVal, onExposure = { camExposureVal = it },
+                    shadows = camShadowsVal, onShadows = { camShadowsVal = it },
+                    highlights = camHighlightsVal, onHighlights = { camHighlightsVal = it },
+                    vibrance = camVibranceVal, onVibrance = { camVibranceVal = it },
+                    temp = camTempVal, onTemp = { camTempVal = it },
+                    tint = camTintVal, onTint = { camTintVal = it },
+                    clarity = camClarityVal, onClarity = { camClarityVal = it },
+                    dehaze = camDehazeVal, onDehaze = { camDehazeVal = it },
+                    showFine = showCamFineTune, onToggleFine = { showCamFineTune = !showCamFineTune },
+                    onPreview = { vm.updateProxyCameraLight(camExposureVal, camShadowsVal, camHighlightsVal, camVibranceVal, camTempVal, camTintVal, camClarityVal, camDehazeVal) },
+                    onClose = { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = {
+                        val isNeutral = abs(camExposureVal) < 0.02f &&
+                            camShadowsVal.roundToInt() == 0 && camHighlightsVal.roundToInt() == 0 &&
+                            camVibranceVal.roundToInt() == 0 && camTempVal.roundToInt() == 0 &&
+                            camTintVal.roundToInt() == 0 && camClarityVal.roundToInt() == 0 &&
+                            camDehazeVal.roundToInt() == 0
+                        if (isNeutral) clearAdjustGpuPreviewOnly()
+                        else vm.applyCameraLight(camExposureVal, camShadowsVal, camHighlightsVal, camVibranceVal, camTempVal, camTintVal, camClarityVal, camDehazeVal)
+                        activePanel = BottomPanel.DOCK
                     }
                 )
-
-                Box {
-                    TopBarButton(
-                        icon = Icons.Default.AddPhotoAlternate,
-                        label = "Aç / Ekle",
-                        onClick = { showOpenMenu = true }
-                    )
-                    DropdownMenu(
-                        expanded = showOpenMenu,
-                        onDismissRequest = { showOpenMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Fotoğraf Aç (Galeri / Uygulamalar)") },
-                            onClick = {
-                                showOpenMenu = false
-                                openAsLayer = false
-                                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
-                                    type = "image/*"
-                                    addCategory(Intent.CATEGORY_OPENABLE)
-                                }
-                                imageChooserLauncher.launch(Intent.createChooser(pick, "Fotoğraf Seç"))
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Fotoğrafı Katman Olarak Ekle") },
-                            onClick = {
-                                showOpenMenu = false
-                                openAsLayer = true
-                                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
-                                    type = "image/*"
-                                    addCategory(Intent.CATEGORY_OPENABLE)
-                                }
-                                imageChooserLauncher.launch(Intent.createChooser(pick, "Katman İçin Fotoğraf Seç"))
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Proje Aç (.psd / .pcraft)") },
-                            onClick = {
-                                showOpenMenu = false
-                                openAsLayer = false
-                                openDocLauncher.launch(arrayOf("*/*"))
-                            }
-                        )
-                    }
-                }
-
-                Box {
-                    TopBarButton(
-                        icon = Icons.Default.Save,
-                        label = "Kaydet",
-                        onClick = { showExportMenu = true }
-                    )
-                    DropdownMenu(
-                        expanded = showExportMenu,
-                        onDismissRequest = { showExportMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Cihaz Galerisine Kaydet (PNG)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) },
-                            onClick = {
-                                showExportMenu = false
-                                vm.saveToDeviceGallery(context)
-                            }
-                        )
-                        HorizontalDivider()
-                        listOf(
-                            "png" to "PNG Dosya Olarak Kaydet (.png)",
-                            "jpg" to "JPEG Resim (.jpg)",
-                            "psd" to "Photoshop Katmanlı (.psd)",
-                            "pcraft" to "StonebridgeCraft Proje (.pcraft)",
-                            "webp" to "WebP (.webp)"
-                        ).forEach { (ext, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    showExportMenu = false
-                                    pendingExportFormat = ext
-                                    exportDocLauncher.launch("stonebridgecraft.$ext")
-                                }
-                            )
-                        }
-                    }
-                }
-
-                TopBarButton(
-                    icon = Icons.AutoMirrored.Filled.Undo,
-                    label = "Geri",
-                    enabled = state.docInfo?.canUndo == true,
-                    onClick = {
-                        dismissLivePanelIfActive()
-                        vm.undo()
-                    }
-                )
-
-                TopBarButton(
-                    icon = Icons.AutoMirrored.Filled.Redo,
-                    label = "İleri",
-                    enabled = state.docInfo?.canRedo == true,
-                    onClick = {
-                        dismissLivePanelIfActive()
-                        vm.redo()
-                    }
-                )
-
-                TopBarButton(
-                    icon = Icons.Default.Compare,
-                    label = "Önce",
-                    selected = state.compareOriginal,
-                    onClick = { vm.toggleCompareOriginal() }
-                )
-
-                TopBarButton(
-                    icon = Icons.Default.CenterFocusStrong,
-                    label = "Ortala",
-                    onClick = { fitToSafeArea(pendingQuarterTurns, activePanel) }
-                )
-
-                TopBarButton(
-                    icon = Icons.Default.Layers,
-                    label = "Katman",
-                    selected = showLayers,
-                    onClick = { showLayers = !showLayers }
-                )
-            }
-        }
-
-        LaunchedEffect(showLayers, state.layers, state.docInfo) {
-            if (showLayers) {
-                vm.refreshLayerThumbnails()
-            }
-        }
-
-        // Right Floating Layers Drawer
-        if (showLayers) {
-            val activeLayer = state.layers.firstOrNull { it.isActive }
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(end = 10.dp, top = 74.dp, bottom = 130.dp)
-                    .width(268.dp)
-                    .fillMaxHeight(0.62f),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                tonalElevation = 8.dp
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Katmanlar", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Color.White)
-                        Row {
-                            IconButton(onClick = { vm.addLayer() }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Default.Add, contentDescription = "Yeni Katman", tint = Color.White, modifier = Modifier.size(20.dp))
-                            }
-                            IconButton(onClick = { vm.deleteActiveLayer() }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Default.Delete, contentDescription = "Katmanı Sil", tint = Color(0xFFFF6B6B), modifier = Modifier.size(20.dp))
-                            }
-                        }
-                    }
-                    // Synergistic Layer Quick-Actions: Taşı, fx, Yukarı, Aşağı, Çoğalt, Birleştir
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = {
-                                showLayers = false
-                                vm.setTool(ActiveTool.NONE)
-                                layerDx = 0f; layerDy = 0f; layerScalePct = 100f; layerRotDeg = 0f
-                                vm.loadActiveLayerPreview()
-                                activePanel = BottomPanel.LAYER_TRANSFORM
-                            },
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Icon(Icons.Default.OpenWith, contentDescription = "Taşı", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                        }
-                        IconButton(
-                            onClick = {
-                                showLayers = false
-                                vm.setTool(ActiveTool.NONE)
-                                showFxFineTune = false
-                                vm.beginLayerProxyPreview()
-                                vm.updateProxyLayerEffect(fxKind, fxColorHex, fxSizeVal, fxOpacityVal, fxDistanceVal)
-                                activePanel = BottomPanel.LAYER_FX_EDIT
-                            },
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = "Efekt (fx)", tint = Color(0xFFFFD54F), modifier = Modifier.size(18.dp))
-                        }
-                        IconButton(onClick = { vm.moveLayerUp() }, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.Default.ArrowUpward, contentDescription = "Yukarı", tint = Color.White, modifier = Modifier.size(18.dp))
-                        }
-                        IconButton(onClick = { vm.moveLayerDown() }, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.Default.ArrowDownward, contentDescription = "Aşağı", tint = Color.White, modifier = Modifier.size(18.dp))
-                        }
-                        IconButton(onClick = { vm.duplicateActiveLayer() }, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Çoğalt", tint = Color.White, modifier = Modifier.size(17.dp))
-                        }
-                        IconButton(onClick = { vm.mergeLayerDown() }, modifier = Modifier.size(34.dp)) {
-                            Icon(Icons.Default.MergeType, contentDescription = "Birleştir", tint = Color.White, modifier = Modifier.size(18.dp))
-                        }
-                    }
-
-                    if (activeLayer != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        CompactSliderRow(
-                            label = "Opaklık",
-                            valueText = "${(activeLayer.opacity * 100).toInt()}%",
-                            value = activeLayer.opacity,
-                            range = 0f..1f,
-                            defaultValue = 1f
-                        ) {
-                            vm.setLayerOpacity(activeLayer.id, it)
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            val currentOpt = BEGINNER_BLEND_MODES.firstOrNull {
-                                it.engineName.equals(activeLayer.blendMode, ignoreCase = true)
-                            }
-                            OutlinedButton(
-                                onClick = { showBlendMenu = true },
-                                modifier = Modifier.fillMaxWidth(),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "Karışım: ${currentOpt?.labelTr ?: activeLayer.blendMode}",
-                                    fontSize = 11.sp,
-                                    color = Color.White
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = showBlendMenu,
-                                onDismissRequest = { showBlendMenu = false }
-                            ) {
-                                BEGINNER_BLEND_MODES.forEach { opt ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Column {
-                                                Text(opt.labelTr, fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                                                Text(opt.hintTr, fontSize = 10.sp, color = Color.Gray)
-                                            }
-                                        },
-                                        onClick = {
-                                            showBlendMenu = false
-                                            vm.setLayerBlendMode(activeLayer.id, opt.engineName)
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        items(state.layers, key = { it.id.toLong() }) { layer ->
-                            val bg = if (layer.isActive) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            }
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(bg)
-                                    .clickable { vm.selectLayer(layer.id) }
-                                    .padding(horizontal = 6.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                IconButton(
-                                    onClick = { vm.toggleLayerVisibility(layer.id, !layer.visible) },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(
-                                        if (layer.visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                        contentDescription = "Görünürlük",
-                                        tint = if (layer.visible) Color.White else Color.Gray,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
-                                    Text(layer.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
-                                    Text(
-                                        "${layer.blendMode} · ${(layer.opacity * 100).toInt()}%",
-                                        fontSize = 10.sp,
-                                        color = Color(0xFFB8BCC8)
-                                    )
-                                }
-                                if (layer.isBackground) {
-                                    IconButton(
-                                        onClick = { vm.toggleLayerLocked(layer.id, !layer.locked) },
-                                        modifier = Modifier.size(26.dp)
-                                    ) {
-                                        Icon(
-                                            if (layer.locked) Icons.Default.Lock else Icons.Default.LockOpen,
-                                            contentDescription = if (layer.locked) "Fotoğraf Kilitli" else "Fotoğraf Kilidi Açık",
-                                            tint = if (layer.locked) Color(0xFFFFB74D) else Color(0xFF8E93A6),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(4.dp))
-                                // Mini layer preview box (checkerboard + layer content thumbnail)
-                                val thumb = layerThumbs[layer.id]
-                                Box(
-                                    modifier = Modifier
-                                        .size(42.dp)
-                                        .clip(RoundedCornerShape(7.dp))
-                                        .border(1.dp, Color(0xFF454A5C), RoundedCornerShape(7.dp)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Canvas(modifier = Modifier.fillMaxSize()) {
-                                        val cell = 6.dp.toPx()
-                                        val cols = (size.width / cell).toInt() + 1
-                                        val rows = (size.height / cell).toInt() + 1
-                                        for (ry in 0 until rows) {
-                                            for (rx in 0 until cols) {
-                                                val light = ((rx + ry) and 1) == 0
-                                                drawRect(
-                                                    color = if (light) Color(0xFFD6D8E0) else Color(0xFFA8ACB8),
-                                                    topLeft = Offset(rx * cell, ry * cell),
-                                                    size = Size(cell, cell)
-                                                )
-                                            }
-                                        }
-                                    }
-                                    if (thumb != null) {
-                                        Image(
-                                            bitmap = thumb,
-                                            contentDescription = "${layer.name} önizleme",
-                                            contentScale = ContentScale.Fit,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.Tune,
-                                            contentDescription = null,
-                                            tint = Color(0xFF2B2F3D),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Status pill above bottom dock
-        state.statusMessage?.let { msg ->
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = if (activePanel == BottomPanel.DOCK) 114.dp else 210.dp)
-                    .clickable { vm.clearStatus() },
-                shape = RoundedCornerShape(20.dp),
-                color = Color(0xEE111217),
-                tonalElevation = 8.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(msg, fontSize = 12.sp, color = Color.White)
-                }
-            }
-        }
-
-        // GROUPED 5-CATEGORY BOTTOM CIRCULAR DOCK & COMPACT SUB-MENUS
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            shape = RoundedCornerShape(22.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-            tonalElevation = 10.dp
-        ) {
-            val activeColor = remember(state.colorHex) {
-                runCatching { Color(AndroidColor.parseColor(state.colorHex)) }
-                    .getOrDefault(Color.Red)
-            }
-
-            when (activePanel) {
-                BottomPanel.DOCK -> {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(dockScrollState)
-                            .padding(horizontal = 8.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val isSelectTool = state.activeTool == ActiveTool.SELECT_RECT ||
-                            state.activeTool == ActiveTool.SELECT_WAND ||
-                            state.activeTool == ActiveTool.SELECT_QUICK ||
-                            state.activeTool == ActiveTool.SELECT_BRUSH_ADD ||
-                            state.activeTool == ActiveTool.SELECT_BRUSH_SUB
-                        CircularDockButton(
-                            icon = Icons.Default.Brush,
-                            label = "Çizim",
-                            selected = state.activeTool != ActiveTool.NONE && !isSelectTool,
-                            accentDot = if (state.activeTool == ActiveTool.BRUSH || state.activeTool == ActiveTool.EYEDROPPER) activeColor else null,
-                            onClick = { activePanel = BottomPanel.DRAW_MENU }
-                        )
-                        CircularDockButton(
-                            icon = Icons.Default.SelectAll,
-                            label = "Seçim",
-                            selected = state.selectionBounds != null || isSelectTool,
-                            onClick = {
-                                if (!isSelectTool) {
-                                    vm.setTool(ActiveTool.SELECT_QUICK)
-                                }
-                                activePanel = BottomPanel.SELECT_MENU
-                            }
-                        )
-                        CircularDockButton(
-                            icon = Icons.Default.Title,
-                            label = "Metin",
-                            onClick = {
-                                vm.setTool(ActiveTool.NONE)
-                                val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-                                textSizePx = (docW * 0.055f).coerceIn(24f, 180f)
-                                textNormX = 0.50f
-                                textNormY = 0.50f
-                                activePanel = BottomPanel.TEXT_EDIT
-                            }
-                        )
-                        CircularDockButton(
-                            icon = Icons.Default.Gradient,
-                            label = "Degrade",
-                            onClick = {
-                                vm.setTool(ActiveTool.NONE)
-                                val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-                                val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-                                gradFromNormX = 0.20f; gradFromNormY = 0.20f
-                                gradToNormX = 0.80f; gradToNormY = 0.80f
-                                vm.beginProxyPreview()
-                                vm.updateProxyGradient(
-                                    docW * gradFromNormX, docH * gradFromNormY,
-                                    docW * gradToNormX, docH * gradToNormY,
-                                    gradStyle, gradStartHex, gradEndHex, gradOpacity
-                                )
-                                activePanel = BottomPanel.GRADIENT_EDIT
-                            }
-                        )
-                        CircularDockButton(
-                            icon = Icons.Default.Category,
-                            label = "Şekil",
-                            onClick = {
-                                vm.setTool(ActiveTool.NONE)
-                                val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-                                val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-                                shapeX0Norm = 0.25f; shapeY0Norm = 0.25f
-                                shapeX1Norm = 0.75f; shapeY1Norm = 0.75f
-                                showShapeFineTune = false
-                                vm.beginProxyPreview()
-                                vm.updateProxyShape(
-                                    shapeKind,
-                                    docW * shapeX0Norm, docH * shapeY0Norm,
-                                    docW * shapeX1Norm, docH * shapeY1Norm,
-                                    shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
-                                )
-                                activePanel = BottomPanel.SHAPE_EDIT
-                            }
-                        )
-                        CircularDockButton(
-                            icon = Icons.Default.Tune,
-                            label = "Ayarlar",
-                            onClick = {
-                                vm.setTool(ActiveTool.NONE)
-                                activePanel = BottomPanel.ADJUST_MENU
-                            }
-                        )
-                        CircularDockButton(
-                            icon = Icons.Default.Crop,
-                            label = "Kırp",
-                            onClick = {
-                                vm.setTool(ActiveTool.NONE)
-                                pendingQuarterTurns = 0
-                                pendingFlipH = false
-                                pendingFlipV = false
-                                activePanel = BottomPanel.CROP_MENU
-                            }
-                        )
-                        CircularDockButton(
-                            icon = Icons.Default.BlurOn,
-                            label = "Filtre",
-                            onClick = {
-                                vm.setTool(ActiveTool.NONE)
-                                activePanel = BottomPanel.FILTER_MENU
-                            }
-                        )
-                        CircularDockButton(
-                            icon = Icons.Default.AutoAwesome,
-                            label = "Efekt",
-                            selected = state.bwLayerId != null || state.invertLayerId != null,
-                            onClick = {
-                                vm.setTool(ActiveTool.NONE)
-                                activePanel = BottomPanel.EFFECT_MENU
-                            }
-                        )
-                    }
-                }
-
-                BottomPanel.DRAW_MENU -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val symLabel = when (state.symmetryMode) {
-                            "vertical" -> "Ayna: Dikey"
-                            "horizontal" -> "Ayna: Yatay"
-                            "dual" -> "Ayna: 4'lü"
-                            else -> "Ayna"
-                        }
-                        BottomEditorHeader(
-                            title = "Çizim Araçları",
-                            subtitle = when (state.activeTool) {
-                                ActiveTool.BRUSH -> if (state.rulerEnabled) "Cetvel açık · düz çizgi çek" else "Fırça aktif · iki parmakla kaydır/yakınlaştır"
-                                ActiveTool.ERASER -> if (state.rulerEnabled) "Silgi + Cetvel açık" else "Silgi aktif"
-                                ActiveTool.EYEDROPPER -> "Fotoğrafa dokunarak renk al (${state.colorHex})"
-                                ActiveTool.SPOT_HEAL -> "Leke Giderme · kusurun üzerinden parmağınla geç"
-                                ActiveTool.SMUDGE -> "Dağıtma · dokuyu parmağınla yumuşakça yay"
-                                ActiveTool.DODGE -> "Aydınlat · dokunduğun bölgeyi açar"
-                                ActiveTool.BURN -> "Koyulaştır · dokunduğun bölgeyi gölgeler"
-                                ActiveTool.CLONE_STAMP -> if (state.pickingCloneSource) "Klon kaynağı seç: fotoğrafa dokun" else "Klonla · boyamak istediğin yere sürükle"
-                                ActiveTool.SELECT_RECT -> "Dikdörtgen/Elips alan seç"
-                                ActiveTool.SELECT_WAND -> "Sihirli Değnek · renge dokunarak seç"
-                                ActiveTool.SELECT_QUICK -> "Akıllı Fırça · nesne üzerinden geç"
-                                ActiveTool.SELECT_BRUSH_ADD -> "Elle Ekle (+) · parmağınla seçime boya"
-                                ActiveTool.SELECT_BRUSH_SUB -> "Elle Sil (-) · yanlış seçilen yerleri sil"
-                                ActiveTool.NONE -> "Çizim veya Rötuş için bir araç seç"
-                            },
-                            onClose = { activePanel = BottomPanel.DOCK }
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(drawScrollState),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            CircularDockButton(
-                                icon = Icons.Default.Brush,
-                                label = "Fırça",
-                                selected = state.activeTool == ActiveTool.BRUSH,
-                                accentDot = activeColor,
-                                onClick = {
-                                    vm.setTool(if (state.activeTool == ActiveTool.BRUSH) ActiveTool.NONE else ActiveTool.BRUSH)
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.AutoFixNormal,
-                                label = "Silgi",
-                                selected = state.activeTool == ActiveTool.ERASER,
-                                onClick = {
-                                    vm.setTool(if (state.activeTool == ActiveTool.ERASER) ActiveTool.NONE else ActiveTool.ERASER)
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Colorize,
-                                label = "Damlalık",
-                                selected = state.activeTool == ActiveTool.EYEDROPPER,
-                                accentDot = activeColor,
-                                onClick = {
-                                    vm.setTool(if (state.activeTool == ActiveTool.EYEDROPPER) ActiveTool.BRUSH else ActiveTool.EYEDROPPER)
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Straighten,
-                                label = if (state.rulerEnabled) "Cetvel ✓" else "Cetvel",
-                                selected = state.rulerEnabled,
-                                onClick = { vm.toggleRuler() }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Flip,
-                                label = symLabel,
-                                selected = state.symmetryMode != "off",
-                                onClick = { vm.cycleSymmetry() }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Healing,
-                                label = "Leke",
-                                selected = state.activeTool == ActiveTool.SPOT_HEAL,
-                                onClick = {
-                                    vm.setTool(if (state.activeTool == ActiveTool.SPOT_HEAL) ActiveTool.NONE else ActiveTool.SPOT_HEAL)
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Gesture,
-                                label = "Dağıt",
-                                selected = state.activeTool == ActiveTool.SMUDGE,
-                                onClick = {
-                                    vm.setTool(if (state.activeTool == ActiveTool.SMUDGE) ActiveTool.NONE else ActiveTool.SMUDGE)
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.WbSunny,
-                                label = "Aydınlat",
-                                selected = state.activeTool == ActiveTool.DODGE,
-                                onClick = {
-                                    vm.setTool(if (state.activeTool == ActiveTool.DODGE) ActiveTool.NONE else ActiveTool.DODGE)
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.NightsStay,
-                                label = "Koyulaştır",
-                                selected = state.activeTool == ActiveTool.BURN,
-                                onClick = {
-                                    vm.setTool(if (state.activeTool == ActiveTool.BURN) ActiveTool.NONE else ActiveTool.BURN)
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.ContentCopy,
-                                label = "Klonla",
-                                selected = state.activeTool == ActiveTool.CLONE_STAMP,
-                                onClick = {
-                                    vm.setTool(if (state.activeTool == ActiveTool.CLONE_STAMP) ActiveTool.NONE else ActiveTool.CLONE_STAMP)
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Block,
-                                label = "Bırak",
-                                selected = state.activeTool == ActiveTool.NONE,
-                                onClick = { vm.setTool(ActiveTool.NONE) }
-                            )
-                        }
-
-                        if (state.activeTool == ActiveTool.BRUSH) {
-                            val palette = listOf(
-                                "#FF4D4F", "#FFA940", "#FFEC3D", "#52C41A",
-                                "#13C2C2", "#1677FF", "#722ED1", "#FFFFFF", "#000000"
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                palette.forEach { hex ->
-                                    val c = Color(AndroidColor.parseColor(hex))
-                                    Box(
-                                        modifier = Modifier
-                                            .size(24.dp)
-                                            .clip(CircleShape)
-                                            .background(c)
-                                            .border(
-                                                width = if (state.colorHex.equals(hex, true)) 2.5.dp else 1.dp,
-                                                color = if (state.colorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
-                                                shape = CircleShape
-                                            )
-                                            .clickable { vm.updateBrush(colorHex = hex) }
-                                    )
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .size(26.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            Brush.sweepGradient(
-                                                listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
-                                            )
-                                        )
-                                        .border(
-                                            width = if (showHsvPicker) 2.5.dp else 1.dp,
-                                            color = Color.White,
-                                            shape = CircleShape
-                                        )
-                                        .clickable { showHsvPicker = !showHsvPicker }
-                                )
-                            }
-
-                            if (showHsvPicker) {
-                                CompactSliderRow("Ton", "${pickerH.roundToInt()}°", pickerH, 0f..360f, defaultValue = 0f) {
-                                    pickerH = it
-                                    vm.updateBrush(colorHex = hsvToHex(pickerH, pickerS, pickerV))
-                                }
-                                CompactSliderRow("Doygun", "%${(pickerS * 100).roundToInt()}", pickerS, 0f..1f, defaultValue = 1f) {
-                                    pickerS = it
-                                    vm.updateBrush(colorHex = hsvToHex(pickerH, pickerS, pickerV))
-                                }
-                                CompactSliderRow("Parlak", "%${(pickerV * 100).roundToInt()}", pickerV, 0f..1f, defaultValue = 1f) {
-                                    pickerV = it
-                                    vm.updateBrush(colorHex = hsvToHex(pickerH, pickerS, pickerV))
-                                }
-                            } else {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Box(modifier = Modifier.weight(1f)) {
-                                        BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 28f) {
-                                            vm.updateBrush(size = it)
-                                            brushSizePreviewTick++
-                                        }
-                                    }
-                                    FilterChip(
-                                        selected = showBrushFineTune,
-                                        onClick = { showBrushFineTune = !showBrushFineTune },
-                                        label = { Text(if (showBrushFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp) }
-                                    )
-                                }
-                                if (showBrushFineTune) {
-                                    CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f, defaultValue = 1f) {
-                                        vm.updateBrush(opacity = it)
-                                    }
-                                    CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
-                                        vm.updateBrush(hardness = it)
-                                    }
-                                    CompactSliderRow("Akış", "${(state.brushFlow * 100).toInt()}%", state.brushFlow, 0.05f..1f, defaultValue = 1f) {
-                                        vm.updateBrush(flow = it)
-                                    }
-                                }
-                            }
-                        } else if (state.activeTool == ActiveTool.ERASER) {
-                            BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 28f) {
-                                vm.updateBrush(size = it)
-                                brushSizePreviewTick++
-                            }
-                            CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
-                                vm.updateBrush(hardness = it)
-                            }
-                        } else if (
-                            state.activeTool == ActiveTool.SPOT_HEAL ||
-                            state.activeTool == ActiveTool.SMUDGE ||
-                            state.activeTool == ActiveTool.DODGE ||
-                            state.activeTool == ActiveTool.BURN
-                        ) {
-                            BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
-                                vm.updateBrush(size = it)
-                                brushSizePreviewTick++
-                            }
-                            if (state.activeTool != ActiveTool.SPOT_HEAL) {
-                                CompactSliderRow("Güç", "%${state.retouchStrength.roundToInt()}", state.retouchStrength, 10f..100f, defaultValue = 55f) {
-                                    vm.updateRetouchStrength(it)
-                                }
-                            }
-                        } else if (state.activeTool == ActiveTool.CLONE_STAMP) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                OutlinedButton(
-                                    onClick = { vm.requestPickCloneSource() },
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                    modifier = Modifier.height(32.dp)
-                                ) {
-                                    Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(15.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        if (state.cloneSourceDoc == null) "Kaynak Noktası Seç" else "Kaynağı Değiştir",
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
-                            BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
-                                vm.updateBrush(size = it)
-                                brushSizePreviewTick++
-                            }
-                            CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f, defaultValue = 1f) {
-                                vm.updateBrush(opacity = it)
-                            }
-                        }
-                    }
-                }
-
-                BottomPanel.SELECT_MENU -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Seçim Araçları",
-                            subtitle = when (state.activeTool) {
-                                ActiveTool.SELECT_QUICK -> if (state.selectSubtractMode) "Akıllı Fırça (-) · kenar algılayarak çıkar" else "Akıllı Fırça (+) · nesne üzerinden parmağınla geç"
-                                ActiveTool.SELECT_BRUSH_ADD -> "Elle Ekle (+) · parmağınla boyayarak seçime ekle"
-                                ActiveTool.SELECT_BRUSH_SUB -> "Elle Sil (-) · yanlış seçilen yerleri parmağınla sil"
-                                ActiveTool.SELECT_WAND -> if (state.wandSmartMode) "Akıllı Değnek · seçmek istediğin nesneye dokun" else "Renk Değneği · dokun ve Tolerans ile ayarla (${state.wandTolerance.roundToInt()})"
-                                else -> "Parmağınla sürükleyerek alan seç"
-                            },
-                            onClose = {
-                                vm.setTool(ActiveTool.NONE)
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(selectScrollState),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            CircularDockButton(
-                                icon = Icons.Default.AutoAwesome,
-                                label = "Konu Seç",
-                                onClick = { vm.selectSubject() }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Gesture,
-                                label = "Akıllı",
-                                selected = state.activeTool == ActiveTool.SELECT_QUICK,
-                                onClick = { vm.setTool(ActiveTool.SELECT_QUICK) }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.AddCircleOutline,
-                                label = "Elle (+)",
-                                selected = state.activeTool == ActiveTool.SELECT_BRUSH_ADD,
-                                onClick = { vm.setTool(ActiveTool.SELECT_BRUSH_ADD) }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.RemoveCircleOutline,
-                                label = "Elle (-)",
-                                selected = state.activeTool == ActiveTool.SELECT_BRUSH_SUB,
-                                onClick = { vm.setTool(ActiveTool.SELECT_BRUSH_SUB) }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.AutoFixHigh,
-                                label = "Değnek",
-                                selected = state.activeTool == ActiveTool.SELECT_WAND,
-                                onClick = { vm.setTool(ActiveTool.SELECT_WAND) }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.CropFree,
-                                label = if (state.selectEllipse) "Elips" else "Kutu",
-                                selected = state.activeTool == ActiveTool.SELECT_RECT,
-                                onClick = {
-                                    if (state.activeTool == ActiveTool.SELECT_RECT) {
-                                        vm.toggleSelectEllipse()
-                                    } else {
-                                        vm.setTool(ActiveTool.SELECT_RECT)
-                                    }
-                                }
-                            )
-                            if (state.selectionBounds != null) {
-                                CircularDockButton(
-                                    icon = Icons.Default.ContentCopy,
-                                    label = "Katmana Al",
-                                    onClick = { vm.layerViaCopy() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.BlurOn,
-                                    label = "Yumuşat",
-                                    onClick = { vm.featherSelection(6f) }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.CleaningServices,
-                                    label = "Nesne Sil",
-                                    onClick = { vm.contentAwareRemove() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.SwapHoriz,
-                                    label = "Tersine",
-                                    onClick = { vm.selectInverse() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.Layers,
-                                    label = "Maskele",
-                                    onClick = { vm.revealSelectionMask() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.FormatColorFill,
-                                    label = "Doldur",
-                                    onClick = { vm.fillSelection() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.DeleteOutline,
-                                    label = "Sil",
-                                    onClick = { vm.clearSelection() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.Close,
-                                    label = "Kaldır",
-                                    onClick = { vm.deselect() }
-                                )
-                            }
-                        }
-                        if (state.activeTool == ActiveTool.SELECT_WAND || state.activeTool == ActiveTool.SELECT_RECT || state.activeTool == ActiveTool.SELECT_QUICK) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (state.activeTool != ActiveTool.SELECT_QUICK) {
-                                    FilterChip(
-                                        selected = state.selectAddMode,
-                                        onClick = { vm.toggleSelectAddMode() },
-                                        label = { Text(if (state.selectAddMode) "Ekle (+) ✓" else "Ekle (+)", fontSize = 11.sp) }
-                                    )
-                                }
-                                FilterChip(
-                                    selected = state.selectSubtractMode,
-                                    onClick = { vm.toggleSelectSubtractMode() },
-                                    label = { Text(if (state.selectSubtractMode) "Çıkar (-) ✓" else "Çıkar (-)", fontSize = 11.sp) }
-                                )
-                                if (state.activeTool == ActiveTool.SELECT_WAND) {
-                                    FilterChip(
-                                        selected = state.wandSmartMode,
-                                        onClick = { vm.toggleWandSmartMode() },
-                                        label = { Text(if (state.wandSmartMode) "Akıllı Nesne ✓" else "Renk Modu", fontSize = 11.sp) }
-                                    )
-                                    if (!state.wandSmartMode) {
-                                        FilterChip(
-                                            selected = state.wandContiguous,
-                                            onClick = { vm.toggleWandContiguous() },
-                                            label = { Text(if (state.wandContiguous) "Bitişik ✓" else "Tüm Renk", fontSize = 11.sp) }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if (state.activeTool == ActiveTool.SELECT_WAND && !state.wandSmartMode) {
-                            CompactSliderRow("Tolerans", "${state.wandTolerance.roundToInt()}", state.wandTolerance, 0f..120f, defaultValue = 32f) {
-                                vm.updateWandTolerance(it)
-                            }
-                        } else if (
-                            state.activeTool == ActiveTool.SELECT_QUICK ||
-                            state.activeTool == ActiveTool.SELECT_BRUSH_ADD ||
-                            state.activeTool == ActiveTool.SELECT_BRUSH_SUB
-                        ) {
-                            BrushSizeSliderRow("Fırça", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
-                                vm.updateBrush(size = it)
-                            }
-                        }
-                    }
-                }
-
-                BottomPanel.TEXT_EDIT -> {
-                    val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-                    val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Metin Ekle",
-                            subtitle = "Fotoğrafa dokunarak yazıyı konumlandır, sonra Uygula de",
-                            applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.DOCK },
-                            onApply = {
-                                vm.addTextLayer(
-                                    text = textDraft,
-                                    x = docW * textNormX,
-                                    y = docH * textNormY,
-                                    sizePx = textSizePx,
-                                    colorHex = textColorHex,
-                                    align = textAlign
-                                )
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        OutlinedTextField(
-                            value = textDraft,
-                            onValueChange = { textDraft = it },
-                            singleLine = true,
-                            placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            listOf("#FFFFFF", "#000000", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB").forEach { hex ->
-                                val c = Color(AndroidColor.parseColor(hex))
-                                Box(
-                                    modifier = Modifier
-                                        .size(22.dp)
-                                        .clip(CircleShape)
-                                        .background(c)
-                                        .border(
-                                            width = if (textColorHex.equals(hex, true)) 2.5.dp else 1.dp,
-                                            color = if (textColorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            shape = CircleShape
-                                        )
-                                        .clickable { textColorHex = hex }
-                                )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                listOf("left" to "Sol", "center" to "Orta", "right" to "Sağ").forEach { (id, lbl) ->
-                                    FilterChip(
-                                        selected = textAlign == id,
-                                        onClick = { textAlign = id },
-                                        label = { Text(lbl, fontSize = 10.sp) }
-                                    )
-                                }
-                            }
-                        }
-                        CompactSliderRow(
-                            label = "Boyut",
-                            valueText = "${textSizePx.roundToInt()}px",
-                            value = textSizePx,
-                            range = 24f..420f,
-                            defaultValue = (docW * 0.08f).coerceIn(36f, 260f)
-                        ) {
-                            textSizePx = it
-                        }
-                    }
-                }
-
-                BottomPanel.ADJUST_MENU -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Ayarlar",
-                            subtitle = "Canlı önizlemeli ışık ve renk ayarları",
-                            onClose = { activePanel = BottomPanel.DOCK }
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(adjustScrollState),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            CircularDockButton(
-                                icon = Icons.Default.AutoFixHigh,
-                                label = "Oto",
-                                onClick = { activePanel = BottomPanel.AUTO_ENHANCE_MENU }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.WbSunny,
-                                label = "Kamera",
-                                onClick = {
-                                    camExposureVal = 0f; camShadowsVal = 0f; camHighlightsVal = 0f; camVibranceVal = 0f
-                                    camTempVal = 0f; camTintVal = 0f; camClarityVal = 0f; camDehazeVal = 0f
-                                    showCamFineTune = false
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.CAMERA_LIGHT_LIVE
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Brightness6,
-                                label = "Işık",
-                                onClick = {
-                                    brightnessVal = 0f
-                                    contrastVal = 0f
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.LIGHT_LIVE
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Palette,
-                                label = "Renk",
-                                onClick = {
-                                    hueVal = 0f
-                                    saturationVal = 0f
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.COLOR_LIVE
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Equalizer,
-                                label = "Düzeyler",
-                                onClick = {
-                                    levelsBlackVal = 0f
-                                    levelsGammaVal = 1f
-                                    levelsWhiteVal = 255f
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.LEVELS_LIVE
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.ColorLens,
-                                label = "Denge",
-                                onClick = {
-                                    cbCyanRedVal = 0f
-                                    cbMagentaGreenVal = 0f
-                                    cbYellowBlueVal = 0f
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.COLOR_BAL_LIVE
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.ShowChart,
-                                label = "Eğriler",
-                                onClick = {
-                                    curveBlackVal = 0.0f
-                                    curveShadowVal = 0.25f
-                                    curveMidVal = 0.50f
-                                    curveHighVal = 0.75f
-                                    curveWhiteVal = 1.0f
-                                    curveOverlayExpanded = false
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.CURVES_LIVE
-                                }
-                            )
-                        }
-                    }
-                }
-
-                BottomPanel.CAMERA_LIGHT_LIVE -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        val pushCamProxy = {
-                            vm.updateProxyCameraLight(
-                                camExposureVal, camShadowsVal, camHighlightsVal, camVibranceVal,
-                                camTempVal, camTintVal, camClarityVal, camDehazeVal
-                            )
-                        }
-                        BottomEditorHeader(
-                            title = "Kamera Işık (RAW)",
-                            subtitle = "60 FPS canlı önizleme — Uygula ile kalıcı işle",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                clearAdjustGpuPreviewOnly()
-                                activePanel = BottomPanel.ADJUST_MENU
-                            },
-                            onApply = {
-                                val isNeutral = abs(camExposureVal) < 0.02f &&
-                                    camShadowsVal.roundToInt() == 0 && camHighlightsVal.roundToInt() == 0 &&
-                                    camVibranceVal.roundToInt() == 0 && camTempVal.roundToInt() == 0 &&
-                                    camTintVal.roundToInt() == 0 && camClarityVal.roundToInt() == 0 &&
-                                    camDehazeVal.roundToInt() == 0
-                                if (isNeutral) {
-                                    clearAdjustGpuPreviewOnly()
-                                } else {
-                                    vm.applyCameraLight(
-                                        camExposureVal, camShadowsVal, camHighlightsVal, camVibranceVal,
-                                        camTempVal, camTintVal, camClarityVal, camDehazeVal
-                                    )
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Pozlama", String.format(java.util.Locale.US, "%+.2f", camExposureVal), camExposureVal, -2.5f..2.5f, defaultValue = 0f) {
-                            camExposureVal = it; pushCamProxy()
-                        }
-                        CompactSliderRow("Gölgeler", "${camShadowsVal.roundToInt()}", camShadowsVal, -100f..100f, defaultValue = 0f) {
-                            camShadowsVal = it; pushCamProxy()
-                        }
-                        CompactSliderRow("Parlaklar", "${camHighlightsVal.roundToInt()}", camHighlightsVal, -100f..100f, defaultValue = 0f) {
-                            camHighlightsVal = it; pushCamProxy()
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Box(modifier = Modifier.weight(1f)) {
-                                CompactSliderRow("Canlılık", "${camVibranceVal.roundToInt()}", camVibranceVal, -100f..100f, defaultValue = 0f) {
-                                    camVibranceVal = it; pushCamProxy()
-                                }
-                            }
-                            FilterChip(
-                                selected = showCamFineTune,
-                                onClick = { showCamFineTune = !showCamFineTune },
-                                label = { Text(if (showCamFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp) }
-                            )
-                        }
-                        if (showCamFineTune) {
-                            CompactSliderRow("Sıcaklık", "${camTempVal.roundToInt()}", camTempVal, -100f..100f, defaultValue = 0f) {
-                                camTempVal = it; pushCamProxy()
-                            }
-                            CompactSliderRow("Netlik", "${camClarityVal.roundToInt()}", camClarityVal, -100f..100f, defaultValue = 0f) {
-                                camClarityVal = it; pushCamProxy()
-                            }
-                            CompactSliderRow("Sis Gider", "${camDehazeVal.roundToInt()}", camDehazeVal, -100f..100f, defaultValue = 0f) {
-                                camDehazeVal = it; pushCamProxy()
-                            }
-                            CompactSliderRow("Renk Tonu", "${camTintVal.roundToInt()}", camTintVal, -100f..100f, defaultValue = 0f) {
-                                camTintVal = it; pushCamProxy()
-                            }
-                        }
-                    }
-                }
-
                 BottomPanel.GRADIENT_EDIT -> {
                     val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
                     val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-                    val pushGradProxy = {
-                        vm.updateProxyGradient(
-                            docW * gradFromNormX, docH * gradFromNormY,
-                            docW * gradToNormX, docH * gradToNormY,
-                            gradStyle, gradStartHex, gradEndHex, gradOpacity
-                        )
-                    }
-                    val gradSwatches = listOf("#4F9CFF", "#FF4D4F", "#FAAD14", "#52C41A", "#A855F7", "#FFFFFF", "#000000")
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Degrade Katmanı",
-                            subtitle = "Tuvalde sürükleyerek yönü ayarla — 60 FPS canlı önizleme",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                activePanel = BottomPanel.DOCK
-                            },
-                            onApply = {
-                                vm.applyGradientFill(
-                                    docW * gradFromNormX, docH * gradFromNormY,
-                                    docW * gradToNormX, docH * gradToNormY,
-                                    gradStyle, gradStartHex, gradEndHex, gradOpacity
-                                )
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf("linear" to "Doğrusal", "radial" to "Dairesel", "reflected" to "Yansımalı", "diamond" to "Elmas").forEach { (st, lbl) ->
-                                FilterChip(
-                                    selected = gradStyle == st,
-                                    onClick = { gradStyle = st; pushGradProxy() },
-                                    label = { Text(lbl, fontSize = 11.sp) }
-                                )
-                            }
+                    GradientEditPanel(
+                        style = gradStyle, onStyle = { gradStyle = it },
+                        startHex = gradStartHex, onStartHex = { gradStartHex = it },
+                        endHex = gradEndHex, onEndHex = { gradEndHex = it },
+                        opacity = gradOpacity, onOpacity = { gradOpacity = it },
+                        onPreview = {
+                            vm.updateProxyGradient(
+                                docW * gradFromNormX, docH * gradFromNormY,
+                                docW * gradToNormX, docH * gradToNormY,
+                                gradStyle, gradStartHex, gradEndHex, gradOpacity
+                            )
+                        },
+                        onClose = { vm.endProxyPreview(); activePanel = BottomPanel.DOCK },
+                        onApply = {
+                            vm.applyGradientFill(
+                                docW * gradFromNormX, docH * gradFromNormY,
+                                docW * gradToNormX, docH * gradToNormY,
+                                gradStyle, gradStartHex, gradEndHex, gradOpacity
+                            )
+                            activePanel = BottomPanel.DOCK
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text("Başlangıç", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(62.dp))
-                            gradSwatches.forEach { hex ->
-                                val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
-                                Box(
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(c)
-                                        .border(if (gradStartHex == hex) 2.dp else 1.dp, if (gradStartHex == hex) Color.White else Color(0xFF444858), CircleShape)
-                                        .clickable { gradStartHex = hex; pushGradProxy() }
-                                )
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text("Bitiş", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(62.dp))
-                            gradSwatches.forEach { hex ->
-                                val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
-                                Box(
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(c)
-                                        .border(if (gradEndHex == hex) 2.dp else 1.dp, if (gradEndHex == hex) Color.White else Color(0xFF444858), CircleShape)
-                                        .clickable { gradEndHex = hex; pushGradProxy() }
-                                )
-                            }
-                        }
-                        CompactSliderRow("Opaklık", "%${gradOpacity.roundToInt()}", gradOpacity, 10f..100f, defaultValue = 85f) {
-                            gradOpacity = it; pushGradProxy()
-                        }
-                    }
+                    )
                 }
-
                 BottomPanel.SHAPE_EDIT -> {
                     val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
                     val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-                    val pushShapeProxy = {
-                        vm.updateProxyShape(
-                            shapeKind,
-                            docW * shapeX0Norm, docH * shapeY0Norm,
-                            docW * shapeX1Norm, docH * shapeY1Norm,
-                            shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
-                        )
-                    }
-                    val shapeSwatches = listOf("" to "Yok", "#4F9CFF" to "Mavi", "#FF4D4F" to "Kırmızı", "#52C41A" to "Yeşil", "#FAAD14" to "Sarı", "#FFFFFF" to "Beyaz", "#000000" to "Siyah")
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Vektör Şekil",
-                            subtitle = "Tuvalde parmağınla çiz — katman olarak eklenir",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                activePanel = BottomPanel.DOCK
-                            },
-                            onApply = {
-                                vm.createShapeLayer(
-                                    shapeKind,
-                                    docW * shapeX0Norm, docH * shapeY0Norm,
-                                    docW * shapeX1Norm, docH * shapeY1Norm,
-                                    shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
-                                )
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                "roundedRect" to "Yuvarlak",
-                                "rect" to "Kutu",
-                                "ellipse" to "Daire",
-                                "triangle" to "Üçgen",
-                                "polygon" to "Çokgen",
-                                "star" to "Yıldız",
-                                "line" to "Çizgi"
-                            ).forEach { (k, lbl) ->
-                                FilterChip(
-                                    selected = shapeKind == k,
-                                    onClick = { shapeKind = k; pushShapeProxy() },
-                                    label = { Text(lbl, fontSize = 11.sp) }
-                                )
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text("Dolgu", fontSize = 11.sp, color = Color(0xFFDCE0EC))
-                            shapeSwatches.forEach { (hex, _) ->
-                                val isSel = shapeFillHex == hex
-                                Box(
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(if (hex.isEmpty()) Color(0xFF2A2C36) else Color(AndroidColor.parseColor(hex)))
-                                        .border(if (isSel) 2.dp else 1.dp, if (isSel) Color.White else Color(0xFF444858), CircleShape)
-                                        .clickable { shapeFillHex = hex; pushShapeProxy() },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (hex.isEmpty()) Text("×", color = Color(0xFFFF6B6B), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            FilterChip(
-                                selected = showShapeFineTune,
-                                onClick = { showShapeFineTune = !showShapeFineTune },
-                                label = { Text(if (showShapeFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) }
+                    ShapeEditPanel(
+                        kind = shapeKind, onKind = { shapeKind = it },
+                        fillHex = shapeFillHex, onFillHex = { shapeFillHex = it },
+                        strokeWidth = shapeStrokeWidth, onStrokeWidth = { shapeStrokeWidth = it },
+                        cornerRadius = shapeCornerRadius, onCornerRadius = { shapeCornerRadius = it },
+                        sides = shapeSides, onSides = { shapeSides = it },
+                        showFine = showShapeFineTune, onToggleFine = { showShapeFineTune = !showShapeFineTune },
+                        onPreview = {
+                            vm.updateProxyShape(
+                                shapeKind,
+                                docW * shapeX0Norm, docH * shapeY0Norm,
+                                docW * shapeX1Norm, docH * shapeY1Norm,
+                                shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
                             )
+                        },
+                        onClose = { vm.endProxyPreview(); activePanel = BottomPanel.DOCK },
+                        onApply = {
+                            vm.createShapeLayer(
+                                shapeKind,
+                                docW * shapeX0Norm, docH * shapeY0Norm,
+                                docW * shapeX1Norm, docH * shapeY1Norm,
+                                shapeFillHex, shapeStrokeHex, shapeStrokeWidth, shapeCornerRadius, shapeSides
+                            )
+                            activePanel = BottomPanel.DOCK
                         }
-                        if (showShapeFineTune) {
-                            CompactSliderRow("Kenarlık", "${shapeStrokeWidth.roundToInt()}px", shapeStrokeWidth, 0f..40f, defaultValue = 6f) {
-                                shapeStrokeWidth = it; pushShapeProxy()
-                            }
-                            if (shapeKind == "roundedRect") {
-                                CompactSliderRow("Köşe", "${shapeCornerRadius.roundToInt()}px", shapeCornerRadius, 0f..120f, defaultValue = 24f) {
-                                    shapeCornerRadius = it; pushShapeProxy()
-                                }
-                            }
-                            if (shapeKind == "polygon" || shapeKind == "star") {
-                                CompactSliderRow("Kenar", "$shapeSides", shapeSides.toFloat(), 3f..12f, defaultValue = 6f) {
-                                    shapeSides = it.roundToInt().coerceIn(3, 12); pushShapeProxy()
-                                }
-                            }
-                        }
-                    }
+                    )
                 }
-
                 BottomPanel.LIGHT_LIVE -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -3880,242 +1651,49 @@ fun StonebridgeStudioScreen(
                 }
 
                 // Category 5: Efekt -> [Siyah-Beyaz] [Negatif] [Ayna]
-                BottomPanel.AUTO_ENHANCE_MENU -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Akıllı İyileştir",
-                            subtitle = "Tek dokunuşla otomatik ton, renk veya kontrast",
-                            onClose = { activePanel = BottomPanel.ADJUST_MENU }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            CircularDockButton(
-                                icon = Icons.Default.AutoFixHigh,
-                                label = "Oto Ton",
-                                onClick = {
-                                    vm.applyAutoEnhance("tone", "Oto Ton")
-                                    activePanel = BottomPanel.DOCK
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.ColorLens,
-                                label = "Oto Renk",
-                                onClick = {
-                                    vm.applyAutoEnhance("color", "Oto Renk")
-                                    activePanel = BottomPanel.DOCK
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Contrast,
-                                label = "Oto Kontrast",
-                                onClick = {
-                                    vm.applyAutoEnhance("contrast", "Oto Kontrast")
-                                    activePanel = BottomPanel.DOCK
-                                }
-                            )
-                        }
+                BottomPanel.AUTO_ENHANCE_MENU -> AutoEnhancePanel(
+                    onClose = { activePanel = BottomPanel.ADJUST_MENU },
+                    onPick = { mode, lbl -> vm.applyAutoEnhance(mode, lbl); activePanel = BottomPanel.DOCK }
+                )
+                BottomPanel.CINEMA_LOOK_EDIT -> CinemaLookPanel(
+                    preset = cinemaPreset, onPreset = { cinemaPreset = it },
+                    intensity = cinemaIntensity, onIntensity = { cinemaIntensity = it },
+                    vignette = cinemaVignette, onVignette = { cinemaVignette = it },
+                    grain = cinemaGrain, onGrain = { cinemaGrain = it },
+                    onPreview = { vm.updateProxyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain) },
+                    onClose = { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU },
+                    onApply = { vm.applyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain); activePanel = BottomPanel.DOCK }
+                )
+                BottomPanel.MOTION_BLUR_EDIT -> MotionBlurPanel(
+                    angle = motionBlurAngle, onAngle = { motionBlurAngle = it },
+                    distance = motionBlurDistance, onDistance = { motionBlurDistance = it },
+                    onPreview = { vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance) },
+                    onClose = { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU },
+                    onApply = {
+                        if (motionBlurDistance < 1f) vm.endProxyPreview()
+                        else vm.applyMotionBlur(motionBlurAngle, motionBlurDistance)
+                        activePanel = BottomPanel.DOCK
                     }
-                }
-
-                BottomPanel.CINEMA_LOOK_EDIT -> {
-                    val pushCinema = {
-                        vm.updateProxyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
+                )
+                BottomPanel.RADIAL_BLUR_EDIT -> RadialBlurPanel(
+                    amount = radialBlurAmount, onAmount = { radialBlurAmount = it },
+                    method = radialBlurMethod, onMethod = { radialBlurMethod = it },
+                    onPreview = { vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod) },
+                    onClose = { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU },
+                    onApply = {
+                        if (radialBlurAmount < 1f) vm.endProxyPreview()
+                        else vm.applyRadialBlur(radialBlurAmount, radialBlurMethod)
+                        activePanel = BottomPanel.DOCK
                     }
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Sinematik Stiller",
-                            subtitle = "60 FPS canlı görünüm + Vinyet & Film Greni",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                activePanel = BottomPanel.EFFECT_MENU
-                            },
-                            onApply = {
-                                vm.applyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                "none" to "Doğal",
-                                "golden" to "Altın Saat",
-                                "tealOrange" to "Sinema",
-                                "noir" to "Film S&B",
-                                "vivid" to "Canlı Pop",
-                                "vintage" to "Retro",
-                                "cyber" to "Gece Neon"
-                            ).forEach { (id, lbl) ->
-                                FilterChip(
-                                    selected = cinemaPreset == id,
-                                    onClick = { cinemaPreset = id; pushCinema() },
-                                    label = { Text(lbl, fontSize = 11.sp) }
-                                )
-                            }
-                        }
-                        if (cinemaPreset != "none") {
-                            CompactSliderRow("Şiddet", "%${cinemaIntensity.roundToInt()}", cinemaIntensity, 0f..100f, defaultValue = 80f) {
-                                cinemaIntensity = it; pushCinema()
-                            }
-                        }
-                        CompactSliderRow("Vinyet", "${cinemaVignette.roundToInt()}", cinemaVignette, -100f..100f, defaultValue = 0f) {
-                            cinemaVignette = it; pushCinema()
-                        }
-                        CompactSliderRow("Film Greni", "%${cinemaGrain.roundToInt()}", cinemaGrain, 0f..100f, defaultValue = 0f) {
-                            cinemaGrain = it; pushCinema()
-                        }
-                    }
-                }
-
-                BottomPanel.MOTION_BLUR_EDIT -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Hareket Bulanıklığı",
-                            subtitle = "Hız ve aksiyon yönlü 60 FPS canlı önizleme",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                activePanel = BottomPanel.FILTER_MENU
-                            },
-                            onApply = {
-                                if (motionBlurDistance < 1f) {
-                                    vm.endProxyPreview()
-                                } else {
-                                    vm.applyMotionBlur(motionBlurAngle, motionBlurDistance)
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Mesafe", "${motionBlurDistance.roundToInt()}px", motionBlurDistance, 0f..160f, defaultValue = 24f) {
-                            motionBlurDistance = it
-                            vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
-                        }
-                        CompactSliderRow("Açı", "${motionBlurAngle.roundToInt()}°", motionBlurAngle, -180f..180f, defaultValue = 0f) {
-                            motionBlurAngle = it
-                            vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
-                        }
-                    }
-                }
-
-                BottomPanel.RADIAL_BLUR_EDIT -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Radyal Bulanıklık",
-                            subtitle = "Merkeze odaklanan Zoom veya Dönüş efekti",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                activePanel = BottomPanel.FILTER_MENU
-                            },
-                            onApply = {
-                                if (radialBlurAmount < 1f) {
-                                    vm.endProxyPreview()
-                                } else {
-                                    vm.applyRadialBlur(radialBlurAmount, radialBlurMethod)
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = radialBlurMethod == "zoom",
-                                onClick = {
-                                    radialBlurMethod = "zoom"
-                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
-                                },
-                                label = { Text("Yakınlaş (Zoom)", fontSize = 11.sp) }
-                            )
-                            FilterChip(
-                                selected = radialBlurMethod == "spin",
-                                onClick = {
-                                    radialBlurMethod = "spin"
-                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
-                                },
-                                label = { Text("Döndür (Spin)", fontSize = 11.sp) }
-                            )
-                        }
-                        CompactSliderRow("Şiddet", "${radialBlurAmount.roundToInt()}", radialBlurAmount, 0f..80f, defaultValue = 14f) {
-                            radialBlurAmount = it
-                            vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
-                        }
-                    }
-                }
-
-                BottomPanel.LIQUIFY_EDIT -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Sıvılaştırma (Liquify)",
-                            subtitle = "Fotoğraf üzerinde parmağınla it, şişir veya bük",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.cancelLiquify()
-                                liquifyCursorScreen = null
-                                activePanel = BottomPanel.EFFECT_MENU
-                            },
-                            onApply = {
-                                liquifyCursorScreen = null
-                                vm.commitLiquify()
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            listOf(
-                                "forwardWarp" to "İt",
-                                "bloat" to "Şişir",
-                                "pucker" to "Büz",
-                                "twirlCw" to "Burgu",
-                                "smooth" to "Yumuşat",
-                                "reconstruct" to "Geri Al"
-                            ).forEach { (id, lbl) ->
-                                FilterChip(
-                                    selected = liquifyTool == id,
-                                    onClick = { liquifyTool = id },
-                                    label = { Text(lbl, fontSize = 11.sp) }
-                                )
-                            }
-                            OutlinedButton(
-                                onClick = { vm.resetLiquify() },
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                modifier = Modifier.height(32.dp)
-                            ) {
-                                Text("Sıfırla", fontSize = 11.sp)
-                            }
-                        }
-                        BrushSizeSliderRow("Boyut", liquifySize, minPx = 20f, maxPx = 400f, defaultPx = 120f) {
-                            liquifySize = it
-                        }
-                        CompactSliderRow("Güç", "%${liquifyPressure.roundToInt()}", liquifyPressure, 10f..100f, defaultValue = 75f) {
-                            liquifyPressure = it
-                        }
-                    }
-                }
-
+                )
+                BottomPanel.LIQUIFY_EDIT -> LiquifyEditPanel(
+                    tool = liquifyTool, onTool = { liquifyTool = it },
+                    size = liquifySize, onSize = { liquifySize = it },
+                    pressure = liquifyPressure, onPressure = { liquifyPressure = it },
+                    onReset = { vm.resetLiquify() },
+                    onClose = { vm.cancelLiquify(); liquifyCursorScreen = null; activePanel = BottomPanel.EFFECT_MENU },
+                    onApply = { liquifyCursorScreen = null; vm.commitLiquify(); activePanel = BottomPanel.DOCK }
+                )
                 BottomPanel.EFFECT_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -4396,5 +1974,210 @@ fun StonebridgeStudioScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CameraLightPanel(
+    exposure: Float, onExposure: (Float) -> Unit,
+    shadows: Float, onShadows: (Float) -> Unit,
+    highlights: Float, onHighlights: (Float) -> Unit,
+    vibrance: Float, onVibrance: (Float) -> Unit,
+    temp: Float, onTemp: (Float) -> Unit,
+    tint: Float, onTint: (Float) -> Unit,
+    clarity: Float, onClarity: (Float) -> Unit,
+    dehaze: Float, onDehaze: (Float) -> Unit,
+    showFine: Boolean, onToggleFine: () -> Unit,
+    onPreview: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        BottomEditorHeader("Kamera Işık (RAW)", "60 FPS canlı önizleme — Uygula ile kalıcı işle", "Uygula", onClose, onApply)
+        CompactSliderRow("Pozlama", String.format(java.util.Locale.US, "%+.2f", exposure), exposure, -2.5f..2.5f, 0f) { onExposure(it); onPreview() }
+        CompactSliderRow("Gölgeler", "${shadows.roundToInt()}", shadows, -100f..100f, 0f) { onShadows(it); onPreview() }
+        CompactSliderRow("Parlaklar", "${highlights.roundToInt()}", highlights, -100f..100f, 0f) { onHighlights(it); onPreview() }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(modifier = Modifier.weight(1f)) {
+                CompactSliderRow("Canlılık", "${vibrance.roundToInt()}", vibrance, -100f..100f, 0f) { onVibrance(it); onPreview() }
+            }
+            FilterChip(selected = showFine, onClick = onToggleFine, label = { Text(if (showFine) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) })
+        }
+        if (showFine) {
+            CompactSliderRow("Sıcaklık", "${temp.roundToInt()}", temp, -100f..100f, 0f) { onTemp(it); onPreview() }
+            CompactSliderRow("Netlik", "${clarity.roundToInt()}", clarity, -100f..100f, 0f) { onClarity(it); onPreview() }
+            CompactSliderRow("Sis Gider", "${dehaze.roundToInt()}", dehaze, -100f..100f, 0f) { onDehaze(it); onPreview() }
+            CompactSliderRow("Renk Tonu", "${tint.roundToInt()}", tint, -100f..100f, 0f) { onTint(it); onPreview() }
+        }
+    }
+}
+
+@Composable
+private fun GradientEditPanel(
+    style: String, onStyle: (String) -> Unit,
+    startHex: String, onStartHex: (String) -> Unit,
+    endHex: String, onEndHex: (String) -> Unit,
+    opacity: Float, onOpacity: (Float) -> Unit,
+    onPreview: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    val swatches = listOf("#4F9CFF", "#FF4D4F", "#FAAD14", "#52C41A", "#A855F7", "#FFFFFF", "#000000")
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Degrade Katmanı", "Tuvalde sürükleyerek yönü ayarla — 60 FPS canlı önizleme", "Uygula", onClose, onApply)
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("linear" to "Doğrusal", "radial" to "Dairesel", "reflected" to "Yansımalı", "diamond" to "Elmas").forEach { (st, lbl) ->
+                FilterChip(selected = style == st, onClick = { onStyle(st); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Başlangıç", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(62.dp))
+            swatches.forEach { hex ->
+                val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
+                Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(c).border(if (startHex == hex) 2.dp else 1.dp, if (startHex == hex) Color.White else Color(0xFF444858), CircleShape).clickable { onStartHex(hex); onPreview() })
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Bitiş", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(62.dp))
+            swatches.forEach { hex ->
+                val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
+                Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(c).border(if (endHex == hex) 2.dp else 1.dp, if (endHex == hex) Color.White else Color(0xFF444858), CircleShape).clickable { onEndHex(hex); onPreview() })
+            }
+        }
+        CompactSliderRow("Opaklık", "%${opacity.roundToInt()}", opacity, 10f..100f, 85f) { onOpacity(it); onPreview() }
+    }
+}
+
+@Composable
+private fun ShapeEditPanel(
+    kind: String, onKind: (String) -> Unit,
+    fillHex: String, onFillHex: (String) -> Unit,
+    strokeWidth: Float, onStrokeWidth: (Float) -> Unit,
+    cornerRadius: Float, onCornerRadius: (Float) -> Unit,
+    sides: Int, onSides: (Int) -> Unit,
+    showFine: Boolean, onToggleFine: () -> Unit,
+    onPreview: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    val swatches = listOf("" to "Yok", "#4F9CFF" to "Mavi", "#FF4D4F" to "Kırmızı", "#52C41A" to "Yeşil", "#FAAD14" to "Sarı", "#FFFFFF" to "Beyaz", "#000000" to "Siyah")
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Vektör Şekil", "İçinden sürükleyip taşı, köşeden boyutlandır", "Uygula", onClose, onApply)
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("roundedRect" to "Yuvarlak", "rect" to "Kutu", "ellipse" to "Daire", "triangle" to "Üçgen", "polygon" to "Çokgen", "star" to "Yıldız", "line" to "Çizgi").forEach { (k, lbl) ->
+                FilterChip(selected = kind == k, onClick = { onKind(k); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Dolgu", fontSize = 11.sp, color = Color(0xFFDCE0EC))
+            swatches.forEach { (hex, _) ->
+                val isSel = fillHex == hex
+                Box(
+                    modifier = Modifier.size(24.dp).clip(CircleShape)
+                        .background(if (hex.isEmpty()) Color(0xFF2A2C36) else Color(AndroidColor.parseColor(hex)))
+                        .border(if (isSel) 2.dp else 1.dp, if (isSel) Color.White else Color(0xFF444858), CircleShape)
+                        .clickable { onFillHex(hex); onPreview() },
+                    contentAlignment = Alignment.Center
+                ) { if (hex.isEmpty()) Text("×", color = Color(0xFFFF6B6B), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+            }
+            FilterChip(selected = showFine, onClick = onToggleFine, label = { Text(if (showFine) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) })
+        }
+        if (showFine) {
+            CompactSliderRow("Kenarlık", "${strokeWidth.roundToInt()}px", strokeWidth, 0f..40f, 6f) { onStrokeWidth(it); onPreview() }
+            if (kind == "roundedRect") CompactSliderRow("Köşe", "${cornerRadius.roundToInt()}px", cornerRadius, 0f..120f, 24f) { onCornerRadius(it); onPreview() }
+            if (kind == "polygon" || kind == "star") CompactSliderRow("Kenar", "$sides", sides.toFloat(), 3f..12f, 6f) { onSides(it.roundToInt().coerceIn(3, 12)); onPreview() }
+        }
+    }
+}
+
+@Composable
+private fun AutoEnhancePanel(onClose: () -> Unit, onPick: (String, String) -> Unit) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        BottomEditorHeader("Akıllı İyileştir", "Tek dokunuşla otomatik ton, renk veya kontrast", onClose = onClose)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            CircularDockButton(Icons.Default.AutoFixHigh, "Oto Ton", onClick = { onPick("tone", "Oto Ton") })
+            CircularDockButton(Icons.Default.ColorLens, "Oto Renk", onClick = { onPick("color", "Oto Renk") })
+            CircularDockButton(Icons.Default.Contrast, "Oto Kontrast", onClick = { onPick("contrast", "Oto Kontrast") })
+        }
+    }
+}
+
+@Composable
+private fun CinemaLookPanel(
+    preset: String, onPreset: (String) -> Unit,
+    intensity: Float, onIntensity: (Float) -> Unit,
+    vignette: Float, onVignette: (Float) -> Unit,
+    grain: Float, onGrain: (Float) -> Unit,
+    onPreview: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Sinematik Stiller", "60 FPS canlı görünüm + Vinyet & Film Greni", "Uygula", onClose, onApply)
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("none" to "Doğal", "golden" to "Altın Saat", "tealOrange" to "Sinema", "noir" to "Film S&B", "vivid" to "Canlı Pop", "vintage" to "Retro", "cyber" to "Gece Neon").forEach { (id, lbl) ->
+                FilterChip(selected = preset == id, onClick = { onPreset(id); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
+            }
+        }
+        if (preset != "none") CompactSliderRow("Şiddet", "%${intensity.roundToInt()}", intensity, 0f..100f, 80f) { onIntensity(it); onPreview() }
+        CompactSliderRow("Vinyet", "${vignette.roundToInt()}", vignette, -100f..100f, 0f) { onVignette(it); onPreview() }
+        CompactSliderRow("Film Greni", "%${grain.roundToInt()}", grain, 0f..100f, 0f) { onGrain(it); onPreview() }
+    }
+}
+
+@Composable
+private fun MotionBlurPanel(
+    angle: Float, onAngle: (Float) -> Unit,
+    distance: Float, onDistance: (Float) -> Unit,
+    onPreview: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Hareket Bulanıklığı", "Hız ve aksiyon yönlü 60 FPS canlı önizleme", "Uygula", onClose, onApply)
+        CompactSliderRow("Mesafe", "${distance.roundToInt()}px", distance, 0f..160f, 24f) { onDistance(it); onPreview() }
+        CompactSliderRow("Açı", "${angle.roundToInt()}°", angle, -180f..180f, 0f) { onAngle(it); onPreview() }
+    }
+}
+
+@Composable
+private fun RadialBlurPanel(
+    amount: Float, onAmount: (Float) -> Unit,
+    method: String, onMethod: (String) -> Unit,
+    onPreview: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Radyal Bulanıklık", "Merkeze odaklanan Zoom veya Dönüş efekti", "Uygula", onClose, onApply)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = method == "zoom", onClick = { onMethod("zoom"); onPreview() }, label = { Text("Yakınlaş (Zoom)", fontSize = 11.sp) })
+            FilterChip(selected = method == "spin", onClick = { onMethod("spin"); onPreview() }, label = { Text("Döndür (Spin)", fontSize = 11.sp) })
+        }
+        CompactSliderRow("Şiddet", "${amount.roundToInt()}", amount, 0f..80f, 14f) { onAmount(it); onPreview() }
+    }
+}
+
+@Composable
+private fun LiquifyEditPanel(
+    tool: String, onTool: (String) -> Unit,
+    size: Float, onSize: (Float) -> Unit,
+    pressure: Float, onPressure: (Float) -> Unit,
+    onReset: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Sıvılaştırma (Liquify)", "Fotoğraf üzerinde parmağınla it, şişir veya bük", "Uygula", onClose, onApply)
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("forwardWarp" to "İt", "bloat" to "Şişir", "pucker" to "Büz", "twirlCw" to "Burgu", "smooth" to "Yumuşat", "reconstruct" to "Geri Al").forEach { (id, lbl) ->
+                FilterChip(selected = tool == id, onClick = { onTool(id) }, label = { Text(lbl, fontSize = 11.sp) })
+            }
+            OutlinedButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp), modifier = Modifier.height(32.dp)) {
+                Text("Sıfırla", fontSize = 11.sp)
+            }
+        }
+        BrushSizeSliderRow("Boyut", size, minPx = 20f, maxPx = 400f, defaultPx = 120f, onChange = onSize)
+        CompactSliderRow("Güç", "%${pressure.roundToInt()}", pressure, 10f..100f, 75f, onChange = onPressure)
     }
 }
