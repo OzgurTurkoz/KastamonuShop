@@ -976,186 +976,6 @@ fun StonebridgeStudioScreen(
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.LAYER_FX_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.CAMERA_LIGHT_LIVE -> { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU }
-                BottomPanel.AUTO_ENHANCE_MENU -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Akıllı İyileştir",
-                            subtitle = "Tek dokunuşla otomatik ton, renk veya kontrast",
-                            onClose = { activePanel = BottomPanel.ADJUST_MENU }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            CircularDockButton(
-                                icon = Icons.Default.AutoFixHigh,
-                                label = "Oto Ton",
-                                onClick = {
-                                    vm.applyAutoEnhance("tone", "Oto Ton")
-                                    activePanel = BottomPanel.DOCK
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.ColorLens,
-                                label = "Oto Renk",
-                                onClick = {
-                                    vm.applyAutoEnhance("color", "Oto Renk")
-                                    activePanel = BottomPanel.DOCK
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Contrast,
-                                label = "Oto Kontrast",
-                                onClick = {
-                                    vm.applyAutoEnhance("contrast", "Oto Kontrast")
-                                    activePanel = BottomPanel.DOCK
-                                }
-                            )
-                        }
-                    }
-                }
-
-                BottomPanel.CINEMA_LOOK_EDIT -> {
-                    val pushCinema = {
-                        vm.updateProxyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
-                    }
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Sinematik Stiller",
-                            subtitle = "60 FPS canlı görünüm + Vinyet & Film Greni",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                activePanel = BottomPanel.EFFECT_MENU
-                            },
-                            onApply = {
-                                vm.applyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                "none" to "Doğal",
-                                "golden" to "Altın Saat",
-                                "tealOrange" to "Sinema",
-                                "noir" to "Film S&B",
-                                "vivid" to "Canlı Pop",
-                                "vintage" to "Retro",
-                                "cyber" to "Gece Neon"
-                            ).forEach { (id, lbl) ->
-                                FilterChip(
-                                    selected = cinemaPreset == id,
-                                    onClick = { cinemaPreset = id; pushCinema() },
-                                    label = { Text(lbl, fontSize = 11.sp) }
-                                )
-                            }
-                        }
-                        if (cinemaPreset != "none") {
-                            CompactSliderRow("Şiddet", "%${cinemaIntensity.roundToInt()}", cinemaIntensity, 0f..100f, defaultValue = 80f) {
-                                cinemaIntensity = it; pushCinema()
-                            }
-                        }
-                        CompactSliderRow("Vinyet", "${cinemaVignette.roundToInt()}", cinemaVignette, -100f..100f, defaultValue = 0f) {
-                            cinemaVignette = it; pushCinema()
-                        }
-                        CompactSliderRow("Film Greni", "%${cinemaGrain.roundToInt()}", cinemaGrain, 0f..100f, defaultValue = 0f) {
-                            cinemaGrain = it; pushCinema()
-                        }
-                    }
-                }
-
-                BottomPanel.MOTION_BLUR_EDIT -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Hareket Bulanıklığı",
-                            subtitle = "Hız ve aksiyon yönlü 60 FPS canlı önizleme",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                activePanel = BottomPanel.FILTER_MENU
-                            },
-                            onApply = {
-                                if (motionBlurDistance < 1f) {
-                                    vm.endProxyPreview()
-                                } else {
-                                    vm.applyMotionBlur(motionBlurAngle, motionBlurDistance)
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Mesafe", "${motionBlurDistance.roundToInt()}px", motionBlurDistance, 0f..160f, defaultValue = 24f) {
-                            motionBlurDistance = it
-                            vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
-                        }
-                        CompactSliderRow("Açı", "${motionBlurAngle.roundToInt()}°", motionBlurAngle, -180f..180f, defaultValue = 0f) {
-                            motionBlurAngle = it
-                            vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
-                        }
-                    }
-                }
-
-                BottomPanel.RADIAL_BLUR_EDIT -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Radyal Bulanıklık",
-                            subtitle = "Merkeze odaklanan Zoom veya Dönüş efekti",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                activePanel = BottomPanel.FILTER_MENU
-                            },
-                            onApply = {
-                                if (radialBlurAmount < 1f) {
-                                    vm.endProxyPreview()
-                                } else {
-                                    vm.applyRadialBlur(radialBlurAmount, radialBlurMethod)
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = radialBlurMethod == "zoom",
-                                onClick = {
-                                    radialBlurMethod = "zoom"
-                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
-                                },
-                                label = { Text("Yakınlaş (Zoom)", fontSize = 11.sp) }
-                            )
-                            FilterChip(
-                                selected = radialBlurMethod == "spin",
-                                onClick = {
-                                    radialBlurMethod = "spin"
-                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
-                                },
-                                label = { Text("Döndür (Spin)", fontSize = 11.sp) }
-                            )
-                        }
-                        CompactSliderRow("Şiddet", "${radialBlurAmount.roundToInt()}", radialBlurAmount, 0f..80f, defaultValue = 14f) {
-                            radialBlurAmount = it
-                            vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
-                        }
-                    }
-                }
-
                 BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); liquifyCursorScreen = null; activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.AUTO_ENHANCE_MENU -> activePanel = BottomPanel.ADJUST_MENU
                 BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU }
@@ -4060,6 +3880,186 @@ fun StonebridgeStudioScreen(
                 }
 
                 // Category 5: Efekt -> [Siyah-Beyaz] [Negatif] [Ayna]
+                BottomPanel.AUTO_ENHANCE_MENU -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Akıllı İyileştir",
+                            subtitle = "Tek dokunuşla otomatik ton, renk veya kontrast",
+                            onClose = { activePanel = BottomPanel.ADJUST_MENU }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            CircularDockButton(
+                                icon = Icons.Default.AutoFixHigh,
+                                label = "Oto Ton",
+                                onClick = {
+                                    vm.applyAutoEnhance("tone", "Oto Ton")
+                                    activePanel = BottomPanel.DOCK
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.ColorLens,
+                                label = "Oto Renk",
+                                onClick = {
+                                    vm.applyAutoEnhance("color", "Oto Renk")
+                                    activePanel = BottomPanel.DOCK
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Contrast,
+                                label = "Oto Kontrast",
+                                onClick = {
+                                    vm.applyAutoEnhance("contrast", "Oto Kontrast")
+                                    activePanel = BottomPanel.DOCK
+                                }
+                            )
+                        }
+                    }
+                }
+
+                BottomPanel.CINEMA_LOOK_EDIT -> {
+                    val pushCinema = {
+                        vm.updateProxyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
+                    }
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Sinematik Stiller",
+                            subtitle = "60 FPS canlı görünüm + Vinyet & Film Greni",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.EFFECT_MENU
+                            },
+                            onApply = {
+                                vm.applyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "none" to "Doğal",
+                                "golden" to "Altın Saat",
+                                "tealOrange" to "Sinema",
+                                "noir" to "Film S&B",
+                                "vivid" to "Canlı Pop",
+                                "vintage" to "Retro",
+                                "cyber" to "Gece Neon"
+                            ).forEach { (id, lbl) ->
+                                FilterChip(
+                                    selected = cinemaPreset == id,
+                                    onClick = { cinemaPreset = id; pushCinema() },
+                                    label = { Text(lbl, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        if (cinemaPreset != "none") {
+                            CompactSliderRow("Şiddet", "%${cinemaIntensity.roundToInt()}", cinemaIntensity, 0f..100f, defaultValue = 80f) {
+                                cinemaIntensity = it; pushCinema()
+                            }
+                        }
+                        CompactSliderRow("Vinyet", "${cinemaVignette.roundToInt()}", cinemaVignette, -100f..100f, defaultValue = 0f) {
+                            cinemaVignette = it; pushCinema()
+                        }
+                        CompactSliderRow("Film Greni", "%${cinemaGrain.roundToInt()}", cinemaGrain, 0f..100f, defaultValue = 0f) {
+                            cinemaGrain = it; pushCinema()
+                        }
+                    }
+                }
+
+                BottomPanel.MOTION_BLUR_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Hareket Bulanıklığı",
+                            subtitle = "Hız ve aksiyon yönlü 60 FPS canlı önizleme",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.FILTER_MENU
+                            },
+                            onApply = {
+                                if (motionBlurDistance < 1f) {
+                                    vm.endProxyPreview()
+                                } else {
+                                    vm.applyMotionBlur(motionBlurAngle, motionBlurDistance)
+                                }
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        CompactSliderRow("Mesafe", "${motionBlurDistance.roundToInt()}px", motionBlurDistance, 0f..160f, defaultValue = 24f) {
+                            motionBlurDistance = it
+                            vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
+                        }
+                        CompactSliderRow("Açı", "${motionBlurAngle.roundToInt()}°", motionBlurAngle, -180f..180f, defaultValue = 0f) {
+                            motionBlurAngle = it
+                            vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
+                        }
+                    }
+                }
+
+                BottomPanel.RADIAL_BLUR_EDIT -> {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Radyal Bulanıklık",
+                            subtitle = "Merkeze odaklanan Zoom veya Dönüş efekti",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                vm.endProxyPreview()
+                                activePanel = BottomPanel.FILTER_MENU
+                            },
+                            onApply = {
+                                if (radialBlurAmount < 1f) {
+                                    vm.endProxyPreview()
+                                } else {
+                                    vm.applyRadialBlur(radialBlurAmount, radialBlurMethod)
+                                }
+                                activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = radialBlurMethod == "zoom",
+                                onClick = {
+                                    radialBlurMethod = "zoom"
+                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
+                                },
+                                label = { Text("Yakınlaş (Zoom)", fontSize = 11.sp) }
+                            )
+                            FilterChip(
+                                selected = radialBlurMethod == "spin",
+                                onClick = {
+                                    radialBlurMethod = "spin"
+                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
+                                },
+                                label = { Text("Döndür (Spin)", fontSize = 11.sp) }
+                            )
+                        }
+                        CompactSliderRow("Şiddet", "${radialBlurAmount.roundToInt()}", radialBlurAmount, 0f..80f, defaultValue = 14f) {
+                            radialBlurAmount = it
+                            vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
+                        }
+                    }
+                }
+
                 BottomPanel.LIQUIFY_EDIT -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
