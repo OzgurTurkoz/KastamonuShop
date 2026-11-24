@@ -54,7 +54,8 @@ enum class ActiveTool {
     SELECT_WAND,
     SELECT_QUICK,
     SELECT_BRUSH_ADD,
-    SELECT_BRUSH_SUB
+    SELECT_BRUSH_SUB,
+    BUCKET
 }
 
 data class EditorUiState(
@@ -172,6 +173,7 @@ class EditorViewModel : ViewModel() {
         ) : ProxyJob()
         data class MotionBlur(val angle: Float, val distance: Float) : ProxyJob()
         data class RadialBlur(val amount: Float, val method: String) : ProxyJob()
+        data class HslMixer(val h: List<Float>, val s: List<Float>, val l: List<Float>) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -194,6 +196,28 @@ class EditorViewModel : ViewModel() {
 
     private val _loupeBitmap = MutableStateFlow<ImageBitmap?>(null)
     val loupeBitmap: StateFlow<ImageBitmap?> = _loupeBitmap.asStateFlow()
+
+    private val _cinemaThumbs = MutableStateFlow<List<ImageBitmap>>(emptyList())
+    val cinemaThumbs: StateFlow<List<ImageBitmap>> = _cinemaThumbs.asStateFlow()
+
+    fun loadCinemaThumbs() {
+        paintExecutor.execute {
+            runCatching {
+                val raw = engine.renderCinemaLookThumbs(88u)
+                val out = ArrayList<ImageBitmap>(raw.size)
+                for (t in raw) {
+                    val w = t.width.toInt()
+                    val h = t.height.toInt()
+                    if (w > 0 && h > 0 && t.rgba.size >= w * h * 4) {
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(t.rgba))
+                        out.add(bmp.asImageBitmap())
+                    }
+                }
+                _cinemaThumbs.value = out
+            }
+        }
+    }
     private val pendingLoupeReq = AtomicReference<Triple<Float, Float, Float>?>(null)
     private val loupeDrainScheduled = AtomicBoolean(false)
 
@@ -706,6 +730,7 @@ class EditorViewModel : ViewModel() {
                     is ProxyJob.CinemaLook -> engine.updateProxyCinemaLook(job.preset, job.intensity, job.vignette, job.grain)
                     is ProxyJob.MotionBlur -> engine.updateProxyMotionBlur(job.angle, job.distance)
                     is ProxyJob.RadialBlur -> engine.updateProxyRadialBlur(job.amount, job.method)
+                    is ProxyJob.HslMixer -> engine.updateProxyHslMixer(job.h, job.s, job.l)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
@@ -1073,6 +1098,90 @@ class EditorViewModel : ViewModel() {
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("Radyal bulanıklık hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+
+    fun smartRemoveBackground() {
+        dismissCompareOriginal()
+        pendingProxyJob.set(null)
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.smartRemoveBackground()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, selectionBounds = null, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Arka plan tek dokunuşla silindi", 2200L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus(err.message ?: "Arka plan silinemedi", 3000L)
+            }
+        }
+    }
+
+    fun smartPortraitBlur(radius: Float = 18f) {
+        dismissCompareOriginal()
+        pendingProxyJob.set(null)
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.smartPortraitBlur(radius)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, selectionBounds = null, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Portre arka plan bulanıklığı uygulandı", 2200L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus(err.message ?: "Portre bulanıklığı uygulanamadı", 3000L)
+            }
+        }
+    }
+
+    fun updateProxyHslMixer(h: List<Float>, s: List<Float>, l: List<Float>) {
+        pendingProxyJob.set(ProxyJob.HslMixer(h, s, l))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyHslMixer(h: List<Float>, s: List<Float>, l: List<Float>) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyHslMixer(h, s, l)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("HSL Renk Mikseri uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("HSL hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun applyPaintBucket(docX: Float, docY: Float, tolerance: Int, contiguous: Boolean) {
+        dismissCompareOriginal()
+        val hex = _uiState.value.colorHex
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyPaintBucket(docX.toInt(), docY.toInt(), hex, tolerance.coerceIn(0, 255).toUInt(), contiguous)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Boya kovası uygulandı", 1400L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Boya kovası hatası: ${err.message}", 2400L)
             }
         }
     }

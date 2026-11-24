@@ -115,7 +115,10 @@ private enum class BottomPanel {
     AUTO_ENHANCE_MENU,
     CINEMA_LOOK_EDIT,
     MOTION_BLUR_EDIT,
-    RADIAL_BLUR_EDIT
+    RADIAL_BLUR_EDIT,
+    QUICK_ACTIONS_MENU,
+    HSL_MIXER_LIVE,
+    POSTER_THRESH_LIVE
 }
 
 private data class BlendModeOption(
@@ -285,7 +288,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.0.0",
+                    text = "v1.1.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -691,6 +694,7 @@ fun StonebridgeStudioScreen(
     val state by vm.uiState.collectAsState()
     val layerThumbs by vm.layerThumbnails.collectAsState()
     val loupeBitmap by vm.loupeBitmap.collectAsState()
+    val cinemaThumbs by vm.cinemaThumbs.collectAsState()
     var loupeScreenPos by remember { mutableStateOf<Offset?>(null) }
     val activeLayerPrev by vm.activeLayerPreview.collectAsState()
     val context = LocalContext.current
@@ -851,6 +855,16 @@ fun StonebridgeStudioScreen(
     var motionBlurDistance by remember { mutableFloatStateOf(24f) }
     var radialBlurAmount by remember { mutableFloatStateOf(14f) }
     var radialBlurMethod by remember { mutableStateOf("zoom") }
+    // v1.1.0 HSL 8-Channel Mixer, Paint Bucket & Posterize/Threshold state
+    var hslBandIdx by remember { mutableIntStateOf(0) }
+    var hslHue by remember { mutableStateOf(List(8) { 0f }) }
+    var hslSat by remember { mutableStateOf(List(8) { 0f }) }
+    var hslLum by remember { mutableStateOf(List(8) { 0f }) }
+    var bucketTolerance by remember { mutableFloatStateOf(36f) }
+    var bucketContiguous by remember { mutableStateOf(true) }
+    var posterMode by remember { mutableStateOf(true) }
+    var posterLevels by remember { mutableFloatStateOf(6f) }
+    var threshLevel by remember { mutableFloatStateOf(128f) }
     var textDraft by remember { mutableStateOf("StonebridgeCraft") }
     var textNormX by remember { mutableFloatStateOf(0.50f) }
     var textNormY by remember { mutableFloatStateOf(0.50f) }
@@ -989,6 +1003,8 @@ fun StonebridgeStudioScreen(
                 BottomPanel.AUTO_ENHANCE_MENU -> activePanel = BottomPanel.ADJUST_MENU
                 BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU }
+                BottomPanel.QUICK_ACTIONS_MENU -> activePanel = BottomPanel.DOCK
+                BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE -> { vm.endProxyPreview(); activePanel = BottomPanel.ADJUST_MENU }
                 else -> activePanel = BottomPanel.DOCK
             }
         } else {
@@ -1019,7 +1035,9 @@ fun StonebridgeStudioScreen(
             activePanel == BottomPanel.SHAPE_EDIT ||
             activePanel == BottomPanel.CINEMA_LOOK_EDIT ||
             activePanel == BottomPanel.MOTION_BLUR_EDIT ||
-            activePanel == BottomPanel.RADIAL_BLUR_EDIT
+            activePanel == BottomPanel.RADIAL_BLUR_EDIT ||
+            activePanel == BottomPanel.HSL_MIXER_LIVE ||
+            activePanel == BottomPanel.POSTER_THRESH_LIVE
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -1051,6 +1069,8 @@ fun StonebridgeStudioScreen(
                 BottomPanel.CINEMA_LOOK_EDIT,
                 BottomPanel.MOTION_BLUR_EDIT,
                 BottomPanel.RADIAL_BLUR_EDIT,
+                BottomPanel.HSL_MIXER_LIVE,
+                BottomPanel.POSTER_THRESH_LIVE,
                 BottomPanel.DOCK -> fitToSafeArea(pendingQuarterTurns, activePanel)
                 else -> Unit
             }
@@ -1124,6 +1144,7 @@ fun StonebridgeStudioScreen(
                     isTextDragActive = { currentPanelState == BottomPanel.TEXT_EDIT },
                     isSelectRectActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_RECT },
                     isSelectWandActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_WAND },
+                    isBucketActive = { vm.uiState.value.activeTool == ActiveTool.BUCKET },
                     isCloneSourcePickActive = {
                         val st = vm.uiState.value
                         st.activeTool == ActiveTool.CLONE_STAMP && st.pickingCloneSource
@@ -1158,6 +1179,7 @@ fun StonebridgeStudioScreen(
                     onSelectRectPreview = { arr -> selectPreviewRect = arr },
                     onSelectRectCommit = { rx, ry, rw, rh -> vm.selectRect(rx, ry, rw, rh) },
                     onSelectWandTap = { dx, dy -> vm.selectMagicWand(dx, dy) },
+                    onBucketTap = { dx, dy -> vm.applyPaintBucket(dx, dy, bucketTolerance.roundToInt(), bucketContiguous) },
                     onCloneSourcePick = { dx, dy -> vm.setCloneSource(dx, dy) },
                     onLoupePointer = { sx, sy, dx, dy, active ->
                         val tool = vm.uiState.value.activeTool
@@ -1357,90 +1379,112 @@ fun StonebridgeStudioScreen(
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(docW, docH, cropFreeMode, selectedCropPreset, tick) {
-                            var dragTarget = -1 // 0=TL, 1=TR, 2=BR, 3=BL, 4=MOVE
-                            var lastDocX = 0f
-                            var lastDocY = 0f
-                            detectDragGestures(
-                                onDragStart = { pos ->
-                                    val corners = listOf(
-                                        Offset(left, top),
-                                        Offset(left + boxW, top),
-                                        Offset(left + boxW, top + boxH),
-                                        Offset(left, top + boxH)
-                                    )
+                        .pointerInput(docW, docH, cropFreeMode, selectedCropPreset) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val firstDown = awaitFirstDown(requireUnconsumed = false)
+                                    val pos0 = firstDown.position
+                                    val (curX0, curY0) = viewRef.docToScreen(docW * cropNormL, docH * cropNormT)
+                                    val (curX1, curY1) = viewRef.docToScreen(docW * cropNormR, docH * cropNormB)
+                                    val cL = min(curX0, curX1)
+                                    val cT = min(curY0, curY1)
+                                    val cR = kotlin.math.max(curX0, curX1)
+                                    val cB = kotlin.math.max(curY0, curY1)
+                                    val corners = listOf(Offset(cL, cT), Offset(cR, cT), Offset(cR, cB), Offset(cL, cB))
                                     var bestIdx = -1
-                                    var bestDist = 76f
+                                    var bestDist = 72f
                                     corners.forEachIndexed { i, c ->
-                                        val d = kotlin.math.hypot((pos.x - c.x).toDouble(), (pos.y - c.y).toDouble()).toFloat()
-                                        if (d < bestDist) {
-                                            bestDist = d
-                                            bestIdx = i
-                                        }
+                                        val d = kotlin.math.hypot((pos0.x - c.x).toDouble(), (pos0.y - c.y).toDouble()).toFloat()
+                                        if (d < bestDist) { bestDist = d; bestIdx = i }
                                     }
-                                    val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
-                                    lastDocX = dx
-                                    lastDocY = dy
-                                    dragTarget = when {
+                                    val (dx0, dy0) = viewRef.screenToDoc(pos0.x, pos0.y)
+                                    var lastDocX = dx0
+                                    var lastDocY = dy0
+                                    var dragTarget = when {
                                         bestIdx in 0..3 -> bestIdx
-                                        pos.x in left..(left + boxW) && pos.y in top..(top + boxH) -> 4
+                                        pos0.x in cL..cR && pos0.y in cT..cB -> 4
                                         else -> -1
                                     }
-                                },
-                                onDragEnd = { dragTarget = -1; loupeScreenPos = null; vm.hideLoupe() },
-                                onDragCancel = { dragTarget = -1; loupeScreenPos = null; vm.hideLoupe() },
-                                onDrag = { change, _ ->
-                                    if (dragTarget == -1) return@detectDragGestures
-                                    change.consume()
-                                    val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
-                                    val minFrac = 0.08f
-                                    val lockedRatio = if (cropFreeMode) null else (selectedCropPreset.ratio ?: (docW / docH.coerceAtLeast(1f)))
-                                    if (dragTarget == 4) {
-                                        val dnx = (dx - lastDocX) / docW
-                                        val dny = (dy - lastDocY) / docH
-                                        lastDocX = dx
-                                        lastDocY = dy
-                                        val wFrac = cropNormR - cropNormL
-                                        val hFrac = cropNormB - cropNormT
-                                        val nl = (cropNormL + dnx).coerceIn(0f, (1f - wFrac).coerceAtLeast(0f))
-                                        val nt = (cropNormT + dny).coerceIn(0f, (1f - hFrac).coerceAtLeast(0f))
-                                        cropNormL = nl; cropNormR = nl + wFrac
-                                        cropNormT = nt; cropNormB = nt + hFrac
-                                    } else {
-                                        val nx = (dx / docW).coerceIn(0f, 1f)
-                                        val ny = (dy / docH).coerceIn(0f, 1f)
-                                        if (lockedRatio == null) {
-                                            when (dragTarget) {
-                                                0 -> { cropNormL = nx.coerceAtMost(cropNormR - minFrac); cropNormT = ny.coerceAtMost(cropNormB - minFrac) }
-                                                1 -> { cropNormR = nx.coerceAtLeast(cropNormL + minFrac); cropNormT = ny.coerceAtMost(cropNormB - minFrac) }
-                                                2 -> { cropNormR = nx.coerceAtLeast(cropNormL + minFrac); cropNormB = ny.coerceAtLeast(cropNormT + minFrac) }
-                                                3 -> { cropNormL = nx.coerceAtMost(cropNormR - minFrac); cropNormB = ny.coerceAtLeast(cropNormT + minFrac) }
+                                    var pinchActive = false
+                                    var prevDist = 0f
+                                    var prevCentroid = Offset.Zero
+
+                                    while (true) {
+                                        val ev = awaitPointerEvent()
+                                        val pressed = ev.changes.filter { it.pressed }
+                                        if (pressed.isEmpty()) {
+                                            loupeScreenPos = null
+                                            vm.hideLoupe()
+                                            break
+                                        }
+                                        if (pressed.size >= 2) {
+                                            loupeScreenPos = null
+                                            vm.hideLoupe()
+                                            val p0 = pressed[0].position
+                                            val p1 = pressed[1].position
+                                            val dist = kotlin.math.hypot((p1.x - p0.x).toDouble(), (p1.y - p0.y).toDouble()).toFloat().coerceAtLeast(1f)
+                                            val centroid = Offset((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f)
+                                            if (pinchActive && prevDist > 1f) {
+                                                val zf = (dist / prevDist).coerceIn(0.85f, 1.18f)
+                                                viewRef.applyExternalPinchPan(zf, centroid.x - prevCentroid.x, centroid.y - prevCentroid.y)
                                             }
-                                        } else {
-                                            // Keep exact aspect ratio anchored at the opposite corner
-                                            val anchorX = if (dragTarget == 0 || dragTarget == 3) cropNormR * docW else cropNormL * docW
-                                            val anchorY = if (dragTarget == 0 || dragTarget == 1) cropNormB * docH else cropNormT * docH
-                                            val rawW = abs(dx - anchorX).coerceAtLeast(docW * minFrac)
-                                            val rawH = (rawW / lockedRatio).coerceAtLeast(docH * minFrac)
-                                            val maxW = if (dragTarget == 0 || dragTarget == 3) anchorX else (docW - anchorX)
-                                            val maxH = if (dragTarget == 0 || dragTarget == 1) anchorY else (docH - anchorY)
-                                            val scaleFit = min(1f, min(maxW / rawW.coerceAtLeast(1f), maxH / rawH.coerceAtLeast(1f)))
-                                            val fw = (rawW * scaleFit) / docW
-                                            val fh = (rawH * scaleFit) / docH
-                                            when (dragTarget) {
-                                                0 -> { cropNormL = (cropNormR - fw).coerceIn(0f, 1f); cropNormT = (cropNormB - fh).coerceIn(0f, 1f) }
-                                                1 -> { cropNormR = (cropNormL + fw).coerceIn(0f, 1f); cropNormT = (cropNormB - fh).coerceIn(0f, 1f) }
-                                                2 -> { cropNormR = (cropNormL + fw).coerceIn(0f, 1f); cropNormB = (cropNormT + fh).coerceIn(0f, 1f) }
-                                                3 -> { cropNormL = (cropNormR - fw).coerceIn(0f, 1f); cropNormB = (cropNormT + fh).coerceIn(0f, 1f) }
+                                            prevDist = dist
+                                            prevCentroid = centroid
+                                            pinchActive = true
+                                            pressed.forEach { it.consume() }
+                                        } else if (!pinchActive && dragTarget != -1) {
+                                            val ch = pressed[0]
+                                            ch.consume()
+                                            val (dx, dy) = viewRef.screenToDoc(ch.position.x, ch.position.y)
+                                            val minFrac = 0.08f
+                                            val lockedRatio = if (cropFreeMode) null else (selectedCropPreset.ratio ?: (docW / docH.coerceAtLeast(1f)))
+                                            if (dragTarget == 4) {
+                                                val dnx = (dx - lastDocX) / docW
+                                                val dny = (dy - lastDocY) / docH
+                                                lastDocX = dx
+                                                lastDocY = dy
+                                                val wFrac = cropNormR - cropNormL
+                                                val hFrac = cropNormB - cropNormT
+                                                val nl = (cropNormL + dnx).coerceIn(0f, (1f - wFrac).coerceAtLeast(0f))
+                                                val nt = (cropNormT + dny).coerceIn(0f, (1f - hFrac).coerceAtLeast(0f))
+                                                cropNormL = nl; cropNormR = nl + wFrac
+                                                cropNormT = nt; cropNormB = nt + hFrac
+                                            } else {
+                                                val nx = (dx / docW).coerceIn(0f, 1f)
+                                                val ny = (dy / docH).coerceIn(0f, 1f)
+                                                if (lockedRatio == null) {
+                                                    when (dragTarget) {
+                                                        0 -> { cropNormL = nx.coerceAtMost(cropNormR - minFrac); cropNormT = ny.coerceAtMost(cropNormB - minFrac) }
+                                                        1 -> { cropNormR = nx.coerceAtLeast(cropNormL + minFrac); cropNormT = ny.coerceAtMost(cropNormB - minFrac) }
+                                                        2 -> { cropNormR = nx.coerceAtLeast(cropNormL + minFrac); cropNormB = ny.coerceAtLeast(cropNormT + minFrac) }
+                                                        3 -> { cropNormL = nx.coerceAtMost(cropNormR - minFrac); cropNormB = ny.coerceAtLeast(cropNormT + minFrac) }
+                                                    }
+                                                } else {
+                                                    val anchorX = if (dragTarget == 0 || dragTarget == 3) cropNormR * docW else cropNormL * docW
+                                                    val anchorY = if (dragTarget == 0 || dragTarget == 1) cropNormB * docH else cropNormT * docH
+                                                    val rawW = abs(dx - anchorX).coerceAtLeast(docW * minFrac)
+                                                    val rawH = (rawW / lockedRatio).coerceAtLeast(docH * minFrac)
+                                                    val maxW = if (dragTarget == 0 || dragTarget == 3) anchorX else (docW - anchorX)
+                                                    val maxH = if (dragTarget == 0 || dragTarget == 1) anchorY else (docH - anchorY)
+                                                    val scaleFit = min(1f, min(maxW / rawW.coerceAtLeast(1f), maxH / rawH.coerceAtLeast(1f)))
+                                                    val fw = (rawW * scaleFit) / docW
+                                                    val fh = (rawH * scaleFit) / docH
+                                                    when (dragTarget) {
+                                                        0 -> { cropNormL = (cropNormR - fw).coerceIn(0f, 1f); cropNormT = (cropNormB - fh).coerceIn(0f, 1f) }
+                                                        1 -> { cropNormR = (cropNormL + fw).coerceIn(0f, 1f); cropNormT = (cropNormB - fh).coerceIn(0f, 1f) }
+                                                        2 -> { cropNormR = (cropNormL + fw).coerceIn(0f, 1f); cropNormB = (cropNormT + fh).coerceIn(0f, 1f) }
+                                                        3 -> { cropNormL = (cropNormR - fw).coerceIn(0f, 1f); cropNormB = (cropNormT + fh).coerceIn(0f, 1f) }
+                                                    }
+                                                }
+                                                loupeScreenPos = ch.position
+                                                val cxDoc = if (dragTarget == 0 || dragTarget == 3) cropNormL * docW else cropNormR * docW
+                                                val cyDoc = if (dragTarget == 0 || dragTarget == 1) cropNormT * docH else cropNormB * docH
+                                                vm.updateLoupe(cxDoc, cyDoc, (min(docW, docH) * 0.035f).coerceIn(16f, 64f))
                                             }
                                         }
-                                        loupeScreenPos = change.position
-                                        val cxDoc = if (dragTarget == 0 || dragTarget == 3) cropNormL * docW else cropNormR * docW
-                                        val cyDoc = if (dragTarget == 0 || dragTarget == 1) cropNormT * docH else cropNormB * docH
-                                        vm.updateLoupe(cxDoc, cyDoc, (min(docW, docH) * 0.035f).coerceIn(16f, 64f))
                                     }
                                 }
-                            )
+                            }
                         }
                 ) {
                     val dim = Color(0x88000000)
@@ -2545,6 +2589,14 @@ fun StonebridgeStudioScreen(
                             state.activeTool == ActiveTool.SELECT_BRUSH_ADD ||
                             state.activeTool == ActiveTool.SELECT_BRUSH_SUB
                         CircularDockButton(
+                            icon = Icons.Default.Bolt,
+                            label = "Hızlı",
+                            onClick = {
+                                vm.setTool(ActiveTool.NONE)
+                                activePanel = BottomPanel.QUICK_ACTIONS_MENU
+                            }
+                        )
+                        CircularDockButton(
                             icon = Icons.Default.Brush,
                             label = "Çizim",
                             selected = state.activeTool != ActiveTool.NONE && !isSelectTool,
@@ -2706,6 +2758,16 @@ fun StonebridgeStudioScreen(
                                 }
                             )
                             CircularDockButton(
+                                icon = Icons.Default.FormatColorFill,
+                                label = "Kova",
+                                selected = state.activeTool == ActiveTool.BUCKET,
+                                accentDot = activeColor,
+                                onClick = {
+                                    vm.setTool(ActiveTool.BUCKET)
+                                    showHsvPicker = false
+                                }
+                            )
+                            CircularDockButton(
                                 icon = Icons.Default.Colorize,
                                 label = "Damlalık",
                                 selected = state.activeTool == ActiveTool.EYEDROPPER,
@@ -2859,6 +2921,29 @@ fun StonebridgeStudioScreen(
                                         vm.updateBrush(flow = it)
                                     }
                                 }
+                            }
+                        } else if (state.activeTool == ActiveTool.BUCKET) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                listOf("#FF4D4F", "#4F9CFF", "#52C41A", "#FAAD14", "#A855F7", "#FFFFFF", "#000000").forEach { hex ->
+                                    val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
+                                    Box(
+                                        modifier = Modifier.size(26.dp).clip(CircleShape).background(c)
+                                            .border(if (state.colorHex.equals(hex, true)) 2.dp else 1.dp, if (state.colorHex.equals(hex, true)) Color.White else Color(0xFF444858), CircleShape)
+                                            .clickable { vm.updateBrush(colorHex = hex) }
+                                    )
+                                }
+                                FilterChip(
+                                    selected = bucketContiguous,
+                                    onClick = { bucketContiguous = !bucketContiguous },
+                                    label = { Text(if (bucketContiguous) "Bitişik" else "Tümü", fontSize = 10.sp) }
+                                )
+                            }
+                            CompactSliderRow("Tolerans", "${bucketTolerance.roundToInt()}", bucketTolerance, 0f..200f, defaultValue = 36f) {
+                                bucketTolerance = it
                             }
                         } else if (state.activeTool == ActiveTool.ERASER) {
                             BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 28f) {
@@ -3231,6 +3316,30 @@ fun StonebridgeStudioScreen(
                                     curveOverlayExpanded = false
                                     vm.beginProxyPreview()
                                     activePanel = BottomPanel.CURVES_LIVE
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.Gradient,
+                                label = "HSL",
+                                onClick = {
+                                    hslBandIdx = 0
+                                    hslHue = List(8) { 0f }
+                                    hslSat = List(8) { 0f }
+                                    hslLum = List(8) { 0f }
+                                    vm.beginProxyPreview()
+                                    activePanel = BottomPanel.HSL_MIXER_LIVE
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.FilterFrames,
+                                label = "Poster",
+                                onClick = {
+                                    posterMode = true
+                                    posterLevels = 6f
+                                    threshLevel = 128f
+                                    vm.beginProxyPreview()
+                                    vm.updateProxyAdjustment("posterize", "{"levels":6}")
+                                    activePanel = BottomPanel.POSTER_THRESH_LIVE
                                 }
                             )
                         }
@@ -3942,11 +4051,56 @@ fun StonebridgeStudioScreen(
                 }
 
                 // Category 5: Efekt -> [Siyah-Beyaz] [Negatif] [Ayna]
+                BottomPanel.QUICK_ACTIONS_MENU -> QuickActionsPanel(
+                    onClose = { activePanel = BottomPanel.DOCK },
+                    onRemoveBg = { vm.smartRemoveBackground(); activePanel = BottomPanel.DOCK },
+                    onPortraitBlur = { vm.smartPortraitBlur(18f); activePanel = BottomPanel.DOCK },
+                    onObjectRemove = {
+                        vm.setTool(ActiveTool.SELECT_QUICK)
+                        activePanel = BottomPanel.SELECT_MENU
+                        vm.showStatus("Silmek istediğin nesnenin üstünden geçip 'Kaldır'a dokun", 3200L)
+                    }
+                )
+                BottomPanel.HSL_MIXER_LIVE -> HslMixerPanel(
+                    bandIdx = hslBandIdx, onBand = { hslBandIdx = it },
+                    hues = hslHue, sats = hslSat, lums = hslLum,
+                    onUpdate = { h, s, l ->
+                        hslHue = h; hslSat = s; hslLum = l
+                        vm.updateProxyHslMixer(h, s, l)
+                    },
+                    onClose = { vm.endProxyPreview(); activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = { vm.applyHslMixer(hslHue, hslSat, hslLum); activePanel = BottomPanel.DOCK }
+                )
+                BottomPanel.POSTER_THRESH_LIVE -> PosterThreshPanel(
+                    isPoster = posterMode,
+                    onMode = { isP ->
+                        posterMode = isP
+                        if (isP) vm.updateProxyAdjustment("posterize", "{"levels":${posterLevels.roundToInt()}}")
+                        else vm.updateProxyAdjustment("threshold", "{"level":${threshLevel.roundToInt()}}")
+                    },
+                    posterLevels = posterLevels,
+                    onPosterLevels = {
+                        posterLevels = it
+                        vm.updateProxyAdjustment("posterize", "{"levels":${it.roundToInt()}}")
+                    },
+                    threshLevel = threshLevel,
+                    onThreshLevel = {
+                        threshLevel = it
+                        vm.updateProxyAdjustment("threshold", "{"level":${it.roundToInt()}}")
+                    },
+                    onClose = { vm.endProxyPreview(); activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = {
+                        if (posterMode) vm.applyAdjustmentOnce("posterize", "{"levels":${posterLevels.roundToInt()}}", "Posterize")
+                        else vm.applyAdjustmentOnce("threshold", "{"level":${threshLevel.roundToInt()}}", "Eşik")
+                        activePanel = BottomPanel.DOCK
+                    }
+                )
                 BottomPanel.AUTO_ENHANCE_MENU -> AutoEnhancePanel(
                     onClose = { activePanel = BottomPanel.ADJUST_MENU },
                     onPick = { mode, lbl -> vm.applyAutoEnhance(mode, lbl); activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.CINEMA_LOOK_EDIT -> CinemaLookPanel(
+                    thumbs = cinemaThumbs,
                     preset = cinemaPreset, onPreset = { cinemaPreset = it },
                     intensity = cinemaIntensity, onIntensity = { cinemaIntensity = it },
                     vignette = cinemaVignette, onVignette = { cinemaVignette = it },
@@ -4042,6 +4196,7 @@ fun StonebridgeStudioScreen(
                                     cinemaIntensity = 80f
                                     cinemaVignette = -25f
                                     cinemaGrain = 12f
+                                    vm.loadCinemaThumbs()
                                     vm.beginProxyPreview()
                                     vm.updateProxyCinemaLook(cinemaPreset, cinemaIntensity, cinemaVignette, cinemaGrain)
                                     activePanel = BottomPanel.CINEMA_LOOK_EDIT
@@ -4395,6 +4550,7 @@ private fun AutoEnhancePanel(onClose: () -> Unit, onPick: (String, String) -> Un
 
 @Composable
 private fun CinemaLookPanel(
+    thumbs: List<ImageBitmap>,
     preset: String, onPreset: (String) -> Unit,
     intensity: Float, onIntensity: (Float) -> Unit,
     vignette: Float, onVignette: (Float) -> Unit,
@@ -4403,11 +4559,37 @@ private fun CinemaLookPanel(
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
+    val items = listOf("none" to "Doğal", "golden" to "Altın Saat", "tealOrange" to "Sinema", "noir" to "Film S&B", "vivid" to "Canlı Pop", "vintage" to "Retro", "cyber" to "Gece Neon")
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("Sinematik Stiller", "60 FPS canlı görünüm + Vinyet & Film Greni", "Uygula", onClose, onApply)
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("none" to "Doğal", "golden" to "Altın Saat", "tealOrange" to "Sinema", "noir" to "Film S&B", "vivid" to "Canlı Pop", "vintage" to "Retro", "cyber" to "Gece Neon").forEach { (id, lbl) ->
-                FilterChip(selected = preset == id, onClick = { onPreset(id); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
+        BottomEditorHeader("Sinematik Stiller", "Kendi fotoğrafınla canlı önizleme + Vinyet & Gren", "Uygula", onClose, onApply)
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items.forEachIndexed { idx, (id, lbl) ->
+                val isSel = preset == id
+                Column(
+                    modifier = Modifier.width(62.dp).clickable { onPreset(id); onPreview() },
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF2A2C36))
+                            .border(if (isSel) 2.dp else 1.dp, if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF3E4150), RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val bmp = thumbs.getOrNull(idx)
+                        if (bmp != null) {
+                            androidx.compose.foundation.Image(
+                                bitmap = bmp,
+                                contentDescription = lbl,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Icon(Icons.Default.MovieFilter, contentDescription = lbl, tint = Color(0xFF8A8FA3), modifier = Modifier.size(20.dp))
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(lbl, fontSize = 10.sp, maxLines = 1, color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFFDCE0EC), fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal)
+                }
             }
         }
         if (preset != "none") CompactSliderRow("Şiddet", "%${intensity.roundToInt()}", intensity, 0f..100f, 80f) { onIntensity(it); onPreview() }
@@ -4545,6 +4727,91 @@ private fun FloatingLoupeOverlay(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun QuickActionsPanel(
+    onClose: () -> Unit,
+    onRemoveBg: () -> Unit,
+    onPortraitBlur: () -> Unit,
+    onObjectRemove: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        BottomEditorHeader("Akıllı Hızlı İşlemler", "Tek dokunuşla arka plan silme, portre bulanıklaştırma & nesne kaldırma", onClose = onClose)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            CircularDockButton(Icons.Default.ContentCut, "Arka Plan Sil", onClick = onRemoveBg)
+            CircularDockButton(Icons.Default.BlurOn, "Portre Bulanık", onClick = onPortraitBlur)
+            CircularDockButton(Icons.Default.AutoFixHigh, "Nesne Kaldır", onClick = onObjectRemove)
+        }
+    }
+}
+
+@Composable
+private fun HslMixerPanel(
+    bandIdx: Int, onBand: (Int) -> Unit,
+    hues: List<Float>, sats: List<Float>, lums: List<Float>,
+    onUpdate: (List<Float>, List<Float>, List<Float>) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    val bands = listOf(
+        "Kırmızı" to Color(0xFFFF4D4F),
+        "Turuncu" to Color(0xFFFF8C00),
+        "Sarı" to Color(0xFFFAAD14),
+        "Yeşil" to Color(0xFF52C41A),
+        "Turkuaz" to Color(0xFF13C2C2),
+        "Mavi" to Color(0xFF4F9CFF),
+        "Mor" to Color(0xFF9254DE),
+        "Macenta" to Color(0xFFEB2F96)
+    )
+    val idx = bandIdx.coerceIn(0, 7)
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("HSL Renk Mikseri (${bands[idx].first})", "Sadece seçtiğin renk kanalını 60 FPS canlı ayarla", "Uygula", onClose, onApply)
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            bands.forEachIndexed { i, (name, col) ->
+                val sel = i == idx
+                Box(
+                    modifier = Modifier.size(30.dp).clip(CircleShape).background(col)
+                        .border(if (sel) 2.5.dp else 1.dp, if (sel) Color.White else Color(0xFF3E4150), CircleShape)
+                        .clickable { onBand(i) }
+                )
+            }
+        }
+        CompactSliderRow("Ton", "${hues[idx].roundToInt()}", hues[idx], -100f..100f, 0f) { v ->
+            val nh = hues.toMutableList().apply { this[idx] = v }
+            onUpdate(nh, sats, lums)
+        }
+        CompactSliderRow("Doygunluk", "${sats[idx].roundToInt()}", sats[idx], -100f..100f, 0f) { v ->
+            val ns = sats.toMutableList().apply { this[idx] = v }
+            onUpdate(hues, ns, lums)
+        }
+        CompactSliderRow("Parlaklık", "${lums[idx].roundToInt()}", lums[idx], -100f..100f, 0f) { v ->
+            val nl = lums.toMutableList().apply { this[idx] = v }
+            onUpdate(hues, sats, nl)
+        }
+    }
+}
+
+@Composable
+private fun PosterThreshPanel(
+    isPoster: Boolean, onMode: (Boolean) -> Unit,
+    posterLevels: Float, onPosterLevels: (Float) -> Unit,
+    threshLevel: Float, onThreshLevel: (Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader(if (isPoster) "Posterize" else "Eşik (S&B)", "60 FPS canlı önizleme — Uygula ile katman oluştur", "Uygula", onClose, onApply)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = isPoster, onClick = { onMode(true) }, label = { Text("Posterize", fontSize = 11.sp) })
+            FilterChip(selected = !isPoster, onClick = { onMode(false) }, label = { Text("Eşik (S&B)", fontSize = 11.sp) })
+        }
+        if (isPoster) {
+            CompactSliderRow("Seviye", "${posterLevels.roundToInt()}", posterLevels, 2f..24f, 6f, onChange = onPosterLevels)
+        } else {
+            CompactSliderRow("Eşik", "${threshLevel.roundToInt()}", threshLevel, 1f..254f, 128f, onChange = onThreshLevel)
         }
     }
 }

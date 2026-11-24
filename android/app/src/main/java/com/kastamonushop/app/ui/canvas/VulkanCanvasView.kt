@@ -45,6 +45,7 @@ class VulkanCanvasView(
     private val isTextDragActive: () -> Boolean,
     private val isSelectRectActive: () -> Boolean = { false },
     private val isSelectWandActive: () -> Boolean = { false },
+    private val isBucketActive: () -> Boolean = { false },
     private val isCloneSourcePickActive: () -> Boolean = { false },
     private val onStrokeBegin: (StrokeSample) -> Unit,
     private val onStrokeMove: (List<StrokeSample>) -> Unit,
@@ -60,6 +61,7 @@ class VulkanCanvasView(
     private val onSelectRectPreview: (FloatArray?) -> Unit = {},
     private val onSelectRectCommit: (Int, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     private val onSelectWandTap: (Float, Float) -> Unit = { _, _ -> },
+    private val onBucketTap: (Float, Float) -> Unit = { _, _ -> },
     private val onCloneSourcePick: (Float, Float) -> Unit = { _, _ -> },
     private val onLoupePointer: (Float, Float, Float, Float, Boolean) -> Unit = { _, _, _, _, _ -> },
     private val onCameraChanged: () -> Unit = {}
@@ -361,6 +363,9 @@ class VulkanCanvasView(
                 } else if (isSelectWandActive()) {
                     val (dx, dy) = screenToDoc(event.x, event.y)
                     onSelectWandTap(dx, dy)
+                } else if (isBucketActive()) {
+                    val (dx, dy) = screenToDoc(event.x, event.y)
+                    onBucketTap(dx, dy)
                 } else if (isSelectRectActive()) {
                     selectDragActive = true
                     selectStartScreenX = event.x

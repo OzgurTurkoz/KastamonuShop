@@ -2340,6 +2340,269 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+    /// One-tap Smart Action: Automatically selects the main subject, inverts, and erases the background to transparency.
+    pub fn smart_remove_background(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.live_liquify = None;
+        guard.dismiss_compare();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Arka planı silinecek fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false, "all": false } }));
+        guard
+            .session
+            .execute("select.subject", json!({ "sampleAllLayers": true }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let has_sel = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| !s.content_bounds().is_empty()))
+            .unwrap_or(false);
+        if !has_sel {
+            return Err(EngineError::CommandFailed {
+                detail: "Ana konu otomatik tespit edilemedi — Seçim araçlarıyla elle seçebilirsin".into(),
+            });
+        }
+        guard
+            .session
+            .execute("select.inverse", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard
+            .session
+            .execute("edit.clear", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let _ = guard.session.execute("select.deselect", json!({}));
+        guard.mark_selection_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// One-tap Smart Action: Automatically selects the main subject and blurs ONLY the background (Portrait Bokeh).
+    pub fn smart_portrait_blur(&self, radius: f32) -> Result<DocumentInfo, EngineError> {
+        let r = radius.clamp(2.0, 60.0);
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.live_liquify = None;
+        guard.dismiss_compare();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Portre bulanıklığı uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        guard
+            .session
+            .execute("select.subject", json!({ "sampleAllLayers": true }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let has_sel = guard
+            .active_document()
+            .and_then(|d| d.selection.as_ref().map(|s| !s.content_bounds().is_empty()))
+            .unwrap_or(false);
+        if !has_sel {
+            return Err(EngineError::CommandFailed {
+                detail: "Ana konu tespit edilemedi — manuel seçim yapıp Bulanıklaştır kullanabilirsin".into(),
+            });
+        }
+        guard
+            .session
+            .execute("select.inverse", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let _ = guard.session.execute("select.modify.feather", json!({ "radius": 3.0 }));
+        guard
+            .session
+            .edit("Portre Arka Plan Bulanıklığı", |doc, _| {
+                run_blur_on_doc(doc, target_id, r);
+                Ok(())
+            })
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let _ = guard.session.execute("select.deselect", json!({}));
+        guard.mark_selection_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Generates 7 live mini-preview thumbnails of the user's ACTUAL open photo for the Cinema Looks strip.
+    pub fn render_cinema_look_thumbs(&self, thumb_size: u32) -> Result<Vec<LayerThumbnail>, EngineError> {
+        let presets = ["none", "golden", "tealOrange", "noir", "vivid", "vintage", "cyber"];
+        let base_doc = {
+            let guard = self.core.lock();
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let doc = ds.doc();
+            let real_w = doc.size.width.max(1);
+            let real_h = doc.size.height.max(1);
+            let max_d = thumb_size.clamp(48, 128);
+            let scale = (max_d as f32 / real_w.max(real_h) as f32).min(1.0);
+            let tw = ((real_w as f32 * scale).round() as u32).clamp(16, max_d);
+            let th = ((real_h as f32 * scale).round() as u32).clamp(16, max_d);
+            let mut ps = Session::new();
+            ps.add_document((**doc).clone(), None);
+            ps.set_active(0);
+            if tw < real_w || th < real_h {
+                let _ = ps.execute("image.imageSize", json!({ "width": tw, "height": th, "resample": "bilinear" }));
+            }
+            ps.active().map(|d| Arc::clone(d.doc())).ok_or(EngineError::NoActiveDocument)?
+        };
+
+        let mut results = Vec::with_capacity(presets.len());
+        for preset in presets {
+            let mut ps = Session::new();
+            ps.add_document((*base_doc).clone(), None);
+            ps.set_active(0);
+            let tid = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(id) = tid {
+                ps.set_active_layer(Some(id));
+                if preset != "none" {
+                    let params = build_cinema_look_params(preset, 85.0, -20.0, 0.0);
+                    let _ = ps.execute("filter.cameraRaw", params);
+                }
+                if let Some(ds) = ps.active() {
+                    let doc = ds.doc();
+                    let w = doc.size.width.max(1);
+                    let h = doc.size.height.max(1);
+                    if let Some(layer) = doc.layers.iter().find(|l| l.id == id) {
+                        if let LayerContent::Raster(surf) = &layer.content {
+                            let mut rgba = vec![0u8; (w * h * 4) as usize];
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let c = surf.rgba(x as i32, y as i32);
+                                    let i = ((y * w + x) * 4) as usize;
+                                    rgba[i] = (c[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 1] = (c[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 2] = (c[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 3] = (c[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                }
+                            }
+                            results.push(LayerThumbnail { width: w, height: h, rgba });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    /// 60 FPS Live Proxy Preview for 8-Channel HSL Color Mixer (`filter.cameraRaw`: hslHue, hslSat, hslLum).
+    pub fn update_proxy_hsl_mixer(
+        &self,
+        hsl_hue: Vec<f32>,
+        hsl_sat: Vec<f32>,
+        hsl_lum: Vec<f32>,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let target_id = ps
+            .active()
+            .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+        if let Some(tid) = target_id {
+            ps.set_active_layer(Some(tid));
+            let pad8 = |v: &[f32]| -> Vec<f64> {
+                (0..8).map(|i| v.get(i).copied().unwrap_or(0.0).clamp(-100.0, 100.0) as f64).collect()
+            };
+            let _ = ps.execute(
+                "filter.cameraRaw",
+                json!({
+                    "hslHue": pad8(&hsl_hue),
+                    "hslSat": pad8(&hsl_sat),
+                    "hslLum": pad8(&hsl_lum)
+                }),
+            );
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits 8-Channel HSL Color Mixer once at full resolution.
+    pub fn apply_hsl_mixer(
+        &self,
+        hsl_hue: Vec<f32>,
+        hsl_sat: Vec<f32>,
+        hsl_lum: Vec<f32>,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "HSL Mikser uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        let pad8 = |v: &[f32]| -> Vec<f64> {
+            (0..8).map(|i| v.get(i).copied().unwrap_or(0.0).clamp(-100.0, 100.0) as f64).collect()
+        };
+        guard
+            .session
+            .execute(
+                "filter.cameraRaw",
+                json!({
+                    "hslHue": pad8(&hsl_hue),
+                    "hslSat": pad8(&hsl_sat),
+                    "hslLum": pad8(&hsl_lum)
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Native Paint Bucket (`paint.bucket`) flood-fill at `(x, y)` with tolerance & contiguous option.
+    pub fn apply_paint_bucket(
+        &self,
+        x: i32,
+        y: i32,
+        color_hex: String,
+        tolerance: u32,
+        contiguous: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        guard
+            .session
+            .execute(
+                "paint.bucket",
+                json!({
+                    "x": x,
+                    "y": y,
+                    "color": color_hex,
+                    "tolerance": tolerance.min(255),
+                    "contiguous": contiguous,
+                    "antiAlias": true,
+                    "sampleAllLayers": true,
+                    "opacity": 100.0
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     pub fn end_proxy_preview(&self) {
         let mut guard = self.core.lock();
         if guard.proxy_preview.take().is_some() {
@@ -4474,5 +4737,61 @@ mod v08_automated_tests {
         assert!(info.can_undo, "manual selection stroke must be undoable");
         let _ = eng.undo().expect("undo manual selection");
         assert!(eng.get_selection_bounds().is_none(), "undo must cleanly remove manual selection");
+    }
+
+    #[test]
+    fn test_v110_smart_remove_background_and_portrait_blur() {
+        let eng = test_engine();
+        let w = 128u32;
+        let h = 128u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let subject = (36..92).contains(&x) && (36..92).contains(&y);
+                rgba[i] = if subject { 230 } else { 20 };
+                rgba[i + 1] = if subject { 40 } else { 150 };
+                rgba[i + 2] = if subject { 50 } else { 210 };
+                rgba[i + 3] = 255;
+            }
+        }
+        eng.open_rgba_bytes("subj.png".into(), w, h, rgba).expect("open");
+        let info_blur = eng.smart_portrait_blur(12.0).expect("smart portrait blur");
+        assert_eq!((info_blur.width, info_blur.height), (w, h));
+        let info_rm = eng.smart_remove_background().expect("smart remove bg");
+        assert_eq!((info_rm.width, info_rm.height), (w, h));
+    }
+
+    #[test]
+    fn test_v110_live_cinema_look_thumbs_returns_7_previews() {
+        let eng = test_engine();
+        eng.new_document("thumbs".into(), 120, 90).expect("new_document");
+        let thumbs = eng.render_cinema_look_thumbs(64).expect("cinema thumbs");
+        assert_eq!(thumbs.len(), 7, "must return all 7 live cinema look preview thumbnails");
+        assert!(thumbs[0].width <= 64 && thumbs[0].height <= 64 && !thumbs[0].rgba.is_empty());
+    }
+
+    #[test]
+    fn test_v110_8channel_hsl_mixer_proxy_and_apply() {
+        let eng = test_engine();
+        eng.new_document("hsl".into(), 96, 96).expect("new_document");
+        let hue = vec![20.0, 0.0, 0.0, -30.0, 0.0, 40.0, 0.0, 0.0];
+        let sat = vec![30.0, 0.0, 10.0, 20.0, 0.0, 50.0, 0.0, 0.0];
+        let lum = vec![0.0, 0.0, 0.0, 0.0, 0.0, -15.0, 0.0, 0.0];
+        eng.begin_proxy_preview().expect("begin proxy");
+        eng.update_proxy_hsl_mixer(hue.clone(), sat.clone(), lum.clone()).expect("proxy hsl");
+        eng.end_proxy_preview();
+        let info = eng.apply_hsl_mixer(hue, sat, lum).expect("apply hsl");
+        assert_eq!((info.width, info.height), (96, 96));
+    }
+
+    #[test]
+    fn test_v110_paint_bucket_and_posterize_threshold() {
+        let eng = test_engine();
+        eng.new_document("bucket".into(), 96, 96).expect("new_document");
+        let _ = eng.apply_paint_bucket(48, 48, "#4F9CFF".into(), 32, true).expect("paint bucket");
+        let _ = eng.apply_adjustment_once("posterize".into(), r#"{"levels":5}"#.into()).expect("posterize");
+        let info = eng.apply_adjustment_once("threshold".into(), r#"{"level":128}"#.into()).expect("threshold");
+        assert!(info.layer_count >= 4);
     }
 }
