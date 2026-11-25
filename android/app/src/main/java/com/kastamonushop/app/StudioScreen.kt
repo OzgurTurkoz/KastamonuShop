@@ -87,6 +87,7 @@ import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+@Composable
 fun StonebridgeStudioScreen(
     vm: EditorViewModel = viewModel(),
     onGoHome: () -> Unit = {}
