@@ -1255,8 +1255,9 @@ impl KastamonuEngine {
             .to_string();
         let size_pt = run0.and_then(|r| r.get("size").and_then(Value::as_f64)).unwrap_or(48.0) as f32;
         let size_px = (size_pt * dpi / 72.0).clamp(12.0, 500.0);
-        let weight = run0.and_then(|r| r.get("weight").and_then(Value::as_u64)).unwrap_or(400);
-        let bold = weight >= 600;
+        let weight = run0.and_then(|r| r.get("weight").and_then(Value::as_f64)).unwrap_or(400.0);
+        let faux_bold = run0.and_then(|r| r.get("fauxBold").and_then(Value::as_bool)).unwrap_or(false);
+        let bold = weight >= 600.0 || faux_bold;
         let italic = run0.and_then(|r| r.get("italic").and_then(Value::as_bool)).unwrap_or(false);
         let tracking = run0.and_then(|r| r.get("tracking").and_then(Value::as_f64)).unwrap_or(0.0) as f32;
         let line_height = match run0.and_then(|r| r.get("leading")) {
@@ -1372,7 +1373,9 @@ impl KastamonuEngine {
                 "layer": lid,
                 "size": size_pt,
                 "weight": weight,
+                "fauxBold": bold,
                 "italic": italic,
+                "fauxItalic": italic,
                 "color": color_hex,
                 "align": align_str,
                 "tracking": tracking_clamped,
@@ -1395,7 +1398,9 @@ impl KastamonuEngine {
             "y": y,
             "size": size_pt,
             "weight": weight,
+            "fauxBold": bold,
             "italic": italic,
+            "fauxItalic": italic,
             "color": color_hex,
             "align": align_str,
             "tracking": tracking_clamped,
