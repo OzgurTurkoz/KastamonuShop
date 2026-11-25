@@ -237,6 +237,10 @@ fun StonebridgeStudioScreen(
                 clearGpuPreview()
                 s.activePanel = BottomPanel.DOCK
             }
+            BottomPanel.LAYER_TRANSFORM -> {
+                vm.clearActiveLayerPreview()
+                s.activePanel = BottomPanel.DOCK
+            }
             BottomPanel.CROP_MENU -> {
                 if (s.pendingQuarterTurns != 0 || s.pendingFlipH || s.pendingFlipV) {
                     clearGpuPreview()
@@ -1080,35 +1084,140 @@ fun StonebridgeStudioScreen(
             }
         }
 
-        // Interactive 60 FPS Active Layer Move / Scale / Rotate Overlay
+        val curActiveLayerId = state.layers.firstOrNull { it.isActive }?.id
+        LaunchedEffect(s.activePanel, curActiveLayerId) {
+            if (s.activePanel == BottomPanel.LAYER_TRANSFORM && curActiveLayerId != null) {
+                s.layerDx = 0f
+                s.layerDy = 0f
+                s.layerScaleXPct = 100f
+                s.layerScaleYPct = 100f
+                s.layerScalePct = 100f
+                s.layerRotDeg = 0f
+                vm.loadActiveLayerPreview()
+            }
+        }
+
+        // Interactive 60 FPS Active Layer Move / Free XY Stretch / Rotate Overlay (8 handles: 4 corners + 4 edges)
         if (s.activePanel == BottomPanel.LAYER_TRANSFORM) {
             val view = s.canvasViewRef
             val prev = activeLayerPrev
             if (view != null && prev != null) {
                 val _tick = s.cameraTick
                 val b = prev.first
+                val baseW = (b.x1 - b.x0).coerceAtLeast(10).toFloat()
+                val baseH = (b.y1 - b.y0).coerceAtLeast(10).toFloat()
                 val z = view.getCurrentZoom().coerceAtLeast(0.05f)
                 val cxDoc = (b.x0 + b.x1) * 0.5f + s.layerDx
                 val cyDoc = (b.y0 + b.y1) * 0.5f + s.layerDy
-                val halfW = (b.x1 - b.x0).coerceAtLeast(10) * 0.5f * (s.layerScalePct / 100f)
-                val halfH = (b.y1 - b.y0).coerceAtLeast(10) * 0.5f * (s.layerScalePct / 100f)
+                val curWDoc = baseW * (s.layerScaleXPct / 100f)
+                val curHDoc = baseH * (s.layerScaleYPct / 100f)
                 val (sCx, sCy) = view.docToScreen(cxDoc, cyDoc)
-                val boxW = halfW * 2f * z
-                val boxH = halfH * 2f * z
+                val boxW = curWDoc * z
+                val boxH = curHDoc * z
+                val handleHitPx = with(density) { 26.dp.toPx() }
 
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(z) {
-                            detectTransformGestures { _, pan, zoomChange, rotationChange ->
-                                s.layerDx += pan.x / z
-                                s.layerDy += pan.y / z
-                                if (zoomChange != 1f) {
-                                    s.layerScalePct = (s.layerScalePct * zoomChange).coerceIn(15f, 300f)
-                                }
-                                if (rotationChange != 0f) {
-                                    val nextRot = s.layerRotDeg + rotationChange
-                                    s.layerRotDeg = ((nextRot + 180f) % 360f + 360f) % 360f - 180f
+                        .pointerInput(b, z, s.layerLockAspect) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    val p0 = down.position
+                                    val cW = baseW * (s.layerScaleXPct / 100f) * z
+                                    val cH = baseH * (s.layerScaleYPct / 100f) * z
+                                    val (cx0, cy0) = view.docToScreen((b.x0 + b.x1) * 0.5f + s.layerDx, (b.y0 + b.y1) * 0.5f + s.layerDy)
+                                    val rad = Math.toRadians(s.layerRotDeg.toDouble())
+                                    val cosR = kotlin.math.cos(rad).toFloat()
+                                    val sinR = kotlin.math.sin(rad).toFloat()
+                                    fun toScreenLocal(lx: Float, ly: Float) = Offset(cx0 + lx * cosR - ly * sinR, cy0 + lx * sinR + ly * cosR)
+                                    val hw = cW * 0.5f; val hh = cH * 0.5f
+                                    // 0=TL, 1=TR, 2=BR, 3=BL, 4=Top, 5=Right, 6=Bottom, 7=Left
+                                    val handles = listOf(
+                                        toScreenLocal(-hw, -hh), toScreenLocal(hw, -hh),
+                                        toScreenLocal(hw, hh), toScreenLocal(-hw, hh),
+                                        toScreenLocal(0f, -hh), toScreenLocal(hw, 0f),
+                                        toScreenLocal(0f, hh), toScreenLocal(-hw, 0f)
+                                    )
+                                    var grab = -1
+                                    var bestD = handleHitPx
+                                    handles.forEachIndexed { idx, pt ->
+                                        val d = hypot((p0.x - pt.x).toDouble(), (p0.y - pt.y).toDouble()).toFloat()
+                                        if (d < bestD) { bestD = d; grab = idx }
+                                    }
+                                    var prevSingle = p0
+                                    var prevDist = 0f
+                                    var prevAngle = 0f
+                                    var prevMid = Offset.Zero
+                                    var wasMulti = false
+
+                                    while (true) {
+                                        val ev = awaitPointerEvent()
+                                        val active = ev.changes.filter { it.pressed }
+                                        if (active.isEmpty()) break
+                                        if (active.size >= 2) {
+                                            val a0 = active[0].position
+                                            val a1 = active[1].position
+                                            val mid = Offset((a0.x + a1.x) * 0.5f, (a0.y + a1.y) * 0.5f)
+                                            val dist = hypot((a1.x - a0.x).toDouble(), (a1.y - a0.y).toDouble()).toFloat().coerceAtLeast(1f)
+                                            val ang = kotlin.math.atan2((a1.y - a0.y).toDouble(), (a1.x - a0.x).toDouble()).toFloat()
+                                            if (wasMulti && prevDist > 1f) {
+                                                val zf = (dist / prevDist).coerceIn(0.85f, 1.18f)
+                                                s.layerScaleXPct = (s.layerScaleXPct * zf).coerceIn(10f, 450f)
+                                                s.layerScaleYPct = (s.layerScaleYPct * zf).coerceIn(10f, 450f)
+                                                s.layerScalePct = (s.layerScaleXPct + s.layerScaleYPct) * 0.5f
+                                                s.layerDx += (mid.x - prevMid.x) / z
+                                                s.layerDy += (mid.y - prevMid.y) / z
+                                                var dAng = Math.toDegrees((ang - prevAngle).toDouble()).toFloat()
+                                                if (dAng > 180f) dAng -= 360f
+                                                if (dAng < -180f) dAng += 360f
+                                                val nextRot = s.layerRotDeg + dAng
+                                                s.layerRotDeg = ((nextRot + 180f) % 360f + 360f) % 360f - 180f
+                                            }
+                                            prevDist = dist; prevAngle = ang; prevMid = mid; wasMulti = true
+                                            active.forEach { it.consume() }
+                                        } else if (!wasMulti) {
+                                            val ch = active[0]
+                                            val dxs = ch.position.x - prevSingle.x
+                                            val dys = ch.position.y - prevSingle.y
+                                            prevSingle = ch.position
+                                            if (grab < 0) {
+                                                s.layerDx += dxs / z
+                                                s.layerDy += dys / z
+                                            } else {
+                                                // Project screen delta into layer's rotated local space
+                                                val rRad = Math.toRadians(s.layerRotDeg.toDouble())
+                                                val cR = kotlin.math.cos(rRad).toFloat()
+                                                val sR = kotlin.math.sin(rRad).toFloat()
+                                                val dlx = (dxs * cR + dys * sR) / z
+                                                val dly = (-dxs * sR + dys * cR) / z
+                                                val sxSign = when (grab) { 0, 3, 7 -> -1f; 1, 2, 5 -> 1f; else -> 0f }
+                                                val sySign = when (grab) { 0, 1, 4 -> -1f; 2, 3, 6 -> 1f; else -> 0f }
+                                                var dW = dlx * sxSign
+                                                var dH = dly * sySign
+                                                if (s.layerLockAspect && sxSign != 0f && sySign != 0f) {
+                                                    val avgPct = ((dW / baseW) + (dH / baseH)) * 0.5f
+                                                    dW = avgPct * baseW
+                                                    dH = avgPct * baseH
+                                                }
+                                                val oldW = baseW * (s.layerScaleXPct / 100f)
+                                                val oldH = baseH * (s.layerScaleYPct / 100f)
+                                                val newW = (oldW + dW).coerceIn(baseW * 0.10f, baseW * 4.5f)
+                                                val newH = (oldH + dH).coerceIn(baseH * 0.10f, baseH * 4.5f)
+                                                val realDW = newW - oldW
+                                                val realDH = newH - oldH
+                                                s.layerScaleXPct = (newW / baseW) * 100f
+                                                s.layerScaleYPct = (newH / baseH) * 100f
+                                                s.layerScalePct = (s.layerScaleXPct + s.layerScaleYPct) * 0.5f
+                                                // Anchor opposite edge/corner by shifting center half the delta in rotated space!
+                                                val shiftLocalX = realDW * 0.5f * sxSign
+                                                val shiftLocalY = realDH * 0.5f * sySign
+                                                s.layerDx += shiftLocalX * cR - shiftLocalY * sR
+                                                s.layerDy += shiftLocalX * sR + shiftLocalY * cR
+                                            }
+                                            ch.consume()
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1135,6 +1244,26 @@ fun StonebridgeStudioScreen(
                                 alpha = 1.0f,
                                 modifier = Modifier.fillMaxSize()
                             )
+                        }
+                    }
+                    // Draw 4 corner handles + 4 edge stretch handles on top (always crisp regardless of scale!)
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val _t = s.cameraTick
+                        if (_t < 0) return@Canvas
+                        val rad = Math.toRadians(s.layerRotDeg.toDouble())
+                        val cosR = kotlin.math.cos(rad).toFloat()
+                        val sinR = kotlin.math.sin(rad).toFloat()
+                        val hw = boxW * 0.5f; val hh = boxH * 0.5f
+                        fun pt(lx: Float, ly: Float) = Offset(sCx + lx * cosR - ly * sinR, sCy + lx * sinR + ly * cosR)
+                        val corners = listOf(pt(-hw, -hh), pt(hw, -hh), pt(hw, hh), pt(-hw, hh))
+                        val edges = listOf(pt(0f, -hh), pt(hw, 0f), pt(0f, hh), pt(-hw, 0f))
+                        corners.forEach { c ->
+                            drawCircle(Color.White, radius = 10f, center = c)
+                            drawCircle(Color(0xFF4F9CFF), radius = 6.5f, center = c)
+                        }
+                        edges.forEach { e ->
+                            drawCircle(Color.White, radius = 8f, center = e)
+                            drawCircle(Color(0xFF2ED573), radius = 5f, center = e)
                         }
                     }
                 }
@@ -1381,36 +1510,53 @@ fun StonebridgeStudioScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(docW, docH, s.shapeKind, s.shapeFillHex, s.shapeStrokeHex, s.shapeStrokeWidth, s.shapeCornerRadius, s.shapeSides) {
-                            var dragMode = 3 // 1=handle0, 2=handle1, 3=move (rigid, never resizes!)
+                            var dragMode = 5 // 1=TL, 2=TR, 3=BR, 4=BL, 5=rigid move
                             var lastDocX = 0f
                             var lastDocY = 0f
                             detectDragGestures(
                                 onDragStart = { pos ->
                                     val (c0x, c0y) = viewRef.docToScreen(docW * s.shapeX0Norm, docH * s.shapeY0Norm)
                                     val (c1x, c1y) = viewRef.docToScreen(docW * s.shapeX1Norm, docH * s.shapeY1Norm)
-                                    val d0 = kotlin.math.hypot(pos.x - c0x, pos.y - c0y)
-                                    val d1 = kotlin.math.hypot(pos.x - c1x, pos.y - c1y)
                                     val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
                                     lastDocX = dx
                                     lastDocY = dy
-                                    dragMode = when {
-                                        d0 <= handleHitPx -> 1
-                                        d1 <= handleHitPx -> 2
-                                        else -> 3
+                                    if (s.shapeKind == "line") {
+                                        val d0 = kotlin.math.hypot(pos.x - c0x, pos.y - c0y)
+                                        val d1 = kotlin.math.hypot(pos.x - c1x, pos.y - c1y)
+                                        dragMode = when {
+                                            d0 <= handleHitPx -> 1
+                                            d1 <= handleHitPx -> 3
+                                            else -> 5
+                                        }
+                                    } else {
+                                        // Normalize so x0<=x1 and y0<=y1 for clean 4-corner handles
+                                        val nx0 = min(s.shapeX0Norm, s.shapeX1Norm)
+                                        val nx1 = kotlin.math.max(s.shapeX0Norm, s.shapeX1Norm)
+                                        val ny0 = min(s.shapeY0Norm, s.shapeY1Norm)
+                                        val ny1 = kotlin.math.max(s.shapeY0Norm, s.shapeY1Norm)
+                                        s.shapeX0Norm = nx0; s.shapeX1Norm = nx1; s.shapeY0Norm = ny0; s.shapeY1Norm = ny1
+                                        val (lx, ty) = viewRef.docToScreen(docW * nx0, docH * ny0)
+                                        val (rx, by) = viewRef.docToScreen(docW * nx1, docH * ny1)
+                                        val pts = listOf(Offset(lx, ty), Offset(rx, ty), Offset(rx, by), Offset(lx, by))
+                                        var best = 5
+                                        var bestD = handleHitPx
+                                        pts.forEachIndexed { idx, pt ->
+                                            val d = kotlin.math.hypot(pos.x - pt.x, pos.y - pt.y)
+                                            if (d < bestD) { bestD = d; best = idx + 1 }
+                                        }
+                                        dragMode = best
                                     }
                                 },
                                 onDrag = { change, _ ->
                                     change.consume()
                                     val (dx, dy) = viewRef.screenToDoc(change.position.x, change.position.y)
+                                    val nx = (dx / docW).coerceIn(0f, 1f)
+                                    val ny = (dy / docH).coerceIn(0f, 1f)
                                     when (dragMode) {
-                                        1 -> {
-                                            s.shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
-                                            s.shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
-                                        }
-                                        2 -> {
-                                            s.shapeX1Norm = (dx / docW).coerceIn(0f, 1f)
-                                            s.shapeY1Norm = (dy / docH).coerceIn(0f, 1f)
-                                        }
+                                        1 -> { s.shapeX0Norm = nx; s.shapeY0Norm = ny } // TL
+                                        2 -> { s.shapeX1Norm = nx; s.shapeY0Norm = ny } // TR
+                                        3 -> { s.shapeX1Norm = nx; s.shapeY1Norm = ny } // BR
+                                        4 -> { s.shapeX0Norm = nx; s.shapeY1Norm = ny } // BL
                                         else -> {
                                             val dnx = (dx - lastDocX) / docW
                                             val dny = (dy - lastDocY) / docH
@@ -1443,11 +1589,17 @@ fun StonebridgeStudioScreen(
                     val (sx0, sy0) = viewRef.docToScreen(docW * s.shapeX0Norm, docH * s.shapeY0Norm)
                     val (sx1, sy1) = viewRef.docToScreen(docW * s.shapeX1Norm, docH * s.shapeY1Norm)
                     val lx = min(sx0, sx1)
+                    val rx = kotlin.math.max(sx0, sx1)
                     val ty = min(sy0, sy1)
+                    val by = kotlin.math.max(sy0, sy1)
                     val rw = abs(sx1 - sx0).coerceAtLeast(4f)
                     val rh = abs(sy1 - sy0).coerceAtLeast(4f)
                     if (s.shapeKind == "line") {
                         drawLine(Color(0xCC4F9CFF), Offset(sx0, sy0), Offset(sx1, sy1), strokeWidth = 2.5f)
+                        listOf(Offset(sx0, sy0), Offset(sx1, sy1)).forEach { pt ->
+                            drawCircle(Color.White, radius = 10f, center = pt)
+                            drawCircle(Color(0xFF4F9CFF), radius = 6f, center = pt)
+                        }
                     } else {
                         drawRect(
                             color = Color(0xCC4F9CFF),
@@ -1455,11 +1607,11 @@ fun StonebridgeStudioScreen(
                             size = androidx.compose.ui.geometry.Size(rw, rh),
                             style = Stroke(width = 2f)
                         )
+                        listOf(Offset(lx, ty), Offset(rx, ty), Offset(rx, by), Offset(lx, by)).forEach { pt ->
+                            drawCircle(Color.White, radius = 10f, center = pt)
+                            drawCircle(Color(0xFF4F9CFF), radius = 6f, center = pt)
+                        }
                     }
-                    drawCircle(Color.White, radius = 10f, center = Offset(sx0, sy0))
-                    drawCircle(Color(0xFF4F9CFF), radius = 6f, center = Offset(sx0, sy0))
-                    drawCircle(Color.White, radius = 10f, center = Offset(sx1, sy1))
-                    drawCircle(Color(0xFF4F9CFF), radius = 6f, center = Offset(sx1, sy1))
                 }
             }
         }
@@ -1869,7 +2021,7 @@ fun StonebridgeStudioScreen(
                             onClick = {
                                 s.showLayers = false
                                 vm.setTool(ActiveTool.NONE)
-                                s.layerDx = 0f; s.layerDy = 0f; s.layerScalePct = 100f; s.layerRotDeg = 0f
+                                s.layerDx = 0f; s.layerDy = 0f; s.layerScalePct = 100f; s.layerScaleXPct = 100f; s.layerScaleYPct = 100f; s.layerRotDeg = 0f
                                 vm.loadActiveLayerPreview()
                                 s.activePanel = BottomPanel.LAYER_TRANSFORM
                             },

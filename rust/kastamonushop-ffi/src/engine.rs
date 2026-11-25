@@ -268,7 +268,6 @@ impl EngineCore {
                 "background": "white"
             }),
         );
-        let _ = session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
         let initial_snapshot = session.active().map(|ds| Arc::clone(ds.doc()));
         Self {
             session,
@@ -1108,7 +1107,6 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
         guard.capture_original_snapshot();
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
@@ -1121,14 +1119,7 @@ impl KastamonuEngine {
         if doc.name.is_empty() {
             doc.name = file_name;
         }
-        let added_draw_id = if doc.layers.len() == 1 {
-            let draw_layer = Layer::raster("Çizim Katmanı", doc.pixel_format());
-            let id = draw_layer.id;
-            doc.layers.push(draw_layer);
-            Some(id)
-        } else {
-            None
-        };
+        let top_id = doc.layers.last().map(|l| l.id);
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.live_dab = None;
@@ -1139,8 +1130,8 @@ impl KastamonuEngine {
         while guard.session.close(0).is_some() {}
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
-        if let Some(did) = added_draw_id {
-            guard.session.set_active_layer(Some(did));
+        if let Some(tid) = top_id {
+            guard.session.set_active_layer(Some(tid));
         }
         guard.capture_original_snapshot();
         guard.mark_full_dirty();
@@ -1168,10 +1159,8 @@ impl KastamonuEngine {
         let surf = Surface::from_interleaved(PixelFormat::RGBA8, rect, &rgba_bytes[..expected]);
         let mut doc = Document::new(file_name, Size::new(w, h), ColorMode::Rgb, SampleType::U8);
         let bg = Layer::new("Background", LayerContent::Raster(surf));
+        let bg_id = bg.id;
         doc.layers.push(bg);
-        let draw_layer = Layer::raster("Çizim Katmanı", doc.pixel_format());
-        let draw_id = draw_layer.id;
-        doc.layers.push(draw_layer);
 
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -1183,7 +1172,7 @@ impl KastamonuEngine {
         while guard.session.close(0).is_some() {}
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
-        guard.session.set_active_layer(Some(draw_id));
+        guard.session.set_active_layer(Some(bg_id));
         guard.capture_original_snapshot();
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
@@ -4116,31 +4105,77 @@ impl KastamonuEngine {
             (id, locked)
         };
 
+        drop(guard);
+        self.transform_active_layer_xy(dx, dy, scale_pct, scale_pct, rotate_deg)
+    }
+
+    /// Independently moves, stretches (scaleX%, scaleY%), and rotates (deg) the active layer in 1 clean Undo step.
+    pub fn transform_active_layer_xy(
+        &self,
+        dx: f32,
+        dy: f32,
+        scale_x_pct: f32,
+        scale_y_pct: f32,
+        rotate_deg: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_clone = None;
+        guard.proxy_preview = None;
+        guard.transform_hidden_layer = None;
+
+        let (active_id, prev_locks) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let id = ds.active_layer().ok_or_else(|| EngineError::CommandFailed {
+                detail: "Taşınacak aktif katman seçili değil".into(),
+            })?;
+            let locks = ds
+                .doc()
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| (l.locks.pixels, l.locks.position, l.locks.all))
+                .unwrap_or((false, false, false));
+            (id, locks)
+        };
+
+        let was_locked = prev_locks.0 || prev_locks.1 || prev_locks.2;
         if was_locked {
-            let _ = guard.session.execute(
-                "layer.setProps",
-                json!({ "layer": active_id.0, "locks": { "pixels": false, "position": false, "all": false } }),
-            );
+            if let Some(ds) = guard.session.active_mut() {
+                let doc = Arc::make_mut(ds.doc_mut());
+                if let Some(l) = doc.layers.iter_mut().find(|l| l.id == active_id) {
+                    l.locks.pixels = false;
+                    l.locks.position = false;
+                    l.locks.all = false;
+                }
+            }
         }
 
-        let sc = scale_pct.clamp(5.0, 500.0) as f64;
+        let sx = scale_x_pct.clamp(5.0, 500.0) as f64;
+        let sy = scale_y_pct.clamp(5.0, 500.0) as f64;
         let res = guard.session.execute(
             "edit.transform",
             json!({
                 "dx": dx as f64,
                 "dy": dy as f64,
-                "scaleX": sc,
-                "scaleY": sc,
+                "scaleX": sx,
+                "scaleY": sy,
                 "rotate": rotate_deg as f64,
                 "interpolation": "bicubic"
             }),
         );
 
         if was_locked {
-            let _ = guard.session.execute(
-                "layer.setProps",
-                json!({ "layer": active_id.0, "locks": { "pixels": true } }),
-            );
+            if let Some(ds) = guard.session.active_mut() {
+                let doc = Arc::make_mut(ds.doc_mut());
+                if let Some(l) = doc.layers.iter_mut().find(|l| l.id == active_id) {
+                    l.locks.pixels = prev_locks.0;
+                    l.locks.position = prev_locks.1;
+                    l.locks.all = prev_locks.2;
+                }
+            }
         }
 
         res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -4451,6 +4486,49 @@ impl KastamonuEngine {
 
     /// Generates a lightweight RGBA8 mini-thumbnail (<= max_dim px) for a single layer
     /// so the user can visually see what is painted on each layer in the Layers panel.
+    /// Renders ONLY the layer's tight `content_bounds` (zero canvas letterboxing) for 1:1 Free Transform preview.
+    pub fn get_layer_bounds_preview(&self, layer_id: u64, max_dim: u32) -> Result<Option<LayerThumbnail>, EngineError> {
+        let guard = self.core.lock();
+        let doc = guard.active_document().ok_or(EngineError::NoActiveDocument)?;
+        let Some(layer) = doc.layers.iter().find(|l| l.id.0 == layer_id) else {
+            return Ok(None);
+        };
+        let LayerContent::Raster(surf) = &layer.content else {
+            return Ok(None);
+        };
+        let cb = surf.content_bounds();
+        let b = if cb.is_empty() { doc.bounds() } else { cb };
+        let bw = (b.x1 - b.x0).max(1) as u32;
+        let bh = (b.y1 - b.y0).max(1) as u32;
+        let cap = max_dim.clamp(32, 1024);
+        let scale = (cap as f32 / bw.max(bh) as f32).min(1.0);
+        let tw = ((bw as f32 * scale).round() as u32).clamp(1, cap);
+        let th = ((bh as f32 * scale).round() as u32).clamp(1, cap);
+
+        let mut rgba = vec![0u8; (tw as usize) * (th as usize) * 4];
+        let sx_step = bw as f32 / tw as f32;
+        let sy_step = bh as f32 / th as f32;
+        let mask_ref = layer.mask.as_ref().filter(|m| m.enabled);
+
+        for y in 0..th {
+            let dy = b.y0 + ((y as f32 + 0.5) * sy_step) as i32;
+            for x in 0..tw {
+                let dx = b.x0 + ((x as f32 + 0.5) * sx_step) as i32;
+                let p = surf.rgba(dx, dy);
+                let mut a = p[3].clamp(0.0, 1.0);
+                if let Some(m) = mask_ref {
+                    a *= m.value(dx, dy).clamp(0.0, 1.0);
+                }
+                let o = ((y as usize) * (tw as usize) + (x as usize)) * 4;
+                rgba[o] = (p[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[o + 1] = (p[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[o + 2] = (p[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[o + 3] = (a * 255.0).round() as u8;
+            }
+        }
+        Ok(Some(LayerThumbnail { width: tw, height: th, rgba }))
+    }
+
     pub fn get_layer_thumbnail(&self, layer_id: u64, max_dim: u32) -> Result<Option<LayerThumbnail>, EngineError> {
         let guard = self.core.lock();
         let doc = guard.active_document().ok_or(EngineError::NoActiveDocument)?;
@@ -6606,19 +6684,19 @@ mod v08_automated_tests {
         let rgba = vec![180u8, 120, 90, 255].repeat(64 * 64);
         let info0 = eng.open_rgba_bytes("cat.png".into(), 64, 64, rgba).unwrap();
         assert!(!info0.can_undo, "Freshly opened photo should start with 0 undo steps");
-        assert_eq!(eng.get_layers().unwrap().len(), 2, "Background + Çizim Katmanı");
+        assert_eq!(eng.get_layers().unwrap().len(), 1, "Single Background layer only");
 
         let png = eng.export_document_bytes("png".into()).unwrap();
         let info1 = eng.place_image_bytes("overlay.png".into(), png).unwrap();
         assert!(info1.can_undo);
-        assert_eq!(eng.get_layers().unwrap().len(), 3);
+        assert_eq!(eng.get_layers().unwrap().len(), 2);
 
         let info2 = eng.undo().unwrap();
-        assert_eq!(eng.get_layers().unwrap().len(), 2);
+        assert_eq!(eng.get_layers().unwrap().len(), 1);
         assert!(info2.can_redo);
 
         let _ = eng.redo().unwrap();
-        assert_eq!(eng.get_layers().unwrap().len(), 3);
+        assert_eq!(eng.get_layers().unwrap().len(), 2);
     }
 
     #[test]
@@ -6643,5 +6721,21 @@ mod v08_automated_tests {
         let _ = eng.redo().unwrap();
         let layers_after = eng.get_layers().unwrap();
         assert!(layers_after.iter().find(|l| l.is_background).unwrap().visible);
+    }
+
+    #[test]
+    fn test_v144_free_xy_transform_and_bounds_preview() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        let rgba = vec![80u8, 160, 240, 255].repeat(80 * 40);
+        let _ = eng.open_rgba_bytes("wide.png".into(), 80, 40, rgba).unwrap();
+        let bg = eng.get_layers().unwrap()[0].id;
+        let prev = eng.get_layer_bounds_preview(bg, 256).unwrap().expect("bounds preview");
+        assert_eq!((prev.width, prev.height), (80, 40));
+
+        // Stretch Y independently (100% X, 180% Y) in 1 clean Undo step
+        let info = eng.transform_active_layer_xy(0.0, -5.0, 100.0, 180.0, 0.0).unwrap();
+        assert!(info.can_undo);
+        let undone = eng.undo().unwrap();
+        assert!(!undone.can_undo, "Free XY transform must be a single clean undo step");
     }
 }

@@ -1519,23 +1519,58 @@ private fun StudioBottomPanelHostPart2(
                     val activeName = state.layers.firstOrNull { it.isActive }?.name ?: "Aktif Katman"
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         BottomEditorHeader(
                             title = "Katmanı Taşı: $activeName",
-                            subtitle = "1 parmak taşı · 2 parmak büyüt/küçült ve döndür",
+                            subtitle = "İçinden taşı · Kenar/köşeden serbest uzat · 2 parmak döndür",
                             applyLabel = "Uygula",
                             onClose = {
                                 vm.clearActiveLayerPreview()
                                 s.activePanel = BottomPanel.DOCK
                             },
                             onApply = {
-                                vm.transformActiveLayer(s.layerDx, s.layerDy, s.layerScalePct, s.layerRotDeg)
+                                vm.transformActiveLayerXY(s.layerDx, s.layerDy, s.layerScaleXPct, s.layerScaleYPct, s.layerRotDeg)
                                 s.activePanel = BottomPanel.DOCK
                             }
                         )
-                        CompactSliderRow("Boyut", "%${s.layerScalePct.roundToInt()}", s.layerScalePct, 15f..250f, defaultValue = 100f) {
-                            s.layerScalePct = it
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilterChip(
+                                selected = !s.layerLockAspect,
+                                onClick = { s.layerLockAspect = false },
+                                label = { Text("Serbest Uzat", fontSize = 11.sp) }
+                            )
+                            FilterChip(
+                                selected = s.layerLockAspect,
+                                onClick = {
+                                    s.layerLockAspect = true
+                                    val avg = (s.layerScaleXPct + s.layerScaleYPct) * 0.5f
+                                    s.layerScaleXPct = avg; s.layerScaleYPct = avg; s.layerScalePct = avg
+                                },
+                                label = { Text("Oranlı", fontSize = 11.sp) }
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                s.layerDx = 0f; s.layerDy = 0f; s.layerScaleXPct = 100f; s.layerScaleYPct = 100f; s.layerScalePct = 100f; s.layerRotDeg = 0f
+                            }) {
+                                Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFB8BDD0))
+                            }
+                        }
+                        if (s.layerLockAspect) {
+                            CompactSliderRow("Boyut", "%${s.layerScaleXPct.roundToInt()}", s.layerScaleXPct, 10f..350f, defaultValue = 100f) {
+                                s.layerScaleXPct = it; s.layerScaleYPct = it; s.layerScalePct = it
+                            }
+                        } else {
+                            CompactSliderRow("Genişlik", "%${s.layerScaleXPct.roundToInt()}", s.layerScaleXPct, 10f..350f, defaultValue = 100f) {
+                                s.layerScaleXPct = it
+                            }
+                            CompactSliderRow("Yükseklik", "%${s.layerScaleYPct.roundToInt()}", s.layerScaleYPct, 10f..350f, defaultValue = 100f) {
+                                s.layerScaleYPct = it
+                            }
                         }
                         CompactSliderRow("Döndür", "${s.layerRotDeg.roundToInt()}°", s.layerRotDeg, -180f..180f, defaultValue = 0f) {
                             s.layerRotDeg = it

@@ -1745,7 +1745,7 @@ class EditorViewModel : ViewModel() {
                 val active = engine.getLayers().firstOrNull { it.isActive }
                 var bmpImg: ImageBitmap? = null
                 if (active != null) {
-                    val thumb = runCatching { engine.getLayerThumbnail(active.id, 512u) }.getOrNull()
+                    val thumb = runCatching { engine.getLayerBoundsPreview(active.id, 768u) }.getOrNull()
                     if (thumb != null) {
                         val w = thumb.width.toInt()
                         val h = thumb.height.toInt()
@@ -1779,10 +1779,14 @@ class EditorViewModel : ViewModel() {
     }
 
     fun transformActiveLayer(dx: Float, dy: Float, scalePct: Float, rotateDeg: Float) {
+        transformActiveLayerXY(dx, dy, scalePct, scalePct, rotateDeg)
+    }
+
+    fun transformActiveLayerXY(dx: Float, dy: Float, scaleXPct: Float, scaleYPct: Float, rotateDeg: Float) {
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
-                val info = engine.transformActiveLayer(dx, dy, scalePct, rotateDeg)
+                val info = engine.transformActiveLayerXy(dx, dy, scaleXPct, scaleYPct, rotateDeg)
                 val layers = engine.getLayers()
                 _activeLayerPreview.value = null
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
