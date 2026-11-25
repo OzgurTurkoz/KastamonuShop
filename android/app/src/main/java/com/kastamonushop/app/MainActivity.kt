@@ -3457,167 +3457,88 @@ fun StonebridgeStudioScreen(
                         }
                     )
                 }
-                BottomPanel.LIGHT_LIVE -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Işık & Kontrast",
-                            subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                clearAdjustGpuPreviewOnly()
-                                activePanel = BottomPanel.ADJUST_MENU
-                            },
-                            onApply = {
-                                if (brightnessVal.roundToInt() == 0 && contrastVal.roundToInt() == 0) {
-                                    clearAdjustGpuPreviewOnly()
-                                } else {
-                                    vm.applyAdjustmentOnce(
-                                        "brightnessContrast",
-                                        """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""",
-                                        "Işık & Kontrast"
-                                    )
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Parlaklık", "${brightnessVal.roundToInt()}", brightnessVal, -100f..100f, defaultValue = 0f) {
-                            brightnessVal = it
-                            vm.updateProxyAdjustment("brightnessContrast", """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
-                        }
-                        CompactSliderRow("Kontrast", "${contrastVal.roundToInt()}", contrastVal, -50f..100f, defaultValue = 0f) {
-                            contrastVal = it
-                            vm.updateProxyAdjustment("brightnessContrast", """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
-                        }
+                BottomPanel.LIGHT_LIVE -> LightLivePanel(
+                    brightness = brightnessVal,
+                    contrast = contrastVal,
+                    onBrightness = {
+                        brightnessVal = it
+                        vm.updateProxyAdjustment("brightnessContrast", """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
+                    },
+                    onContrast = {
+                        contrastVal = it
+                        vm.updateProxyAdjustment("brightnessContrast", """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""")
+                    },
+                    onClose = { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = {
+                        if (brightnessVal.roundToInt() == 0 && contrastVal.roundToInt() == 0) clearAdjustGpuPreviewOnly()
+                        else vm.applyAdjustmentOnce("brightnessContrast", """{"brightness":${brightnessVal.roundToInt()},"contrast":${contrastVal.roundToInt()}}""", "Işık & Kontrast")
+                        activePanel = BottomPanel.DOCK
                     }
-                }
+                )
 
-                BottomPanel.COLOR_LIVE -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Renk & Canlılık",
-                            subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                clearAdjustGpuPreviewOnly()
-                                activePanel = BottomPanel.ADJUST_MENU
-                            },
-                            onApply = {
-                                if (saturationVal.roundToInt() == 0 && hueVal.roundToInt() == 0) {
-                                    clearAdjustGpuPreviewOnly()
-                                } else {
-                                    vm.applyAdjustmentOnce(
-                                        "hueSaturation",
-                                        """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""",
-                                        "Renk & Canlılık"
-                                    )
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Canlılık", "${saturationVal.roundToInt()}", saturationVal, -100f..100f, defaultValue = 0f) {
-                            saturationVal = it
-                            vm.updateProxyAdjustment("hueSaturation", """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
-                        }
-                        CompactSliderRow("Renk Tonu", "${hueVal.roundToInt()}°", hueVal, -180f..180f, defaultValue = 0f) {
-                            hueVal = it
-                            vm.updateProxyAdjustment("hueSaturation", """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
-                        }
+                BottomPanel.COLOR_LIVE -> ColorLivePanel(
+                    saturation = saturationVal,
+                    hue = hueVal,
+                    onSaturation = {
+                        saturationVal = it
+                        vm.updateProxyAdjustment("hueSaturation", """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
+                    },
+                    onHue = {
+                        hueVal = it
+                        vm.updateProxyAdjustment("hueSaturation", """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""")
+                    },
+                    onClose = { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = {
+                        if (saturationVal.roundToInt() == 0 && hueVal.roundToInt() == 0) clearAdjustGpuPreviewOnly()
+                        else vm.applyAdjustmentOnce("hueSaturation", """{"hue":${hueVal.roundToInt()},"saturation":${saturationVal.roundToInt()},"lightness":0}""", "Renk & Canlılık")
+                        activePanel = BottomPanel.DOCK
                     }
-                }
+                )
 
-                BottomPanel.LEVELS_LIVE -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Düzeyler (Levels)",
-                            subtitle = "60 FPS canlı önizleme — Uygula ile katman oluştur",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                clearAdjustGpuPreviewOnly()
-                                activePanel = BottomPanel.ADJUST_MENU
-                            },
-                            onApply = {
-                                val ib = levelsBlackVal.roundToInt().coerceIn(0, 240)
-                                val iw = levelsWhiteVal.roundToInt().coerceIn(ib + 10, 255)
-                                if (ib == 0 && iw == 255 && kotlin.math.abs(levelsGammaVal - 1f) < 0.02f) {
-                                    clearAdjustGpuPreviewOnly()
-                                } else {
-                                    val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal)
-                                    vm.applyAdjustmentOnce(
-                                        "levels",
-                                        """{"inBlack":$ib,"gamma":$gStr,"inWhite":$iw}""",
-                                        "Düzeyler"
-                                    )
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Siyahlar", "${levelsBlackVal.roundToInt()}", levelsBlackVal, 0f..180f, defaultValue = 0f) {
-                            levelsBlackVal = it.coerceAtMost(levelsWhiteVal - 15f)
-                            val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal); vm.updateProxyAdjustment("levels", """{"inBlack":${levelsBlackVal.roundToInt()},"gamma":$gStr,"inWhite":${levelsWhiteVal.roundToInt()}}""")
+                BottomPanel.LEVELS_LIVE -> LevelsLivePanel(
+                    inBlack = levelsBlackVal,
+                    gamma = levelsGammaVal,
+                    inWhite = levelsWhiteVal,
+                    onChange = { b, g, w ->
+                        levelsBlackVal = b
+                        levelsGammaVal = g
+                        levelsWhiteVal = w
+                        val gStr = String.format(java.util.Locale.US, "%.2f", g)
+                        vm.updateProxyAdjustment("levels", """{"inBlack":${b.roundToInt()},"gamma":$gStr,"inWhite":${w.roundToInt()}}""")
+                    },
+                    onClose = { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = {
+                        val ib = levelsBlackVal.roundToInt().coerceIn(0, 240)
+                        val iw = levelsWhiteVal.roundToInt().coerceIn(ib + 10, 255)
+                        if (ib == 0 && iw == 255 && kotlin.math.abs(levelsGammaVal - 1f) < 0.02f) clearAdjustGpuPreviewOnly()
+                        else {
+                            val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal)
+                            vm.applyAdjustmentOnce("levels", """{"inBlack":$ib,"gamma":$gStr,"inWhite":$iw}""", "Düzeyler")
                         }
-                        CompactSliderRow("Orta Ton", String.format(java.util.Locale.US, "%.2f", levelsGammaVal), levelsGammaVal, 0.25f..2.5f, defaultValue = 1f) {
-                            levelsGammaVal = it
-                            val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal); vm.updateProxyAdjustment("levels", """{"inBlack":${levelsBlackVal.roundToInt()},"gamma":$gStr,"inWhite":${levelsWhiteVal.roundToInt()}}""")
-                        }
-                        CompactSliderRow("Beyazlar", "${levelsWhiteVal.roundToInt()}", levelsWhiteVal, 75f..255f, defaultValue = 255f) {
-                            levelsWhiteVal = it.coerceAtLeast(levelsBlackVal + 15f)
-                            val gStr = String.format(java.util.Locale.US, "%.2f", levelsGammaVal); vm.updateProxyAdjustment("levels", """{"inBlack":${levelsBlackVal.roundToInt()},"gamma":$gStr,"inWhite":${levelsWhiteVal.roundToInt()}}""")
-                        }
+                        activePanel = BottomPanel.DOCK
                     }
-                }
+                )
 
-                BottomPanel.COLOR_BAL_LIVE -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Renk Dengesi",
-                            subtitle = "60 FPS canlı önizleme — Uygula ile katman oluştur",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                clearAdjustGpuPreviewOnly()
-                                activePanel = BottomPanel.ADJUST_MENU
-                            },
-                            onApply = {
-                                val cr = cbCyanRedVal.roundToInt()
-                                val mg = cbMagentaGreenVal.roundToInt()
-                                val yb = cbYellowBlueVal.roundToInt()
-                                if (cr == 0 && mg == 0 && yb == 0) {
-                                    clearAdjustGpuPreviewOnly()
-                                } else {
-                                    vm.applyAdjustmentOnce(
-                                        "colorBalance",
-                                        """{"midtones":[$cr,$mg,$yb],"preserveLuminosity":true}""",
-                                        "Renk Dengesi"
-                                    )
-                                }
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Camgöbeği\nKırmızı", "${cbCyanRedVal.roundToInt()}", cbCyanRedVal, -100f..100f, defaultValue = 0f) {
-                            cbCyanRedVal = it
-                            vm.updateProxyAdjustment("colorBalance", """{"midtones":[${cbCyanRedVal.roundToInt()},${cbMagentaGreenVal.roundToInt()},${cbYellowBlueVal.roundToInt()}],"preserveLuminosity":true}""")
-                        }
-                        CompactSliderRow("Macenta\nYeşil", "${cbMagentaGreenVal.roundToInt()}", cbMagentaGreenVal, -100f..100f, defaultValue = 0f) {
-                            cbMagentaGreenVal = it
-                            vm.updateProxyAdjustment("colorBalance", """{"midtones":[${cbCyanRedVal.roundToInt()},${cbMagentaGreenVal.roundToInt()},${cbYellowBlueVal.roundToInt()}],"preserveLuminosity":true}""")
-                        }
-                        CompactSliderRow("Sarı / Mavi", "${cbYellowBlueVal.roundToInt()}", cbYellowBlueVal, -100f..100f, defaultValue = 0f) {
-                            cbYellowBlueVal = it
-                            vm.updateProxyAdjustment("colorBalance", """{"midtones":[${cbCyanRedVal.roundToInt()},${cbMagentaGreenVal.roundToInt()},${cbYellowBlueVal.roundToInt()}],"preserveLuminosity":true}""")
-                        }
+                BottomPanel.COLOR_BAL_LIVE -> ColorBalanceLivePanel(
+                    cr = cbCyanRedVal,
+                    mg = cbMagentaGreenVal,
+                    yb = cbYellowBlueVal,
+                    onChange = { c, m, y ->
+                        cbCyanRedVal = c
+                        cbMagentaGreenVal = m
+                        cbYellowBlueVal = y
+                        vm.updateProxyAdjustment("colorBalance", """{"midtones":[${c.roundToInt()},${m.roundToInt()},${y.roundToInt()}],"preserveLuminosity":true}""")
+                    },
+                    onClose = { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = {
+                        val cr = cbCyanRedVal.roundToInt()
+                        val mg = cbMagentaGreenVal.roundToInt()
+                        val yb = cbYellowBlueVal.roundToInt()
+                        if (cr == 0 && mg == 0 && yb == 0) clearAdjustGpuPreviewOnly()
+                        else vm.applyAdjustmentOnce("colorBalance", """{"midtones":[$cr,$mg,$yb],"preserveLuminosity":true}""", "Renk Dengesi")
+                        activePanel = BottomPanel.DOCK
                     }
-                }
+                )
 
                 BottomPanel.CURVES_LIVE -> {
                     Column(
@@ -4998,5 +4919,78 @@ private fun FilterGalleryPanel(
                 CompactSliderRow("Detay", "%${detail.roundToInt()}", detail, 5f..100f, 50f, onChange = onDetail)
             }
         }
+    }
+}
+
+
+@Composable
+private fun LightLivePanel(
+    brightness: Float,
+    contrast: Float,
+    onBrightness: (Float) -> Unit,
+    onContrast: (Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Işık & Kontrast", "Kaydırdıkça anlık gör, beğenirsen Uygula de", "Uygula", onClose, onApply)
+        CompactSliderRow("Parlaklık", "${brightness.roundToInt()}", brightness, -100f..100f, defaultValue = 0f, onChange = onBrightness)
+        CompactSliderRow("Kontrast", "${contrast.roundToInt()}", contrast, -50f..100f, defaultValue = 0f, onChange = onContrast)
+    }
+}
+
+@Composable
+private fun ColorLivePanel(
+    saturation: Float,
+    hue: Float,
+    onSaturation: (Float) -> Unit,
+    onHue: (Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Renk & Canlılık", "Kaydırdıkça anlık gör, beğenirsen Uygula de", "Uygula", onClose, onApply)
+        CompactSliderRow("Canlılık", "${saturation.roundToInt()}", saturation, -100f..100f, defaultValue = 0f, onChange = onSaturation)
+        CompactSliderRow("Renk Tonu", "${hue.roundToInt()}°", hue, -180f..180f, defaultValue = 0f, onChange = onHue)
+    }
+}
+
+@Composable
+private fun LevelsLivePanel(
+    inBlack: Float,
+    gamma: Float,
+    inWhite: Float,
+    onChange: (Float, Float, Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Düzeyler (Levels)", "60 FPS canlı önizleme — Uygula ile katman oluştur", "Uygula", onClose, onApply)
+        CompactSliderRow("Siyahlar", "${inBlack.roundToInt()}", inBlack, 0f..180f, defaultValue = 0f) {
+            onChange(it.coerceAtMost(inWhite - 15f), gamma, inWhite)
+        }
+        CompactSliderRow("Orta Ton", String.format(java.util.Locale.US, "%.2f", gamma), gamma, 0.25f..2.5f, defaultValue = 1f) {
+            onChange(inBlack, it, inWhite)
+        }
+        CompactSliderRow("Beyazlar", "${inWhite.roundToInt()}", inWhite, 75f..255f, defaultValue = 255f) {
+            onChange(inBlack, gamma, it.coerceAtLeast(inBlack + 15f))
+        }
+    }
+}
+
+@Composable
+private fun ColorBalanceLivePanel(
+    cr: Float,
+    mg: Float,
+    yb: Float,
+    onChange: (Float, Float, Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Renk Dengesi", "60 FPS canlı önizleme — Uygula ile katman oluştur", "Uygula", onClose, onApply)
+        CompactSliderRow("Camgöbeği\nKırmızı", "${cr.roundToInt()}", cr, -100f..100f, defaultValue = 0f) { onChange(it, mg, yb) }
+        CompactSliderRow("Macenta\nYeşil", "${mg.roundToInt()}", mg, -100f..100f, defaultValue = 0f) { onChange(cr, it, yb) }
+        CompactSliderRow("Sarı / Mavi", "${yb.roundToInt()}", yb, -100f..100f, defaultValue = 0f) { onChange(cr, mg, it) }
     }
 }
