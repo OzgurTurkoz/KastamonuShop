@@ -4037,142 +4037,45 @@ fun StonebridgeStudioScreen(
                     }
                 }
 
-                BottomPanel.FILTER_MENU -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Filtreler",
-                            subtitle = "Kaydırdıkça anlık önizleme ile uygulanır",
-                            onClose = { activePanel = BottomPanel.DOCK }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            CircularDockButton(
-                                icon = Icons.Default.BlurOn,
-                                label = "Bulanık",
-                                onClick = {
-                                    blurRadiusVal = 0f
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.BLUR_EDIT
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Details,
-                                label = "Keskin",
-                                onClick = {
-                                    sharpenAmountVal = 0f
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.SHARPEN_EDIT
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.FastForward,
-                                label = "Hareket",
-                                onClick = {
-                                    motionBlurAngle = 0f
-                                    motionBlurDistance = 24f
-                                    vm.beginProxyPreview()
-                                    vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
-                                    activePanel = BottomPanel.MOTION_BLUR_EDIT
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.BlurCircular,
-                                label = "Radyal",
-                                onClick = {
-                                    radialBlurAmount = 14f
-                                    radialBlurMethod = "zoom"
-                                    vm.beginProxyPreview()
-                                    vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
-                                    activePanel = BottomPanel.RADIAL_BLUR_EDIT
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.AutoAwesome,
-                                label = "Galeri",
-                                onClick = {
-                                    galleryKind = "none"
-                                    galleryAmount = 45f
-                                    galleryDetail = 50f
-                                    vm.loadGalleryThumbs()
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.FILTER_GALLERY_EDIT
-                                }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.WbSunny,
-                                label = "Işık/Bük",
-                                onClick = {
-                                    ldKind = "none"
-                                    ldAmount = 50f
-                                    ldDetail = 45f
-                                    ldX = 35f
-                                    ldY = 30f
-                                    ldVariant = "moviePrime"
-                                    vm.loadLightDistortThumbs()
-                                    vm.beginProxyPreview()
-                                    activePanel = BottomPanel.LIGHT_DISTORT_EDIT
-                                }
-                            )
-                        }
+                BottomPanel.FILTER_MENU -> FilterMenuPanel(
+                    onClose = { activePanel = BottomPanel.DOCK },
+                    onBlur = { blurRadiusVal = 0f; vm.beginProxyPreview(); activePanel = BottomPanel.BLUR_EDIT },
+                    onSharpen = { sharpenAmountVal = 0f; vm.beginProxyPreview(); activePanel = BottomPanel.SHARPEN_EDIT },
+                    onMotion = {
+                        motionBlurAngle = 0f; motionBlurDistance = 24f
+                        vm.beginProxyPreview(); vm.updateProxyMotionBlur(motionBlurAngle, motionBlurDistance)
+                        activePanel = BottomPanel.MOTION_BLUR_EDIT
+                    },
+                    onRadial = {
+                        radialBlurAmount = 14f; radialBlurMethod = "zoom"
+                        vm.beginProxyPreview(); vm.updateProxyRadialBlur(radialBlurAmount, radialBlurMethod)
+                        activePanel = BottomPanel.RADIAL_BLUR_EDIT
+                    },
+                    onGallery = {
+                        galleryKind = "none"; galleryAmount = 45f; galleryDetail = 50f
+                        vm.loadGalleryThumbs(); vm.beginProxyPreview()
+                        activePanel = BottomPanel.FILTER_GALLERY_EDIT
+                    },
+                    onLightDistort = {
+                        ldKind = "none"; ldAmount = 50f; ldDetail = 45f; ldX = 35f; ldY = 30f; ldVariant = "moviePrime"
+                        vm.loadLightDistortThumbs(); vm.beginProxyPreview()
+                        activePanel = BottomPanel.LIGHT_DISTORT_EDIT
                     }
-                }
+                )
 
-                BottomPanel.BLUR_EDIT -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Bulanıklaştır",
-                            subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                clearAdjustGpuPreviewOnly()
-                                activePanel = BottomPanel.FILTER_MENU
-                            },
-                            onApply = {
-                                vm.applyBlurFast(blurRadiusVal)
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Yarıçap", "${blurRadiusVal.roundToInt()}px", blurRadiusVal, 0f..60f, defaultValue = 0f) {
-                            blurRadiusVal = it
-                            vm.updateProxyBlur(blurRadiusVal)
-                        }
-                    }
-                }
+                BottomPanel.BLUR_EDIT -> BlurEditPanel(
+                    radius = blurRadiusVal,
+                    onRadius = { blurRadiusVal = it; vm.updateProxyBlur(it) },
+                    onClose = { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.FILTER_MENU },
+                    onApply = { vm.applyBlurFast(blurRadiusVal); activePanel = BottomPanel.DOCK }
+                )
 
-                BottomPanel.SHARPEN_EDIT -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Keskinleştir",
-                            subtitle = "Kaydırdıkça anlık gör, beğenirsen Uygula de",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                clearAdjustGpuPreviewOnly()
-                                activePanel = BottomPanel.FILTER_MENU
-                            },
-                            onApply = {
-                                vm.applySharpenFast(sharpenAmountVal)
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        CompactSliderRow("Güç", "%${sharpenAmountVal.roundToInt()}", sharpenAmountVal, 0f..250f, defaultValue = 0f) {
-                            sharpenAmountVal = it
-                            vm.updateProxySharpen(sharpenAmountVal)
-                        }
-                    }
-                }
-
-                // Category 5: Efekt -> [Siyah-Beyaz] [Negatif] [Ayna]
+                BottomPanel.SHARPEN_EDIT -> SharpenEditPanel(
+                    amount = sharpenAmountVal,
+                    onAmount = { sharpenAmountVal = it; vm.updateProxySharpen(it) },
+                    onClose = { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.FILTER_MENU },
+                    onApply = { vm.applySharpenFast(sharpenAmountVal); activePanel = BottomPanel.DOCK }
+                )
                 BottomPanel.QUICK_ACTIONS_MENU -> QuickActionsPanel(
                     onClose = { activePanel = BottomPanel.DOCK },
                     onRemoveBg = { vm.smartRemoveBackground(); activePanel = BottomPanel.DOCK },
@@ -5521,5 +5424,58 @@ private fun TextStudioPanel(
                 }
             }
         }
+    }
+}
+
+
+@Composable
+private fun FilterMenuPanel(
+    onClose: () -> Unit,
+    onBlur: () -> Unit,
+    onSharpen: () -> Unit,
+    onMotion: () -> Unit,
+    onRadial: () -> Unit,
+    onGallery: () -> Unit,
+    onLightDistort: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Filtreler", "Kaydırdıkça anlık önizleme ile uygulanır", onClose = onClose)
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            CircularDockButton(icon = Icons.Default.BlurOn, label = "Bulanık", onClick = onBlur)
+            CircularDockButton(icon = Icons.Default.Details, label = "Keskin", onClick = onSharpen)
+            CircularDockButton(icon = Icons.Default.FastForward, label = "Hareket", onClick = onMotion)
+            CircularDockButton(icon = Icons.Default.BlurCircular, label = "Radyal", onClick = onRadial)
+            CircularDockButton(icon = Icons.Default.AutoAwesome, label = "Galeri", onClick = onGallery)
+            CircularDockButton(icon = Icons.Default.WbSunny, label = "Işık/Bük", onClick = onLightDistort)
+        }
+    }
+}
+
+@Composable
+private fun BlurEditPanel(
+    radius: Float,
+    onRadius: (Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Bulanıklaştır", "Kaydırdıkça anlık gör, beğenirsen Uygula de", "Uygula", onClose, onApply)
+        CompactSliderRow("Yarıçap", "${radius.roundToInt()}px", radius, 0f..60f, defaultValue = 0f, onChange = onRadius)
+    }
+}
+
+@Composable
+private fun SharpenEditPanel(
+    amount: Float,
+    onAmount: (Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Keskinleştir", "Kaydırdıkça anlık gör, beğenirsen Uygula de", "Uygula", onClose, onApply)
+        CompactSliderRow("Miktar", "${amount.roundToInt()}%", amount, 0f..300f, defaultValue = 0f, onChange = onAmount)
     }
 }
