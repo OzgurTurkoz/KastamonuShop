@@ -1108,9 +1108,9 @@ private fun StudioBottomPanelHostPart2(
                 BottomPanel.HSL_MIXER_LIVE -> HslMixerPanel(
                     bandIdx = s.hslBandIdx, onBand = { s.hslBandIdx = it },
                     hues = s.hslHue, sats = s.hslSat, lums = s.hslLum,
-                    onUpdate = { h, s, l ->
-                        s.hslHue = h; s.hslSat = s; s.hslLum = l
-                        vm.updateProxyHslMixer(h, s, l)
+                    onUpdate = { h, sat, l ->
+                        s.hslHue = h; s.hslSat = sat; s.hslLum = l
+                        vm.updateProxyHslMixer(h, sat, l)
                     },
                     onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU },
                     onApply = { vm.applyHslMixer(s.hslHue, s.hslSat, s.hslLum); s.activePanel = BottomPanel.DOCK }
