@@ -73,6 +73,7 @@ import com.kastamonushop.app.ui.canvas.RulerLinePreview
 import com.kastamonushop.app.ui.canvas.VulkanCanvasView
 import com.kastamonushop.app.viewmodel.ActiveTool
 import com.kastamonushop.app.viewmodel.EditorViewModel
+import com.kastamonushop.app.viewmodel.EditorUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -5057,6 +5058,7 @@ private fun DrawMenuPanel(
     var pickerH by remember { mutableFloatStateOf(210f) }
     var pickerS by remember { mutableFloatStateOf(0.85f) }
     var pickerV by remember { mutableFloatStateOf(1.0f) }
+    var showHsvPicker by remember { mutableStateOf(false) }
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
