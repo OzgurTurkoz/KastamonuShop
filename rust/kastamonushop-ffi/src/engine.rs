@@ -4487,7 +4487,8 @@ impl KastamonuEngine {
 
         let mut layers = Vec::new();
         let walked = doc.walk();
-        for (depth, _parent, layer) in walked.into_iter().rev() {
+        for (path, _parent, layer) in walked.into_iter().rev() {
+            let depth = path.len().saturating_sub(1);
             let is_bg = (depth == 0 && bottom_id == Some(layer.id)) || layer.name.eq_ignore_ascii_case("Background");
             let has_mask = layer.mask.is_some();
             let mask_enabled = layer.mask.as_ref().is_some_and(|m| m.enabled);
