@@ -5299,9 +5299,9 @@ mod v08_automated_tests {
 
     #[test]
     fn test_proxy_preview_recovers_after_undo_and_compare_toggle() {
-        let eng = KastamonuEngine::new();
-        eng.new_document(128, 128).unwrap();
-        eng.run_command("layer.newAdjustmentLayer.brightnessContrast".into(), r#"{"brightness":20,"contrast":0}"#.into()).unwrap();
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 128, 128).unwrap();
+        eng.execute_command("layer.newAdjustmentLayer.brightnessContrast".into(), r#"{"brightness":20,"contrast":0}"#.into()).unwrap();
         eng.begin_proxy_preview().unwrap();
         eng.update_proxy_adjustment("brightnessContrast".into(), r#"{"brightness":40,"contrast":10}"#.into()).unwrap();
 
@@ -5322,8 +5322,8 @@ mod v08_automated_tests {
 
     #[test]
     fn test_reset_proxy_preview_restores_original_pixels() {
-        let eng = KastamonuEngine::new();
-        eng.new_document(64, 64).unwrap();
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 64, 64).unwrap();
         eng.begin_proxy_preview().unwrap();
         eng.update_proxy_adjustment("posterize".into(), r#"{"levels":3}"#.into()).unwrap();
         eng.reset_proxy_preview().unwrap();
@@ -5335,8 +5335,8 @@ mod v08_automated_tests {
 
     #[test]
     fn test_hsl_mixer_leaves_near_black_neutral_untouched() {
-        let eng = KastamonuEngine::new();
-        eng.new_document(32, 32).unwrap();
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 32, 32).unwrap();
         {
             let mut g = eng.core.lock();
             let ds = g.session.active_mut().unwrap();
