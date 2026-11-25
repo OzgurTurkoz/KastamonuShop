@@ -54,6 +54,10 @@ pub struct LayerSummary {
     pub is_active: bool,
     pub locked: bool,
     pub is_background: bool,
+    pub has_mask: bool,
+    pub mask_enabled: bool,
+    pub clipped: bool,
+    pub depth: u32,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -127,6 +131,7 @@ struct ActiveLiveStroke {
     points_json: Vec<Value>,
     color_hex: String,
     is_eraser: bool,
+    target_mask: bool,
 }
 
 struct LiveAdjustmentSession {
@@ -246,6 +251,7 @@ pub(crate) struct EngineCore {
     transform_hidden_layer: Option<LayerId>,
     original_snapshot: Option<Arc<Document>>,
     compare_original: bool,
+    mask_paint_mode: bool,
 }
 
 impl EngineCore {
@@ -285,6 +291,7 @@ impl EngineCore {
             transform_hidden_layer: None,
             original_snapshot: initial_snapshot,
             compare_original: false,
+            mask_paint_mode: false,
         }
     }
 
@@ -2695,13 +2702,25 @@ impl KastamonuEngine {
                 "layer.layerStyle.stroke",
                 json!({ "color": color_hex, "opacity": op, "size": sz, "position": stroke_pos }),
             ),
+            "innerShadow" => (
+                "layer.layerStyle.innerShadow",
+                json!({ "color": color_hex, "opacity": op, "size": sz, "distance": dist, "angle": 120.0, "blend": "Multiply" }),
+            ),
             "outerGlow" => (
                 "layer.layerStyle.outerGlow",
                 json!({ "color": color_hex, "opacity": op, "size": sz }),
             ),
+            "innerGlow" => (
+                "layer.layerStyle.innerGlow",
+                json!({ "color": color_hex, "opacity": op, "size": sz, "source": "edge", "blend": "Screen" }),
+            ),
             "colorOverlay" => (
                 "layer.layerStyle.colorOverlay",
                 json!({ "color": color_hex, "opacity": op }),
+            ),
+            "gradientOverlay" => (
+                "layer.layerStyle.gradientOverlay",
+                json!({ "from": color_hex, "to": "#000000", "opacity": op, "angle": (distance.clamp(0.0, 360.0)) as f64, "style": "linear", "blend": "Normal" }),
             ),
             _ => return Ok(()),
         };
@@ -4467,8 +4486,11 @@ impl KastamonuEngine {
         let bottom_id = doc.layers.first().map(|l| l.id);
 
         let mut layers = Vec::new();
-        for layer in doc.layers.iter().rev() {
-            let is_bg = bottom_id == Some(layer.id) || layer.name.eq_ignore_ascii_case("Background");
+        let walked = doc.walk();
+        for (depth, _parent, layer) in walked.into_iter().rev() {
+            let is_bg = (depth == 0 && bottom_id == Some(layer.id)) || layer.name.eq_ignore_ascii_case("Background");
+            let has_mask = layer.mask.is_some();
+            let mask_enabled = layer.mask.as_ref().is_some_and(|m| m.enabled);
             layers.push(LayerSummary {
                 id: layer.id.0,
                 name: layer.name.clone(),
@@ -4479,6 +4501,10 @@ impl KastamonuEngine {
                 is_active: active_id == Some(layer.id),
                 locked: layer.locks.pixels || layer.locks.all,
                 is_background: is_bg,
+                has_mask,
+                mask_enabled,
+                clipped: layer.clipped,
+                depth: depth as u32,
             });
         }
         Ok(layers)
@@ -4728,13 +4754,25 @@ impl KastamonuEngine {
                 "layer.layerStyle.stroke",
                 json!({ "color": color_hex, "opacity": op, "size": sz, "position": stroke_pos }),
             ),
+            "innerShadow" => (
+                "layer.layerStyle.innerShadow",
+                json!({ "color": color_hex, "opacity": op, "size": sz, "distance": dist, "angle": 120.0, "blend": "Multiply" }),
+            ),
             "outerGlow" => (
                 "layer.layerStyle.outerGlow",
                 json!({ "color": color_hex, "opacity": op, "size": sz }),
             ),
+            "innerGlow" => (
+                "layer.layerStyle.innerGlow",
+                json!({ "color": color_hex, "opacity": op, "size": sz, "source": "edge", "blend": "Screen" }),
+            ),
             "colorOverlay" => (
                 "layer.layerStyle.colorOverlay",
                 json!({ "color": color_hex, "opacity": op }),
+            ),
+            "gradientOverlay" => (
+                "layer.layerStyle.gradientOverlay",
+                json!({ "from": color_hex, "to": "#000000", "opacity": op, "angle": (distance.clamp(0.0, 360.0)) as f64, "style": "linear", "blend": "Normal" }),
             ),
             other => {
                 return Err(EngineError::InvalidParams {
@@ -4755,6 +4793,191 @@ impl KastamonuEngine {
         guard.dismiss_compare();
         guard.live_stroke = None;
         let _ = guard.session.execute("layer.layerStyle.clear", json!({}));
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    // ==================== v1.5.0: NON-DESTRUCTIVE LAYER PRO ====================
+
+    pub fn set_mask_paint_mode(&self, enabled: bool) {
+        let mut guard = self.core.lock();
+        guard.mask_paint_mode = enabled;
+    }
+
+    pub fn add_layer_mask(&self, mode: String) -> Result<DocumentInfo, EngineError> {
+        let cmd = match mode.as_str() {
+            "revealAll" => "layer.layerMask.revealAll",
+            "hideAll" => "layer.layerMask.hideAll",
+            "revealSelection" => "layer.layerMask.revealSelection",
+            "hideSelection" => "layer.layerMask.hideSelection",
+            "fromTransparency" => "layer.layerMask.fromTransparency",
+            other => {
+                return Err(EngineError::InvalidParams {
+                    detail: format!("Bilinmeyen maske modu: {other}"),
+                })
+            }
+        };
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard
+            .session
+            .execute(cmd, json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn toggle_layer_mask_enabled(&self, layer_id: u64, enabled: bool) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard
+            .session
+            .execute("layer.layerMask.enabled", json!({ "layer": layer_id, "enabled": enabled }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn invert_active_layer_mask(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard
+            .session
+            .execute("image.adjustments.invert", json!({ "target": "mask" }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn delete_active_layer_mask(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.mask_paint_mode = false;
+        guard
+            .session
+            .execute("layer.layerMask.delete", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_active_layer_mask(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.mask_paint_mode = false;
+        guard
+            .session
+            .execute("layer.layerMask.apply", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn toggle_clipping_mask(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let is_clipped = guard.session.active().is_some_and(|ds| {
+            ds.active_layer()
+                .and_then(|aid| ds.doc().layer(aid))
+                .is_some_and(|l| l.clipped)
+        });
+        let cmd = if is_clipped {
+            "layer.releaseClippingMask"
+        } else {
+            "layer.createClippingMask"
+        };
+        guard
+            .session
+            .execute(cmd, json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn group_active_layer(&self, name: String) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let clean = if name.trim().is_empty() { "Grup".to_string() } else { name };
+        guard
+            .session
+            .execute("layer.groupLayers", json!({ "name": clean }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn ungroup_active_layer(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard
+            .session
+            .execute("layer.ungroupLayers", json!({}))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn update_proxy_blend_if(
+        &self,
+        this_black: u8,
+        this_white: u8,
+        under_black: u8,
+        under_white: u8,
+        feather: u8,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let params = build_blend_if_params(this_black, this_white, under_black, under_white, feather);
+        let _ = ps.execute("layer.layerStyle.blendingOptions", params);
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn apply_blend_if(
+        &self,
+        this_black: u8,
+        this_white: u8,
+        under_black: u8,
+        under_white: u8,
+        feather: u8,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.proxy_preview = None;
+        let params = build_blend_if_params(this_black, this_white, under_black, under_white, feather);
+        guard
+            .session
+            .execute("layer.layerStyle.blendingOptions", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn reset_blend_if(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.proxy_preview = None;
+        guard
+            .session
+            .execute("layer.layerStyle.blendingOptions", json!({ "blendIf": null }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
@@ -4882,24 +5105,38 @@ impl KastamonuEngine {
         color_hex: String,
         is_eraser: bool,
     ) -> Result<(), EngineError> {
-        let pt_json = sample_to_json(&sample);
-        let mut params = json!({
-            "points": [pt_json.clone()],
-            "color": color_hex
-        });
-        if is_eraser {
-            params["mode"] = json!("clear");
-        }
         let mut guard = self.core.lock();
         guard.dismiss_compare();
+        let target_mask = guard.mask_paint_mode
+            && guard.session.active().is_some_and(|ds| {
+                ds.active_layer()
+                    .and_then(|aid| ds.doc().layer(aid))
+                    .is_some_and(|l| l.mask.is_some())
+            });
+        let pt_json = sample_to_json(&sample);
+        let effective_color = if target_mask && is_eraser {
+            "#000000".to_string()
+        } else {
+            color_hex
+        };
+        let mut params = json!({
+            "points": [pt_json.clone()],
+            "color": effective_color
+        });
+        if target_mask {
+            params["target"] = json!("mask");
+        } else if is_eraser {
+            params["mode"] = json!("clear");
+        }
         let live = LiveStroke::begin(&guard.session, &params)
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         let dmg = live.bounds();
         guard.live_stroke = Some(ActiveLiveStroke {
             live,
             points_json: vec![pt_json],
-            color_hex,
+            color_hex: effective_color,
             is_eraser,
+            target_mask,
         });
         guard.mark_region_dirty(dmg);
         Ok(())
@@ -4937,7 +5174,9 @@ impl KastamonuEngine {
             "color": active.color_hex,
             "seed": seed
         });
-        if active.is_eraser {
+        if active.target_mask {
+            params["target"] = json!("mask");
+        } else if active.is_eraser {
             params["mode"] = json!("clear");
         }
         let _ = guard.session.offer_live_stroke(active.live);
@@ -5759,6 +5998,26 @@ impl KastamonuEngine {
             dirty: ds.is_dirty(),
         })
     }
+}
+
+
+fn build_blend_if_params(this_black: u8, this_white: u8, under_black: u8, under_white: u8, feather: u8) -> Value {
+    let f = feather.min(80);
+    let tb0 = this_black;
+    let tb1 = this_black.saturating_add(f).min(this_white);
+    let tw1 = this_white;
+    let tw0 = this_white.saturating_sub(f).max(tb1);
+    let ub0 = under_black;
+    let ub1 = under_black.saturating_add(f).min(under_white);
+    let uw1 = under_white;
+    let uw0 = under_white.saturating_sub(f).max(ub1);
+    json!({
+        "blendIf": [{
+            "channel": "gray",
+            "thisLayer": [tb0, tb1, tw0, tw1],
+            "underlying": [ub0, ub1, uw0, uw1]
+        }]
+    })
 }
 
 #[cfg(test)]
@@ -6737,5 +6996,85 @@ mod v08_automated_tests {
         assert!(info.can_undo);
         let undone = eng.undo().unwrap();
         assert!(!undone.can_undo, "Free XY transform must be a single clean undo step");
+    }
+
+    #[test]
+    fn test_v150_layer_mask_reveal_hide_paint_invert_toggle_and_delete() {
+        let eng = test_engine();
+        let rgba = vec![220u8, 60, 60, 255].repeat(48 * 48);
+        eng.open_rgba_bytes("mask_test.png".into(), 48, 48, rgba).unwrap();
+        let _ = eng.add_layer_mask("revealAll".into()).unwrap();
+        let layers = eng.get_layers().unwrap();
+        assert!(layers[0].has_mask && layers[0].mask_enabled);
+
+        // Paint black onto mask via live stroke in mask_paint_mode
+        eng.set_mask_paint_mode(true);
+        eng.set_brush(16.0, 1.0, 1.0, 1.0, "#000000".into()).unwrap();
+        eng.begin_live_stroke(StrokeSample { x: 24.0, y: 24.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 }, "#000000".into(), false).unwrap();
+        let _ = eng.finish_live_stroke().unwrap();
+        eng.set_mask_paint_mode(false);
+
+        // Invert, disable, re-enable, then delete mask
+        let _ = eng.invert_active_layer_mask().unwrap();
+        let id = eng.get_layers().unwrap()[0].id;
+        let _ = eng.toggle_layer_mask_enabled(id, false).unwrap();
+        assert!(!eng.get_layers().unwrap()[0].mask_enabled);
+        let _ = eng.toggle_layer_mask_enabled(id, true).unwrap();
+        assert!(eng.get_layers().unwrap()[0].mask_enabled);
+        let _ = eng.delete_active_layer_mask().unwrap();
+        assert!(!eng.get_layers().unwrap()[0].has_mask);
+    }
+
+    #[test]
+    fn test_v150_clipping_mask_create_release_and_undo() {
+        let eng = test_engine();
+        eng.new_document("clip".into(), 64, 64).unwrap();
+        let _ = eng.add_layer("Top".into()).unwrap();
+        assert!(!eng.get_layers().unwrap()[0].clipped);
+        let _ = eng.toggle_clipping_mask().unwrap();
+        assert!(eng.get_layers().unwrap()[0].clipped, "active layer should be clipped");
+        let _ = eng.toggle_clipping_mask().unwrap();
+        assert!(!eng.get_layers().unwrap()[0].clipped, "second toggle should release clip");
+        let _ = eng.undo().unwrap();
+        assert!(eng.get_layers().unwrap()[0].clipped, "undo restores clipping mask");
+    }
+
+    #[test]
+    fn test_v150_layer_group_and_ungroup_walk_depth() {
+        let eng = test_engine();
+        eng.new_document("grp".into(), 64, 64).unwrap();
+        let _ = eng.add_layer("Child".into()).unwrap();
+        let _ = eng.group_active_layer("Klasör 1".into()).unwrap();
+        let layers = eng.get_layers().unwrap();
+        assert!(layers.iter().any(|l| l.is_group && l.name == "Klasör 1"));
+        assert!(layers.iter().any(|l| l.name == "Child" && l.depth >= 1));
+
+        let _ = eng.ungroup_active_layer().unwrap();
+        let after = eng.get_layers().unwrap();
+        assert!(!after.iter().any(|l| l.is_group));
+    }
+
+    #[test]
+    fn test_v150_new_layer_fx_inner_shadow_inner_glow_gradient_overlay() {
+        let eng = test_engine();
+        eng.new_document("fx150".into(), 96, 96).unwrap();
+        eng.begin_layer_proxy_preview().unwrap();
+        for kind in ["innerShadow", "innerGlow", "gradientOverlay"] {
+            eng.update_proxy_layer_effect(kind.into(), "#4F9CFF".into(), 12.0, 75.0, 45.0).unwrap();
+            let info = eng.apply_layer_effect(kind.into(), "#4F9CFF".into(), 12.0, 75.0, 45.0).unwrap();
+            assert!(info.can_undo, "{kind} must apply cleanly");
+        }
+    }
+
+    #[test]
+    fn test_v150_blend_if_live_proxy_apply_and_reset() {
+        let eng = test_engine();
+        let rgba = vec![120u8, 180, 240, 255].repeat(48 * 48);
+        eng.open_rgba_bytes("blendif.png".into(), 48, 48, rgba).unwrap();
+        eng.begin_layer_proxy_preview().unwrap();
+        eng.update_proxy_blend_if(40, 210, 20, 235, 25).unwrap();
+        let info = eng.apply_blend_if(40, 210, 20, 235, 25).unwrap();
+        assert!(info.can_undo);
+        let _ = eng.reset_blend_if().unwrap();
     }
 }

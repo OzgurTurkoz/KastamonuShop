@@ -90,6 +90,7 @@ data class EditorUiState(
     val compareOriginal: Boolean = false,
     val liquifyCanUndo: Boolean = false,
     val liquifyCanRedo: Boolean = false,
+    val maskPaintMode: Boolean = false,
     val statusMessage: String? = null,
     val isBusy: Boolean = false,
     val fitCameraSignal: Int = 0
@@ -2978,5 +2979,192 @@ class EditorViewModel : ViewModel() {
             }
         }
         return uri.lastPathSegment
+    }
+
+    // ==================== v1.5.0: NON-DESTRUCTIVE LAYER PRO ====================
+
+    fun addLayerMask(mode: String) {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.addLayerMask(mode)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Katman maskesi eklendi", 1600L)
+            }.onFailure { err -> showStatus("Maske eklenemedi: ${err.message}", 2600L) }
+        }
+    }
+
+    fun toggleLayerMaskEnabled(layerId: ULong, enabled: Boolean) {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.toggleLayerMaskEnabled(layerId, enabled)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (enabled) "Maske açıldı" else "Maske geçici kapatıldı", 1400L)
+            }.onFailure { err -> showStatus("Maske değiştirilemedi: ${err.message}", 2400L) }
+        }
+    }
+
+    fun invertActiveLayerMask() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.invertActiveLayerMask()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Maske ters çevrildi", 1500L)
+            }.onFailure { err -> showStatus("Ters çevrilemedi: ${err.message}", 2400L) }
+        }
+    }
+
+    fun deleteActiveLayerMask() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.deleteActiveLayerMask()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, maskPaintMode = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Katman maskesi silindi", 1600L)
+            }.onFailure { err -> showStatus("Maske silinemedi: ${err.message}", 2400L) }
+        }
+    }
+
+    fun applyActiveLayerMask() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyActiveLayerMask()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, maskPaintMode = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Maske katmana uygulandı", 1600L)
+            }.onFailure { err -> showStatus("Maske uygulanamadı: ${err.message}", 2400L) }
+        }
+    }
+
+    fun enterMaskPaintMode(hideWithBlack: Boolean = true) {
+        paintExecutor.execute {
+            runCatching {
+                val cur = engine.getLayers().firstOrNull { it.isActive }
+                if (cur != null && !cur.hasMask) {
+                    engine.addLayerMask("revealAll")
+                }
+                engine.setMaskPaintMode(true)
+                val info = engine.getDocumentInfo()
+                val layers = engine.getLayers()
+                val hex = if (hideWithBlack) "#000000" else "#FFFFFF"
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        maskPaintMode = true,
+                        activeTool = ActiveTool.BRUSH,
+                        colorHex = hex
+                    )
+                }
+                syncBrushToEngine()
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (hideWithBlack) "Maske Modu: Siyah ile gizle" else "Maske Modu: Beyaz ile göster", 2000L)
+            }.onFailure { err -> showStatus("Maske modu açılamadı: ${err.message}", 2600L) }
+        }
+    }
+
+    fun exitMaskPaintMode() {
+        paintExecutor.execute {
+            runCatching {
+                engine.setMaskPaintMode(false)
+                _uiState.update { it.copy(maskPaintMode = false) }
+            }
+        }
+    }
+
+    fun toggleClippingMask() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.toggleClippingMask()
+                val layers = engine.getLayers()
+                val nowClipped = layers.firstOrNull { it.isActive }?.clipped == true
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (nowClipped) "Kırpma maskesi bağlandı (↳)" else "Kırpma maskesi bırakıldı", 1600L)
+            }.onFailure { err -> showStatus("Kırpma maskesi: ${err.message}", 2600L) }
+        }
+    }
+
+    fun groupActiveLayer() {
+        paintExecutor.execute {
+            runCatching {
+                val grpNum = _uiState.value.layers.count { it.isGroup } + 1
+                val info = engine.groupActiveLayer("Grup $grpNum")
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Katman gruba alındı", 1500L)
+            }.onFailure { err -> showStatus("Gruplanamadı: ${err.message}", 2400L) }
+        }
+    }
+
+    fun ungroupActiveLayer() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.ungroupActiveLayer()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Grup dağıtıldı", 1500L)
+            }.onFailure { err -> showStatus("Grup dağıtılamadı: ${err.message}", 2400L) }
+        }
+    }
+
+    fun updateProxyBlendIf(thisBlack: Int, thisWhite: Int, underBlack: Int, underWhite: Int, feather: Int) {
+        paintExecutor.execute {
+            runCatching {
+                engine.updateProxyBlendIf(
+                    thisBlack.coerceIn(0, 255).toUByte(),
+                    thisWhite.coerceIn(0, 255).toUByte(),
+                    underBlack.coerceIn(0, 255).toUByte(),
+                    underWhite.coerceIn(0, 255).toUByte(),
+                    feather.coerceIn(0, 80).toUByte()
+                )
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun applyBlendIf(thisBlack: Int, thisWhite: Int, underBlack: Int, underWhite: Int, feather: Int) {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyBlendIf(
+                    thisBlack.coerceIn(0, 255).toUByte(),
+                    thisWhite.coerceIn(0, 255).toUByte(),
+                    underBlack.coerceIn(0, 255).toUByte(),
+                    underWhite.coerceIn(0, 255).toUByte(),
+                    feather.coerceIn(0, 80).toUByte()
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Ton Karışımı (Blend If) uygulandı", 1800L)
+            }.onFailure { err -> showStatus("Blend If hatası: ${err.message}", 2600L) }
+        }
+    }
+
+    fun resetBlendIf() {
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.resetBlendIf()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Ton Karışımı sıfırlandı", 1500L)
+            }
+        }
     }
 }

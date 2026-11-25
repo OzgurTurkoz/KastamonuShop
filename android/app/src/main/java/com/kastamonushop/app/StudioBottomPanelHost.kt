@@ -1607,18 +1607,24 @@ private fun StudioBottomPanelHostPart2(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf(
-                                "dropShadow" to "Gölge",
+                                "dropShadow" to "Dış Gölge",
+                                "innerShadow" to "İç Gölge",
                                 "stroke" to "Kontur",
-                                "outerGlow" to "Işıma",
-                                "colorOverlay" to "Renk"
+                                "outerGlow" to "Dış Işıma",
+                                "innerGlow" to "İç Işıma",
+                                "colorOverlay" to "Renk",
+                                "gradientOverlay" to "Degrade"
                             ).forEach { (id, lbl) ->
                                 FilterChip(
                                     selected = s.fxKind == id,
                                     onClick = {
                                         s.fxKind = id
-                                        if (id == "dropShadow") s.fxColorHex = "#000000"
-                                        else if (id == "stroke") s.fxColorHex = "#FFFFFF"
-                                        else if (id == "outerGlow") s.fxColorHex = "#4F9CFF"
+                                        when (id) {
+                                            "dropShadow", "innerShadow" -> s.fxColorHex = "#000000"
+                                            "stroke" -> s.fxColorHex = "#FFFFFF"
+                                            "outerGlow", "innerGlow" -> s.fxColorHex = "#4F9CFF"
+                                            "gradientOverlay" -> { s.fxColorHex = "#4F9CFF"; s.fxDistanceVal = 90f }
+                                        }
                                         pushFxLive()
                                     },
                                     label = { Text(lbl, fontSize = 11.sp) }
@@ -1677,7 +1683,7 @@ private fun StudioBottomPanelHostPart2(
                                 s.fxOpacityVal = it
                                 pushFxLive()
                             }
-                            if (s.fxKind == "dropShadow") {
+                            if (s.fxKind == "dropShadow" || s.fxKind == "innerShadow" || s.fxKind == "gradientOverlay") {
                                 CompactSliderRow("Uzaklık", "${s.fxDistanceVal.roundToInt()}px", s.fxDistanceVal, 0f..80f, defaultValue = 12f) {
                                     s.fxDistanceVal = it
                                     pushFxLive()
@@ -1685,6 +1691,70 @@ private fun StudioBottomPanelHostPart2(
                             }
                         }
                     }
+                }
+                BottomPanel.LAYER_MASK_EDIT -> {
+                    val activeL = state.layers.firstOrNull { it.isActive }
+                    LayerMaskPanel(
+                        layerName = activeL?.name ?: "Katman",
+                        hasMask = activeL?.hasMask == true,
+                        maskEnabled = activeL?.maskEnabled == true,
+                        hasSelection = state.selectionBounds != null,
+                        maskPaintMode = state.maskPaintMode,
+                        onAddRevealAll = { vm.addLayerMask("revealAll") },
+                        onAddHideAll = { vm.addLayerMask("hideAll") },
+                        onAddFromSelection = { vm.addLayerMask("revealSelection") },
+                        onPaintHide = {
+                            vm.enterMaskPaintMode(hideWithBlack = true)
+                            s.activePanel = BottomPanel.DOCK
+                        },
+                        onPaintReveal = {
+                            vm.enterMaskPaintMode(hideWithBlack = false)
+                            s.activePanel = BottomPanel.DOCK
+                        },
+                        onToggleEnabled = {
+                            if (activeL != null) vm.toggleLayerMaskEnabled(activeL.id, !activeL.maskEnabled)
+                        },
+                        onInvert = { vm.invertActiveLayerMask() },
+                        onApplyMask = { vm.applyActiveLayerMask(); s.activePanel = BottomPanel.DOCK },
+                        onDeleteMask = { vm.deleteActiveLayerMask() },
+                        onClose = { s.activePanel = BottomPanel.DOCK }
+                    )
+                }
+                BottomPanel.BLEND_IF_EDIT -> {
+                    val activeName = state.layers.firstOrNull { it.isActive }?.name ?: "Katman"
+                    fun pushBi() {
+                        vm.updateProxyBlendIf(
+                            s.blendIfThisBlack.roundToInt(),
+                            s.blendIfThisWhite.roundToInt(),
+                            s.blendIfUnderBlack.roundToInt(),
+                            s.blendIfUnderWhite.roundToInt(),
+                            s.blendIfFeather.roundToInt()
+                        )
+                    }
+                    BlendIfPanel(
+                        layerName = activeName,
+                        thisBlack = s.blendIfThisBlack, onThisBlack = { s.blendIfThisBlack = it; pushBi() },
+                        thisWhite = s.blendIfThisWhite, onThisWhite = { s.blendIfThisWhite = it; pushBi() },
+                        underBlack = s.blendIfUnderBlack, onUnderBlack = { s.blendIfUnderBlack = it; pushBi() },
+                        underWhite = s.blendIfUnderWhite, onUnderWhite = { s.blendIfUnderWhite = it; pushBi() },
+                        feather = s.blendIfFeather, onFeather = { s.blendIfFeather = it; pushBi() },
+                        onReset = {
+                            s.blendIfThisBlack = 0f; s.blendIfThisWhite = 255f
+                            s.blendIfUnderBlack = 0f; s.blendIfUnderWhite = 255f; s.blendIfFeather = 20f
+                            vm.resetBlendIf()
+                        },
+                        onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK },
+                        onApply = {
+                            vm.applyBlendIf(
+                                s.blendIfThisBlack.roundToInt(),
+                                s.blendIfThisWhite.roundToInt(),
+                                s.blendIfUnderBlack.roundToInt(),
+                                s.blendIfUnderWhite.roundToInt(),
+                                s.blendIfFeather.roundToInt()
+                            )
+                            s.activePanel = BottomPanel.DOCK
+                        }
+                    )
                 }
                 else -> Unit
             }

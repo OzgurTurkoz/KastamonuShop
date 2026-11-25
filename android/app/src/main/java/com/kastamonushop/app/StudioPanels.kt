@@ -1428,3 +1428,136 @@ internal fun SelectMenuPanel(
 }
 
 
+
+
+@Composable
+internal fun LayerMaskPanel(
+    layerName: String,
+    hasMask: Boolean,
+    maskEnabled: Boolean,
+    hasSelection: Boolean,
+    maskPaintMode: Boolean,
+    onAddRevealAll: () -> Unit,
+    onAddHideAll: () -> Unit,
+    onAddFromSelection: () -> Unit,
+    onPaintHide: () -> Unit,
+    onPaintReveal: () -> Unit,
+    onToggleEnabled: () -> Unit,
+    onInvert: () -> Unit,
+    onApplyMask: () -> Unit,
+    onDeleteMask: () -> Unit,
+    onClose: () -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        BottomEditorHeader(
+            title = "Katman Maskesi: $layerName",
+            subtitle = if (hasMask) "Siyah ile gizle, Beyaz ile geri getir (tahribatsız)" else "Katmana tahribatsız maske ekle",
+            applyLabel = "Tamam",
+            onClose = onClose,
+            onApply = onClose
+        )
+        if (!hasMask) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(onClick = onAddRevealAll, shape = RoundedCornerShape(12.dp)) {
+                    Text("Beyaz Maske (Göster)", fontSize = 11.sp)
+                }
+                OutlinedButton(onClick = onAddHideAll, shape = RoundedCornerShape(12.dp)) {
+                    Text("Siyah Maske (Gizle)", fontSize = 11.sp, color = Color.White)
+                }
+                if (hasSelection) {
+                    OutlinedButton(onClick = onAddFromSelection, shape = RoundedCornerShape(12.dp)) {
+                        Text("Seçimden Maske", fontSize = 11.sp, color = Color(0xFF4F9CFF))
+                    }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                FilterChip(
+                    selected = maskPaintMode,
+                    onClick = onPaintHide,
+                    label = { Text("Siyah Boya (Gizle)", fontSize = 11.sp) }
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = onPaintReveal,
+                    label = { Text("Beyaz Boya (Göster)", fontSize = 11.sp) }
+                )
+                FilterChip(
+                    selected = !maskEnabled,
+                    onClick = onToggleEnabled,
+                    label = { Text(if (maskEnabled) "Kapat" else "Aç", fontSize = 11.sp) }
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = onInvert,
+                    label = { Text("Ters Çevir", fontSize = 11.sp) }
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = onApplyMask,
+                    label = { Text("Uygula", fontSize = 11.sp) }
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = onDeleteMask,
+                    label = { Text("Maskeyi Sil", fontSize = 11.sp, color = Color(0xFFFF6B6B)) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun BlendIfPanel(
+    layerName: String,
+    thisBlack: Float, onThisBlack: (Float) -> Unit,
+    thisWhite: Float, onThisWhite: (Float) -> Unit,
+    underBlack: Float, onUnderBlack: (Float) -> Unit,
+    underWhite: Float, onUnderWhite: (Float) -> Unit,
+    feather: Float, onFeather: (Float) -> Unit,
+    onReset: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        BottomEditorHeader(
+            title = "Ton Karışımı (Blend If): $layerName",
+            subtitle = "Karanlık veya aydınlık tonları yumuşakça harmanla",
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = onApply
+        )
+        CompactSliderRow("Bu Katman Koyu", "${thisBlack.roundToInt()}", thisBlack, 0f..250f, defaultValue = 0f, onValueChange = onThisBlack)
+        CompactSliderRow("Bu Katman Açık", "${thisWhite.roundToInt()}", thisWhite, 5f..255f, defaultValue = 255f, onValueChange = onThisWhite)
+        CompactSliderRow("Alt Katman Koyu", "${underBlack.roundToInt()}", underBlack, 0f..250f, defaultValue = 0f, onValueChange = onUnderBlack)
+        CompactSliderRow("Alt Katman Açık", "${underWhite.roundToInt()}", underWhite, 5f..255f, defaultValue = 255f, onValueChange = onUnderWhite)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                CompactSliderRow("Yumuşatma", "${feather.roundToInt()}", feather, 0f..80f, defaultValue = 20f, onValueChange = onFeather)
+            }
+            TextButton(onClick = onReset) {
+                Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A80))
+            }
+        }
+    }
+}

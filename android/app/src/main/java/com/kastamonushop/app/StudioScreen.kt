@@ -277,7 +277,7 @@ fun StonebridgeStudioScreen(
                 BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT, BottomPanel.IMAGE_RESIZE_EDIT -> s.activePanel = BottomPanel.CROP_MENU
                 BottomPanel.PUPPET_WARP_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); s.activePanel = BottomPanel.DOCK }
-                BottomPanel.LAYER_FX_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK }
+                BottomPanel.LAYER_FX_EDIT, BottomPanel.BLEND_IF_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK }
                 BottomPanel.CAMERA_LIGHT_LIVE -> { clearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU }
                 BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); s.liquifyCursorScreen = null; s.activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.AUTO_ENHANCE_MENU -> s.activePanel = BottomPanel.ADJUST_MENU
@@ -362,7 +362,7 @@ fun StonebridgeStudioScreen(
             s.activePanel == BottomPanel.FILTER_GALLERY_EDIT ||
             s.activePanel == BottomPanel.LIGHT_DISTORT_EDIT ||
             s.activePanel == BottomPanel.TEXT_EDIT ||
-            s.activePanel == BottomPanel.PUPPET_WARP_EDIT
+            s.activePanel == BottomPanel.PUPPET_WARP_EDIT || s.activePanel == BottomPanel.BLEND_IF_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -1953,6 +1953,40 @@ fun StonebridgeStudioScreen(
             }
         }
 
+        // Floating Mask Paint Mode control bar (Siyah: Gizle / Beyaz: Göster / Bitir)
+        if (state.maskPaintMode) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 74.dp),
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xEE1E2636),
+                tonalElevation = 8.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("Maske", color = Color(0xFF4F9CFF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    FilterChip(
+                        selected = state.colorHex.equals("#000000", ignoreCase = true),
+                        onClick = { vm.setColor("#000000"); vm.setTool(ActiveTool.BRUSH) },
+                        label = { Text("Gizle", fontSize = 11.sp) }
+                    )
+                    FilterChip(
+                        selected = state.colorHex.equals("#FFFFFF", ignoreCase = true),
+                        onClick = { vm.setColor("#FFFFFF"); vm.setTool(ActiveTool.BRUSH) },
+                        label = { Text("Göster", fontSize = 11.sp) }
+                    )
+                    TextButton(onClick = { vm.exitMaskPaintMode() }) {
+                        Text("Bitir", color = Color(0xFFFFD600), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+
         // Safety pill if every layer is currently hidden
         if (state.layers.isNotEmpty() && state.layers.none { it.visible }) {
             Surface(
@@ -2056,6 +2090,49 @@ fun StonebridgeStudioScreen(
                         }
                     }
 
+                    // v1.5.0 Non-Destructive Layer Pro row: Maske, Kırpma (↳), Grup/Dağıt, Blend If
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(top = 4.dp, bottom = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val isActiveGroup = activeLayer?.isGroup == true
+                        val isActiveClipped = activeLayer?.clipped == true
+                        val hasActiveMask = activeLayer?.hasMask == true
+                        FilterChip(
+                            selected = hasActiveMask || state.maskPaintMode,
+                            onClick = {
+                                s.showLayers = false
+                                s.activePanel = BottomPanel.LAYER_MASK_EDIT
+                            },
+                            label = { Text(if (hasActiveMask) "Maske ✓" else "Maske", fontSize = 10.sp) }
+                        )
+                        FilterChip(
+                            selected = isActiveClipped,
+                            onClick = { vm.toggleClippingMask() },
+                            label = { Text(if (isActiveClipped) "↳ Kırp" else "Kırpma", fontSize = 10.sp) }
+                        )
+                        FilterChip(
+                            selected = isActiveGroup,
+                            onClick = { if (isActiveGroup) vm.ungroupActiveLayer() else vm.groupActiveLayer() },
+                            label = { Text(if (isActiveGroup) "Dağıt" else "Grupla", fontSize = 10.sp) }
+                        )
+                        FilterChip(
+                            selected = s.activePanel == BottomPanel.BLEND_IF_EDIT,
+                            onClick = {
+                                s.showLayers = false
+                                vm.setTool(ActiveTool.NONE)
+                                s.blendIfThisBlack = 0f; s.blendIfThisWhite = 255f
+                                s.blendIfUnderBlack = 0f; s.blendIfUnderWhite = 255f; s.blendIfFeather = 20f
+                                vm.beginLayerProxyPreview()
+                                s.activePanel = BottomPanel.BLEND_IF_EDIT
+                            },
+                            label = { Text("Blend If", fontSize = 10.sp) }
+                        )
+                    }
                     if (activeLayer != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         CompactSliderRow(
@@ -2138,13 +2215,31 @@ fun StonebridgeStudioScreen(
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
-                                Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
-                                    Text(layer.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
-                                    Text(
-                                        "${layer.blendMode} · ${(layer.opacity * 100).toInt()}%",
-                                        fontSize = 10.sp,
-                                        color = Color(0xFFB8BCC8)
-                                    )
+                                Column(modifier = Modifier.weight(1f).padding(start = (4 + layer.depth.toInt().coerceAtMost(3) * 12).dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        if (layer.clipped) {
+                                            Text("↳", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4F9CFF))
+                                        }
+                                        if (layer.isGroup) {
+                                            Icon(Icons.Default.Folder, contentDescription = null, tint = Color(0xFFFFD54F), modifier = Modifier.size(14.dp))
+                                        }
+                                        Text(layer.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                        Text(
+                                            "${layer.blendMode} · ${(layer.opacity * 100).toInt()}%",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFFB8BCC8)
+                                        )
+                                        if (layer.hasMask) {
+                                            Text(
+                                                text = if (layer.maskEnabled) "Maske" else "Maske (Kapalı)",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = if (layer.maskEnabled) Color(0xFF2ED573) else Color(0xFFFF8A80)
+                                            )
+                                        }
+                                    }
                                 }
                                 if (layer.isBackground) {
                                     IconButton(
