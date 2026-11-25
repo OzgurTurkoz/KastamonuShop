@@ -35,6 +35,7 @@ import uniffi.kastamonushop_ffi.LayerSummary
 import uniffi.kastamonushop_ffi.SelectionBounds
 import uniffi.kastamonushop_ffi.StrokeSample
 import uniffi.kastamonushop_ffi.TextLayerStyle
+import uniffi.kastamonushop_ffi.PuppetPinPoint
 import uniffi.kastamonushop_ffi.createKastamonuEngine
 import uniffi.kastamonushop_ffi.engineVersionInfo
 import uniffi.kastamonushop_ffi.getLastGpuError
@@ -210,6 +211,7 @@ class EditorViewModel : ViewModel() {
             val warpHDist: Float,
             val warpVDist: Float
         ) : ProxyJob()
+        data class PuppetWarp(val pins: List<PuppetPinPoint>, val mode: String) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -539,6 +541,58 @@ class EditorViewModel : ViewModel() {
                 showStatus("Metin seçim maskesi oluşturuldu", 2000L)
             }.onFailure { err ->
                 showStatus("Maske hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun updateProxyPuppetWarp(pins: List<PuppetPinPoint>, mode: String) {
+        pendingProxyJob.set(ProxyJob.PuppetWarp(pins, mode))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyPuppetWarp(pins: List<PuppetPinPoint>, mode: String) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyPuppetWarp(pins, mode)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Kukla bükme uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Kukla bükme hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun resizeImage(width: Int, height: Int, resample: String) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.resizeImage(width.coerceIn(16, 8192).toUInt(), height.coerceIn(16, 8192).toUInt(), resample)
+                val layers = engine.getLayers()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        isBusy = false,
+                        fitCameraSignal = it.fitCameraSignal + 1
+                    )
+                }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Boyutlandırıldı: ${info.width}×${info.height} px", 2000L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Boyutlandırma hatası: ${err.message}", 2600L)
             }
         }
     }
@@ -1206,6 +1260,7 @@ class EditorViewModel : ViewModel() {
                         job.caps, job.hScale, job.vScale, job.tracking, job.lineHeight, job.vertical,
                         job.warpStyle, job.warpBend, job.warpHDist, job.warpVDist
                     )
+                    is ProxyJob.PuppetWarp -> engine.updateProxyPuppetWarp(job.pins, job.mode)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }

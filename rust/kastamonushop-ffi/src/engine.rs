@@ -77,6 +77,15 @@ pub struct SelectionBounds {
     pub y1: i32,
 }
 
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PuppetPinPoint {
+    pub src_x: f32,
+    pub src_y: f32,
+    pub dst_x: f32,
+    pub dst_y: f32,
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct TextLayerStyle {
     pub layer_id: u64,
@@ -1733,6 +1742,127 @@ impl KastamonuEngine {
                 .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         }
         guard.mark_selection_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// 60 FPS live proxy preview for PhotoCraft Puppet Warp (`edit.puppetWarp`).
+    /// Scales pin coordinates into the 512px proxy space and warps the primary raster layer smoothly.
+    pub fn update_proxy_puppet_warp(&self, pins: Vec<PuppetPinPoint>, mode: String) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let sc = proxy.scale;
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let any_moved = pins.iter().any(|p| (p.dst_x - p.src_x).hypot(p.dst_y - p.src_y) > 0.5);
+        if !pins.is_empty() && any_moved {
+            let mode_str = match mode.as_str() {
+                "rigid" | "distort" | "normal" => mode.as_str(),
+                _ => "normal",
+            };
+            let pin_json: Vec<Value> = pins
+                .iter()
+                .map(|p| {
+                    json!({
+                        "src": [(p.src_x * sc) as f64, (p.src_y * sc) as f64],
+                        "dst": [(p.dst_x * sc) as f64, (p.dst_y * sc) as f64],
+                    })
+                })
+                .collect();
+            let target_id = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(tid) = target_id {
+                ps.set_active_layer(Some(tid));
+                let _ = ps.execute(
+                    "edit.puppetWarp",
+                    json!({
+                        "pins": pin_json,
+                        "mode": mode_str,
+                        "density": "normal",
+                    }),
+                );
+            }
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits PhotoCraft Puppet Warp (`edit.puppetWarp`) at full resolution (1 undoable step).
+    pub fn apply_puppet_warp(&self, pins: Vec<PuppetPinPoint>, mode: String) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let any_moved = pins.iter().any(|p| (p.dst_x - p.src_x).hypot(p.dst_y - p.src_y) > 0.5);
+        if pins.is_empty() || !any_moved {
+            guard.mark_full_dirty();
+            return self.info_from_locked(&guard);
+        }
+        let mode_str = match mode.as_str() {
+            "rigid" | "distort" | "normal" => mode.as_str(),
+            _ => "normal",
+        };
+        let pin_json: Vec<Value> = pins
+            .iter()
+            .map(|p| {
+                json!({
+                    "src": [p.src_x as f64, p.src_y as f64],
+                    "dst": [p.dst_x as f64, p.dst_y as f64],
+                })
+            })
+            .collect();
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Kukla bükme uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        guard
+            .session
+            .execute(
+                "edit.puppetWarp",
+                json!({
+                    "pins": pin_json,
+                    "mode": mode_str,
+                    "density": "normal",
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Resizes the entire document canvas and all layers using PhotoCraft's native `image.imageSize`
+    /// with selectable resampling filter (`lanczos`, `bicubic`, `bicubicSharper`, `preserveDetails`, `bilinear`, `nearest`).
+    pub fn resize_image(&self, width: u32, height: u32, resample: String) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let w = width.clamp(16, 8192);
+        let h = height.clamp(16, 8192);
+        let method = match resample.as_str() {
+            "lanczos" | "bicubic" | "bicubicSharper" | "bicubicSmoother" | "preserveDetails" | "bilinear" | "nearest" => resample.as_str(),
+            _ => "lanczos",
+        };
+        guard
+            .session
+            .execute("image.imageSize", json!({ "width": w, "height": h, "resample": method }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -6356,5 +6486,46 @@ mod v08_automated_tests {
         ).unwrap();
         assert_eq!(eng.get_layers().unwrap().len(), base_layers, "removeLayer:true must leave no stray text layer behind");
         assert!(eng.core.lock().session.active().unwrap().doc().selection.is_some());
+    }
+
+    #[test]
+    fn test_puppet_warp_proxy_and_apply_succeeds() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 128, 128).unwrap();
+        let pins = vec![
+            PuppetPinPoint { src_x: 32.0, src_y: 32.0, dst_x: 32.0, dst_y: 32.0 },
+            PuppetPinPoint { src_x: 96.0, src_y: 32.0, dst_x: 96.0, dst_y: 32.0 },
+            PuppetPinPoint { src_x: 64.0, src_y: 96.0, dst_x: 78.0, dst_y: 84.0 },
+        ];
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_puppet_warp(pins.clone(), "normal".into()).unwrap();
+        let info = eng.apply_puppet_warp(pins, "normal".into()).unwrap();
+        assert!(info.can_undo, "apply_puppet_warp must push an undo step");
+    }
+
+    #[test]
+    fn test_puppet_warp_all_modes_rigid_normal_distort() {
+        for mode in ["rigid", "normal", "distort"] {
+            let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+            eng.new_document("Test".into(), 96, 96).unwrap();
+            let pins = vec![
+                PuppetPinPoint { src_x: 24.0, src_y: 48.0, dst_x: 24.0, dst_y: 48.0 },
+                PuppetPinPoint { src_x: 72.0, src_y: 48.0, dst_x: 72.0, dst_y: 62.0 },
+            ];
+            eng.apply_puppet_warp(pins, mode.into())
+                .unwrap_or_else(|e| panic!("puppetWarp mode {mode} failed: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn test_resize_image_lanczos_and_nearest_updates_dimensions() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 128, 96).unwrap();
+        let info1 = eng.resize_image(256, 192, "lanczos".into()).unwrap();
+        assert_eq!((info1.width, info1.height), (256, 192));
+        let info2 = eng.resize_image(64, 48, "nearest".into()).unwrap();
+        assert_eq!((info2.width, info2.height), (64, 48));
+        let undone = eng.undo().unwrap();
+        assert_eq!((undone.width, undone.height), (256, 192));
     }
 }

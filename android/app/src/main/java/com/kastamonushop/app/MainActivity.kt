@@ -73,6 +73,7 @@ import com.kastamonushop.app.ui.canvas.RulerLinePreview
 import com.kastamonushop.app.ui.canvas.VulkanCanvasView
 import com.kastamonushop.app.viewmodel.ActiveTool
 import com.kastamonushop.app.viewmodel.EditorViewModel
+import uniffi.kastamonushop_ffi.PuppetPinPoint
 import com.kastamonushop.app.viewmodel.EditorUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -124,7 +125,9 @@ private enum class BottomPanel {
     HSL_MIXER_LIVE,
     POSTER_THRESH_LIVE,
     FILTER_GALLERY_EDIT,
-    LIGHT_DISTORT_EDIT
+    LIGHT_DISTORT_EDIT,
+    PUPPET_WARP_EDIT,
+    IMAGE_RESIZE_EDIT
 }
 
 private data class BlendModeOption(
@@ -294,7 +297,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.3.2",
+                    text = "v1.4.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -711,6 +714,13 @@ fun StonebridgeStudioScreen(
     var ldX by remember { mutableStateOf(35f) }
     var ldY by remember { mutableStateOf(30f) }
     var ldVariant by remember { mutableStateOf("moviePrime") }
+    var puppetPins by remember { mutableStateOf<List<PuppetPinPoint>>(emptyList()) }
+    var puppetSelectedIdx by remember { mutableIntStateOf(-1) }
+    var puppetMode by remember { mutableStateOf("normal") }
+    var resizeWidthText by remember { mutableStateOf("1080") }
+    var resizeHeightText by remember { mutableStateOf("1080") }
+    var resizeLockAspect by remember { mutableStateOf(true) }
+    var resizeResample by remember { mutableStateOf("lanczos") }
     var loupeScreenPos by remember { mutableStateOf<Offset?>(null) }
     val activeLayerPrev by vm.activeLayerPreview.collectAsState()
     val context = LocalContext.current
@@ -1000,7 +1010,7 @@ fun StonebridgeStudioScreen(
             BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE,
             BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE,
             BottomPanel.CINEMA_LOOK_EDIT, BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT,
-            BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.LIGHT_DISTORT_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> {
+            BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.LIGHT_DISTORT_EDIT, BottomPanel.PUPPET_WARP_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> {
                 clearAdjustGpuPreviewOnly()
                 activePanel = BottomPanel.DOCK
             }
@@ -1045,7 +1055,8 @@ fun StonebridgeStudioScreen(
                     }
                     activePanel = BottomPanel.DOCK
                 }
-                BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> activePanel = BottomPanel.CROP_MENU
+                BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT, BottomPanel.IMAGE_RESIZE_EDIT -> activePanel = BottomPanel.CROP_MENU
+                BottomPanel.PUPPET_WARP_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.LAYER_FX_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.DOCK }
                 BottomPanel.CAMERA_LIGHT_LIVE -> { clearAdjustGpuPreviewOnly(); activePanel = BottomPanel.ADJUST_MENU }
@@ -1131,7 +1142,8 @@ fun StonebridgeStudioScreen(
             activePanel == BottomPanel.POSTER_THRESH_LIVE ||
             activePanel == BottomPanel.FILTER_GALLERY_EDIT ||
             activePanel == BottomPanel.LIGHT_DISTORT_EDIT ||
-            activePanel == BottomPanel.TEXT_EDIT
+            activePanel == BottomPanel.TEXT_EDIT ||
+            activePanel == BottomPanel.PUPPET_WARP_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -2033,6 +2045,36 @@ fun StonebridgeStudioScreen(
                 }
             }
         }
+        if (activePanel == BottomPanel.PUPPET_WARP_EDIT) {
+            PuppetWarpCanvasOverlay(
+                canvasViewRef = canvasViewRef,
+                cameraTick = cameraTick,
+                docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat(),
+                docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat(),
+                pins = puppetPins,
+                selectedIdx = puppetSelectedIdx,
+                onSelectPin = { puppetSelectedIdx = it },
+                onAddPin = { dx, dy ->
+                    val next = puppetPins + PuppetPinPoint(dx, dy, dx, dy)
+                    puppetPins = next
+                    puppetSelectedIdx = next.lastIndex
+                },
+                onMovePin = { idx, nx, ny ->
+                    if (idx in puppetPins.indices) {
+                        val updated = puppetPins.toMutableList()
+                        val old = updated[idx]
+                        updated[idx] = PuppetPinPoint(old.srcX, old.srcY, nx, ny)
+                        puppetPins = updated
+                        vm.updateProxyPuppetWarp(updated, puppetMode)
+                    }
+                },
+                onPinchPan = { dPanX, dPanY, zoomScale, cx, cy ->
+                    canvasViewRef?.applyExternalPinchPan(dPanX, dPanY, zoomScale, cx, cy)
+                    cameraTick++
+                }
+            )
+        }
+
         // v0.9.5 Interactive On-Canvas Gradient Start/End Drag Overlay (60 FPS Live Proxy)
         if (activePanel == BottomPanel.GRADIENT_EDIT) {
             val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
@@ -3508,6 +3550,20 @@ fun StonebridgeStudioScreen(
                                 }
                             )
                             CircularDockButton(
+                                icon = Icons.Default.PhotoSizeSelectLarge,
+                                label = "Boyut",
+                                onClick = {
+                                    if (hasPendingTransform) clearGpuPreview()
+                                    val dw0 = state.docInfo?.width?.toInt() ?: 1080
+                                    val dh0 = state.docInfo?.height?.toInt() ?: 1080
+                                    resizeWidthText = dw0.toString()
+                                    resizeHeightText = dh0.toString()
+                                    resizeLockAspect = true
+                                    resizeResample = "lanczos"
+                                    activePanel = BottomPanel.IMAGE_RESIZE_EDIT
+                                }
+                            )
+                            CircularDockButton(
                                 icon = Icons.AutoMirrored.Filled.RotateLeft,
                                 label = "90° Sol",
                                 onClick = {
@@ -3841,6 +3897,79 @@ fun StonebridgeStudioScreen(
                         activePanel = BottomPanel.DOCK
                     }
                 )
+                BottomPanel.PUPPET_WARP_EDIT -> PuppetWarpPanel(
+                    pinCount = puppetPins.size,
+                    hasSelectedPin = puppetSelectedIdx in puppetPins.indices,
+                    mode = puppetMode,
+                    onMode = { m ->
+                        puppetMode = m
+                        if (puppetPins.isNotEmpty()) vm.updateProxyPuppetWarp(puppetPins, m)
+                    },
+                    onDeleteSelected = {
+                        if (puppetSelectedIdx in puppetPins.indices) {
+                            val next = puppetPins.toMutableList().apply { removeAt(puppetSelectedIdx) }
+                            puppetPins = next
+                            puppetSelectedIdx = if (next.isEmpty()) -1 else (puppetSelectedIdx.coerceAtMost(next.lastIndex))
+                            if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, puppetMode)
+                        }
+                    },
+                    onReset = {
+                        puppetPins = emptyList()
+                        puppetSelectedIdx = -1
+                        vm.resetProxyPreview()
+                    },
+                    onClose = { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU },
+                    onApply = {
+                        vm.applyPuppetWarp(puppetPins, puppetMode)
+                        activePanel = BottomPanel.DOCK
+                    }
+                )
+
+                BottomPanel.IMAGE_RESIZE_EDIT -> ImageResizePanel(
+                    origW = state.docInfo?.width?.toInt() ?: 1080,
+                    origH = state.docInfo?.height?.toInt() ?: 1080,
+                    widthText = resizeWidthText,
+                    heightText = resizeHeightText,
+                    lockAspect = resizeLockAspect,
+                    resample = resizeResample,
+                    onWidthText = { txt ->
+                        val clean = txt.filter { it.isDigit() }.take(4)
+                        resizeWidthText = clean
+                        if (resizeLockAspect) {
+                            val ow = (state.docInfo?.width?.toInt() ?: 1080).coerceAtLeast(1)
+                            val oh = (state.docInfo?.height?.toInt() ?: 1080).coerceAtLeast(1)
+                            val nw = clean.toIntOrNull()
+                            if (nw != null && nw > 0) {
+                                resizeHeightText = ((nw.toFloat() * oh / ow).roundToInt().coerceIn(16, 8192)).toString()
+                            }
+                        }
+                    },
+                    onHeightText = { txt ->
+                        val clean = txt.filter { it.isDigit() }.take(4)
+                        resizeHeightText = clean
+                        if (resizeLockAspect) {
+                            val ow = (state.docInfo?.width?.toInt() ?: 1080).coerceAtLeast(1)
+                            val oh = (state.docInfo?.height?.toInt() ?: 1080).coerceAtLeast(1)
+                            val nh = clean.toIntOrNull()
+                            if (nh != null && nh > 0) {
+                                resizeWidthText = ((nh.toFloat() * ow / oh).roundToInt().coerceIn(16, 8192)).toString()
+                            }
+                        }
+                    },
+                    onToggleLock = { resizeLockAspect = !resizeLockAspect },
+                    onPreset = { pw, ph ->
+                        resizeWidthText = pw.coerceIn(16, 8192).toString()
+                        resizeHeightText = ph.coerceIn(16, 8192).toString()
+                    },
+                    onResample = { resizeResample = it },
+                    onClose = { activePanel = BottomPanel.CROP_MENU },
+                    onApply = {
+                        val tw = resizeWidthText.toIntOrNull()?.coerceIn(16, 8192) ?: (state.docInfo?.width?.toInt() ?: 1080)
+                        val th = resizeHeightText.toIntOrNull()?.coerceIn(16, 8192) ?: (state.docInfo?.height?.toInt() ?: 1080)
+                        vm.resizeImage(tw, th, resizeResample)
+                        activePanel = BottomPanel.DOCK
+                    }
+                )
                 BottomPanel.MOTION_BLUR_EDIT -> MotionBlurPanel(
                     angle = motionBlurAngle, onAngle = { motionBlurAngle = it },
                     distance = motionBlurDistance, onDistance = { motionBlurDistance = it },
@@ -3882,8 +4011,8 @@ fun StonebridgeStudioScreen(
                             onClose = { activePanel = BottomPanel.DOCK }
                         )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             CircularDockButton(
                                 icon = Icons.Default.FilterBAndW,
@@ -3918,6 +4047,17 @@ fun StonebridgeStudioScreen(
                                     liquifyPressure = 75f
                                     vm.beginLiquify()
                                     activePanel = BottomPanel.LIQUIFY_EDIT
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.PushPin,
+                                label = "Kukla",
+                                onClick = {
+                                    puppetPins = emptyList()
+                                    puppetSelectedIdx = -1
+                                    puppetMode = "normal"
+                                    vm.beginProxyPreview()
+                                    activePanel = BottomPanel.PUPPET_WARP_EDIT
                                 }
                             )
                             CircularDockButton(
@@ -5568,4 +5708,259 @@ private fun SelectMenuPanel(
                             }
                         }
                     }
+}
+
+
+@Composable
+private fun PuppetWarpCanvasOverlay(
+    canvasViewRef: VulkanCanvasView?,
+    cameraTick: Int,
+    docW: Float,
+    docH: Float,
+    pins: List<PuppetPinPoint>,
+    selectedIdx: Int,
+    onSelectPin: (Int) -> Unit,
+    onAddPin: (Float, Float) -> Unit,
+    onMovePin: (Int, Float, Float) -> Unit,
+    onPinchPan: (Float, Float, Float, Float, Float) -> Unit
+) {
+    val curPins by rememberUpdatedState(pins)
+    val curCanvas by rememberUpdatedState(canvasViewRef)
+    val curOnSelect by rememberUpdatedState(onSelectPin)
+    val curOnAdd by rememberUpdatedState(onAddPin)
+    val curOnMove by rememberUpdatedState(onMovePin)
+    val curOnPinch by rememberUpdatedState(onPinchPan)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(docW, docH) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val firstDown = awaitFirstDown(requireUnconsumed = false)
+                        val v = curCanvas ?: continue
+                        val startPos = firstDown.position
+                        // Check if user grabbed an existing pin (44px hit radius)
+                        var grabbedIdx = -1
+                        var bestDist = 48f
+                        curPins.forEachIndexed { i, pin ->
+                            val (px, py) = v.docToScreen(pin.dstX, pin.dstY)
+                            val d = hypot((startPos.x - px).toDouble(), (startPos.y - py).toDouble()).toFloat()
+                            if (d < bestDist) {
+                                bestDist = d
+                                grabbedIdx = i
+                            }
+                        }
+                        if (grabbedIdx >= 0) {
+                            curOnSelect(grabbedIdx)
+                        }
+                        var wasMultiTouch = false
+                        var movedFar = false
+                        var prevMid: Offset? = null
+                        var prevDist = 0f
+
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val active = ev.changes.filter { it.pressed }
+                            if (active.isEmpty()) break
+                            if (active.size >= 2) {
+                                wasMultiTouch = true
+                                val p0 = active[0].position
+                                val p1 = active[1].position
+                                val mid = Offset((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f)
+                                val dist = hypot((p1.x - p0.x).toDouble(), (p1.y - p0.y).toDouble()).toFloat().coerceAtLeast(1f)
+                                if (prevMid != null && prevDist > 1f) {
+                                    curOnPinch(mid.x - prevMid!!.x, mid.y - prevMid!!.y, dist / prevDist, mid.x, mid.y)
+                                }
+                                prevMid = mid
+                                prevDist = dist
+                                active.forEach { it.consume() }
+                            } else if (!wasMultiTouch) {
+                                val ch = active[0]
+                                val delta = hypot((ch.position.x - startPos.x).toDouble(), (ch.position.y - startPos.y).toDouble()).toFloat()
+                                if (delta > 8f) movedFar = true
+                                if (grabbedIdx >= 0 && movedFar) {
+                                    val (dx, dy) = v.screenToDoc(ch.position.x, ch.position.y)
+                                    curOnMove(grabbedIdx, dx.coerceIn(0f, docW), dy.coerceIn(0f, docH))
+                                }
+                                ch.consume()
+                            }
+                        }
+                        // Clean single tap on empty canvas -> drop a new Puppet Pin!
+                        if (!wasMultiTouch && !movedFar && grabbedIdx < 0) {
+                            val (dx, dy) = v.screenToDoc(startPos.x, startPos.y)
+                            if (dx in 0f..docW && dy in 0f..docH) {
+                                curOnAdd(dx, dy)
+                            }
+                        }
+                    }
+                }
+            }
+    ) {
+        if (canvasViewRef != null && cameraTick >= 0) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                pins.forEachIndexed { idx, pin ->
+                    val (sx, sy) = canvasViewRef.docToScreen(pin.srcX, pin.srcY)
+                    val (dx, dy) = canvasViewRef.docToScreen(pin.dstX, pin.dstY)
+                    val isSel = idx == selectedIdx
+                    // Subtle tether line from anchor src to moved dst
+                    if (hypot((dx - sx).toDouble(), (dy - sy).toDouble()) > 3.0) {
+                        drawCircle(color = Color(0x88FFFFFF), radius = 5f, center = Offset(sx, sy))
+                        drawLine(
+                            color = Color(0xCC4F9CFF),
+                            start = Offset(sx, sy),
+                            end = Offset(dx, dy),
+                            strokeWidth = 3f
+                        )
+                    }
+                    // Outer ring + filled pin head
+                    drawCircle(
+                        color = if (isSel) Color(0xFFFFD600) else Color(0xFF4F9CFF),
+                        radius = if (isSel) 18f else 14f,
+                        center = Offset(dx, dy)
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = if (isSel) 11f else 8f,
+                        center = Offset(dx, dy)
+                    )
+                    drawCircle(
+                        color = if (isSel) Color(0xFFFF6D00) else Color(0xFF1565C0),
+                        radius = 4.5f,
+                        center = Offset(dx, dy)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PuppetWarpPanel(
+    pinCount: Int,
+    hasSelectedPin: Boolean,
+    mode: String,
+    onMode: (String) -> Unit,
+    onDeleteSelected: () -> Unit,
+    onReset: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader(
+            title = "Kukla Bükme ($pinCount iğne)",
+            subtitle = "Dokunarak iğne koy, sürükleyerek bük (2 parmakla yakınlaştır)",
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = onApply
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf("rigid" to "Sert", "normal" to "Normal", "distort" to "Esnek").forEach { (id, lbl) ->
+                FilterChip(selected = mode == id, onClick = { onMode(id) }, label = { Text(lbl, fontSize = 11.sp) })
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            if (hasSelectedPin) {
+                FilledTonalButton(onClick = onDeleteSelected, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+                    Text("İğneyi Sil", fontSize = 10.sp)
+                }
+            }
+            if (pinCount > 0) {
+                FilledTonalButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+                    Text("Sıfırla", fontSize = 10.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImageResizePanel(
+    origW: Int,
+    origH: Int,
+    widthText: String,
+    heightText: String,
+    lockAspect: Boolean,
+    resample: String,
+    onWidthText: (String) -> Unit,
+    onHeightText: (String) -> Unit,
+    onToggleLock: () -> Unit,
+    onPreset: (Int, Int) -> Unit,
+    onResample: (String) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    val curW = widthText.toIntOrNull() ?: origW
+    val curH = heightText.toIntOrNull() ?: origH
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader(
+            title = "Görsel Boyutlandır",
+            subtitle = "Mevcut: ${origW}×${origH} px  →  Yeni: ${curW}×${curH} px",
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = onApply
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = widthText,
+                onValueChange = onWidthText,
+                singleLine = true,
+                label = { Text("Genişlik (px)", fontSize = 10.sp) },
+                modifier = Modifier.weight(1f)
+            )
+            FilterChip(
+                selected = lockAspect,
+                onClick = onToggleLock,
+                label = { Text(if (lockAspect) "Oran Kilitli" else "Serbest", fontSize = 10.sp) }
+            )
+            OutlinedTextField(
+                value = heightText,
+                onValueChange = onHeightText,
+                singleLine = true,
+                label = { Text("Yükseklik (px)", fontSize = 10.sp) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                "%50" to ((origW * 0.5f).roundToInt() to (origH * 0.5f).roundToInt()),
+                "%75" to ((origW * 0.75f).roundToInt() to (origH * 0.75f).roundToInt()),
+                "%150" to ((origW * 1.5f).roundToInt() to (origH * 1.5f).roundToInt()),
+                "%200" to ((origW * 2.0f).roundToInt() to (origH * 2.0f).roundToInt()),
+                "1080p" to (1920 to (1920f * origH / origW.coerceAtLeast(1)).roundToInt()),
+                "1080×1080" to (1080 to 1080),
+                "4K" to (3840 to (3840f * origH / origW.coerceAtLeast(1)).roundToInt())
+            ).forEach { (lbl, dims) ->
+                FilterChip(
+                    selected = curW == dims.first && curH == dims.second,
+                    onClick = { onPreset(dims.first, dims.second) },
+                    label = { Text(lbl, fontSize = 10.sp) }
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(
+                "lanczos" to "Lanczos (Keskin)",
+                "bicubic" to "Bikübik",
+                "preserveDetails" to "Detay Koru",
+                "bilinear" to "Bilineer",
+                "nearest" to "Piksel"
+            ).forEach { (id, lbl) ->
+                FilterChip(selected = resample == id, onClick = { onResample(id) }, label = { Text(lbl, fontSize = 10.sp) })
+            }
+        }
+    }
 }
