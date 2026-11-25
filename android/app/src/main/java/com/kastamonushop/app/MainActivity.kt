@@ -58,6 +58,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -290,7 +292,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.2.5",
+                    text = "v1.3.0",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -890,6 +892,14 @@ fun StonebridgeStudioScreen(
     var textSizePx by remember { mutableFloatStateOf(140f) }
     var textColorHex by remember { mutableStateOf("#FFFFFF") }
     var textAlign by remember { mutableStateOf("center") }
+    var textFontFamily by remember { mutableStateOf("Montserrat") }
+    var textBold by remember { mutableStateOf(false) }
+    var textItalic by remember { mutableStateOf(false) }
+    var textTracking by remember { mutableFloatStateOf(0f) }
+    var textLineHeight by remember { mutableFloatStateOf(1.2f) }
+    var textVertical by remember { mutableStateOf(false) }
+    var textEditLayerId by remember { mutableStateOf<ULong?>(null) }
+    val studioFonts by vm.studioFonts.collectAsState()
     var cameraTick by remember { mutableIntStateOf(0) }
 
     var brightnessVal by remember { mutableFloatStateOf(0f) }
@@ -1872,12 +1882,26 @@ fun StonebridgeStudioScreen(
                         .background(Color(0x44111217), RoundedCornerShape(8.dp))
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
+                    val previewFont = studioFonts.firstOrNull { it.family.equals(textFontFamily, true) }?.composeFont ?: FontFamily.SansSerif
+                    val displayTxt = remember(textDraft, textVertical) {
+                        val raw = textDraft.ifBlank { "Metin..." }
+                        if (textVertical) raw.replace("\n", " ").toCharArray().joinToString("\n") else raw
+                    }
                     Text(
-                        text = textDraft.ifBlank { "Metin..." },
+                        text = displayTxt,
                         color = previewColor,
+                        fontFamily = previewFont,
                         fontSize = previewSp.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 3
+                        fontWeight = if (textBold) FontWeight.Bold else FontWeight.Normal,
+                        fontStyle = if (textItalic) FontStyle.Italic else FontStyle.Normal,
+                        letterSpacing = (textTracking / 1000f * previewSp).coerceIn(-4f, 24f).sp,
+                        lineHeight = (previewSp * textLineHeight.coerceIn(0.8f, 2.4f)).sp,
+                        textAlign = when (textAlign) {
+                            "left" -> TextAlign.Start
+                            "right" -> TextAlign.End
+                            else -> TextAlign.Center
+                        },
+                        maxLines = if (textVertical) 16 else 5
                     )
                 }
             }
@@ -2659,10 +2683,34 @@ fun StonebridgeStudioScreen(
                             label = "Metin",
                             onClick = {
                                 vm.setTool(ActiveTool.NONE)
+                                vm.ensureStudioFontsLoaded(context)
                                 val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                                textEditLayerId = null
                                 textSizePx = (docW * 0.055f).coerceIn(24f, 180f)
                                 textNormX = 0.50f
                                 textNormY = 0.50f
+                                textTracking = 0f
+                                textLineHeight = 1.2f
+                                textVertical = false
+                                textBold = false
+                                textItalic = false
+                                vm.inspectActiveTextLayer { existing ->
+                                    if (existing != null) {
+                                        textEditLayerId = existing.layerId
+                                        textDraft = existing.text
+                                        textFontFamily = existing.fontFamily.ifBlank { "Montserrat" }
+                                        textSizePx = existing.sizePx.coerceIn(24f, 420f)
+                                        textColorHex = existing.colorHex
+                                        textAlign = existing.align
+                                        textBold = existing.bold
+                                        textItalic = existing.italic
+                                        textTracking = existing.tracking
+                                        textLineHeight = existing.lineHeight
+                                        textVertical = existing.vertical
+                                        textNormX = existing.normX
+                                        textNormY = existing.normY
+                                    }
+                                }
                                 activePanel = BottomPanel.TEXT_EDIT
                             }
                         )
@@ -3201,76 +3249,52 @@ fun StonebridgeStudioScreen(
                 BottomPanel.TEXT_EDIT -> {
                     val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
                     val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Metin Ekle",
-                            subtitle = "Fotoğrafa dokunarak yazıyı konumlandır, sonra Uygula de",
-                            applyLabel = "Uygula",
-                            onClose = { activePanel = BottomPanel.DOCK },
-                            onApply = {
-                                vm.addTextLayer(
-                                    text = textDraft,
-                                    x = docW * textNormX,
-                                    y = docH * textNormY,
-                                    sizePx = textSizePx,
-                                    colorHex = textColorHex,
-                                    align = textAlign
-                                )
-                                activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        OutlinedTextField(
-                            value = textDraft,
-                            onValueChange = { textDraft = it },
-                            singleLine = true,
-                            placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            listOf("#FFFFFF", "#000000", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB").forEach { hex ->
-                                val c = Color(AndroidColor.parseColor(hex))
-                                Box(
-                                    modifier = Modifier
-                                        .size(22.dp)
-                                        .clip(CircleShape)
-                                        .background(c)
-                                        .border(
-                                            width = if (textColorHex.equals(hex, true)) 2.5.dp else 1.dp,
-                                            color = if (textColorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            shape = CircleShape
-                                        )
-                                        .clickable { textColorHex = hex }
-                                )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                listOf("left" to "Sol", "center" to "Orta", "right" to "Sağ").forEach { (id, lbl) ->
-                                    FilterChip(
-                                        selected = textAlign == id,
-                                        onClick = { textAlign = id },
-                                        label = { Text(lbl, fontSize = 10.sp) }
-                                    )
-                                }
-                            }
+                    TextStudioPanel(
+                        isEditingExisting = textEditLayerId != null,
+                        onSwitchToNew = { textEditLayerId = null },
+                        text = textDraft,
+                        onText = { textDraft = it },
+                        fonts = studioFonts,
+                        selectedFont = textFontFamily,
+                        onSelectFont = { textFontFamily = it },
+                        colorHex = textColorHex,
+                        onColorHex = { textColorHex = it },
+                        align = textAlign,
+                        onAlign = { textAlign = it },
+                        bold = textBold,
+                        onBold = { textBold = it },
+                        italic = textItalic,
+                        onItalic = { textItalic = it },
+                        vertical = textVertical,
+                        onVertical = { textVertical = it },
+                        sizePx = textSizePx,
+                        defaultSizePx = (docW * 0.08f).coerceIn(36f, 260f),
+                        onSizePx = { textSizePx = it },
+                        tracking = textTracking,
+                        onTracking = { textTracking = it },
+                        lineHeight = textLineHeight,
+                        onLineHeight = { textLineHeight = it },
+                        onClose = { activePanel = BottomPanel.DOCK },
+                        onApply = {
+                            vm.addOrEditTextLayer(
+                                editLayerId = textEditLayerId,
+                                text = textDraft,
+                                x = docW * textNormX,
+                                y = docH * textNormY,
+                                sizePx = textSizePx,
+                                colorHex = textColorHex,
+                                align = textAlign,
+                                fontFamily = textFontFamily,
+                                bold = textBold,
+                                italic = textItalic,
+                                tracking = textTracking,
+                                lineHeight = textLineHeight,
+                                vertical = textVertical
+                            )
+                            activePanel = BottomPanel.DOCK
                         }
-                        CompactSliderRow(
-                            label = "Boyut",
-                            valueText = "${textSizePx.roundToInt()}px",
-                            value = textSizePx,
-                            range = 24f..420f,
-                            defaultValue = (docW * 0.08f).coerceIn(36f, 260f)
-                        ) {
-                            textSizePx = it
-                        }
-                    }
+                    )
                 }
-
                 BottomPanel.ADJUST_MENU -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -5171,6 +5195,144 @@ private fun LightDistortPanel(
             }
             "twirl" -> {
                 CompactSliderRow("Girdap Açısı", "${amount.roundToInt()}°", amount, -360f..360f, 0f, onChange = onAmount)
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun TextStudioPanel(
+    isEditingExisting: Boolean,
+    onSwitchToNew: () -> Unit,
+    text: String, onText: (String) -> Unit,
+    fonts: List<EditorViewModel.StudioFontOption>,
+    selectedFont: String, onSelectFont: (String) -> Unit,
+    colorHex: String, onColorHex: (String) -> Unit,
+    align: String, onAlign: (String) -> Unit,
+    bold: Boolean, onBold: (Boolean) -> Unit,
+    italic: Boolean, onItalic: (Boolean) -> Unit,
+    vertical: Boolean, onVertical: (Boolean) -> Unit,
+    sizePx: Float, defaultSizePx: Float, onSizePx: (Float) -> Unit,
+    tracking: Float, onTracking: (Float) -> Unit,
+    lineHeight: Float, onLineHeight: (Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    var tab by remember { mutableIntStateOf(0) }
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader(
+            title = if (isEditingExisting) "Metni Düzenle" else "Tipografi Stüdyosu",
+            subtitle = "Fotoğrafa dokunup konumlandır — canlı yazı tipi önizlemesi",
+            applyLabel = if (isEditingExisting) "Güncelle" else "Uygula",
+            onClose = onClose,
+            onApply = onApply
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("Yazı & Font", fontSize = 11.sp) })
+            FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("Aralık & Boyut", fontSize = 11.sp) })
+            if (isEditingExisting) {
+                FilterChip(selected = false, onClick = onSwitchToNew, label = { Text("+ Yeni Katman", fontSize = 10.sp) })
+            }
+        }
+        if (tab == 0) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = onText,
+                singleLine = false,
+                maxLines = 3,
+                placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val listToShow = if (fonts.isNotEmpty()) fonts else listOf(
+                    EditorViewModel.StudioFontOption("Montserrat", "Montserrat", "Modern", FontFamily.SansSerif)
+                )
+                listToShow.forEach { opt ->
+                    val isSel = selectedFont.equals(opt.family, ignoreCase = true)
+                    Column(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color(0xFF232530))
+                            .border(
+                                width = if (isSel) 1.5.dp else 1.dp,
+                                color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF3A3D4D),
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                            .clickable { onSelectFont(opt.family) }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = opt.displayName,
+                            fontFamily = opt.composeFont,
+                            color = if (isSel) Color.White else Color(0xFFE0E3EE),
+                            fontSize = 13.sp,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = opt.category,
+                            color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF8C92A8),
+                            fontSize = 9.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf("#FFFFFF", "#000000", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB", "#FF8C00").forEach { hex ->
+                    val c = Color(AndroidColor.parseColor(hex))
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(c)
+                            .border(
+                                width = if (colorHex.equals(hex, true)) 2.5.dp else 1.dp,
+                                color = if (colorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
+                                shape = CircleShape
+                            )
+                            .clickable { onColorHex(hex) }
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                FilterChip(selected = bold, onClick = { onBold(!bold) }, label = { Text("K", fontWeight = FontWeight.Bold, fontSize = 11.sp) })
+                FilterChip(selected = italic, onClick = { onItalic(!italic) }, label = { Text("İ", fontStyle = FontStyle.Italic, fontSize = 11.sp) })
+                FilterChip(selected = vertical, onClick = { onVertical(!vertical) }, label = { Text("Dikey", fontSize = 10.sp) })
+            }
+        } else {
+            CompactSliderRow("Boyut", "${sizePx.roundToInt()}px", sizePx, 24f..420f, defaultSizePx, onChange = onSizePx)
+            CompactSliderRow("Harf Arası", "${tracking.roundToInt()}", tracking, -80f..400f, 0f, onChange = onTracking)
+            CompactSliderRow(
+                label = "Satır Arası",
+                valueText = if (abs(lineHeight - 1.2f) < 0.03f) "Oto" else String.format(java.util.Locale.US, "%.2fx", lineHeight),
+                value = lineHeight,
+                range = 0.8f..2.4f,
+                defaultValue = 1.2f,
+                onChange = onLineHeight
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf("left" to "Sol", "center" to "Orta", "right" to "Sağ").forEach { (id, lbl) ->
+                    FilterChip(selected = align == id, onClick = { onAlign(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                FilterChip(selected = !vertical, onClick = { onVertical(false) }, label = { Text("Yatay", fontSize = 10.sp) })
+                FilterChip(selected = vertical, onClick = { onVertical(true) }, label = { Text("Dikey", fontSize = 10.sp) })
             }
         }
     }

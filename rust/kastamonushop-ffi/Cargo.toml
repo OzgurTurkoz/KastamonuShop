@@ -25,6 +25,7 @@ photocraft-color = { path = "../../third_party/photocraft/crates/color" }
 photocraft-raster = { path = "../../third_party/photocraft/crates/raster" }
 photocraft-paint = { path = "../../third_party/photocraft/crates/paint" }
 photocraft-algo = { path = "../../third_party/photocraft/crates/algo" }
+photocraft-text = { path = "../../third_party/photocraft/crates/text" }
 
 # Hardware-accelerated Vulkan / GLES rendering (matches photocraft-gpu's wgpu 30)
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan", "gles"] }

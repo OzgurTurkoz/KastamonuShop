@@ -6,6 +6,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Typeface
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
@@ -14,6 +15,7 @@ import android.provider.OpenableColumns
 import java.nio.ByteBuffer
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.font.FontFamily
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kastamonushop.app.bridge.NativeSurfaceBridge
@@ -32,6 +34,7 @@ import uniffi.kastamonushop_ffi.KastamonuEngine
 import uniffi.kastamonushop_ffi.LayerSummary
 import uniffi.kastamonushop_ffi.SelectionBounds
 import uniffi.kastamonushop_ffi.StrokeSample
+import uniffi.kastamonushop_ffi.TextLayerStyle
 import uniffi.kastamonushop_ffi.createKastamonuEngine
 import uniffi.kastamonushop_ffi.engineVersionInfo
 import uniffi.kastamonushop_ffi.getLastGpuError
@@ -214,6 +217,142 @@ class EditorViewModel : ViewModel() {
 
     private val _lightDistortThumbs = MutableStateFlow<List<ImageBitmap>>(emptyList())
     val lightDistortThumbs: StateFlow<List<ImageBitmap>> = _lightDistortThumbs.asStateFlow()
+
+    data class StudioFontOption(
+        val family: String,
+        val displayName: String,
+        val category: String,
+        val composeFont: FontFamily
+    )
+
+    private val _studioFonts = MutableStateFlow<List<StudioFontOption>>(emptyList())
+    val studioFonts: StateFlow<List<StudioFontOption>> = _studioFonts.asStateFlow()
+
+    @Volatile
+    private var fontsInitialized = false
+
+    fun ensureStudioFontsLoaded(context: Context) {
+        if (fontsInitialized && _studioFonts.value.isNotEmpty()) return
+        paintExecutor.execute {
+            runCatching {
+                val curatedMeta = listOf(
+                    Triple("Montserrat.ttf", "Montserrat", "Modern Sans"),
+                    Triple("PlayfairDisplay.ttf", "Playfair Display", "Dergi Serif"),
+                    Triple("Oswald.ttf", "Oswald", "Poster"),
+                    Triple("BebasNeue.ttf", "Bebas Neue", "Başlık"),
+                    Triple("Caveat.ttf", "Caveat", "El Yazısı"),
+                    Triple("DancingScript.ttf", "Dancing Script", "Kaligrafi"),
+                    Triple("Lora.ttf", "Lora", "Klasik Serif"),
+                    Triple("Poppins-Regular.ttf", "Poppins", "Yumuşak Sans"),
+                    Triple("Pacifico.ttf", "Pacifico", "Retro Fırça"),
+                    Triple("SpaceMono-Regular.ttf", "Space Mono", "Daktilo")
+                )
+                val extraAssets = listOf("Poppins-Bold.ttf", "SpaceMono-Bold.ttf")
+                val assets = context.assets
+                val options = ArrayList<StudioFontOption>()
+                val seen = HashSet<String>()
+
+                for ((fileName, fallbackFamily, cat) in curatedMeta) {
+                    runCatching {
+                        val bytes = assets.open("fonts/$fileName").use { it.readBytes() }
+                        val registered = engine.registerFontBytes(bytes)
+                        val realFamily = registered.firstOrNull() ?: fallbackFamily
+                        val tf = Typeface.createFromAsset(assets, "fonts/$fileName")
+                        if (seen.add(realFamily.lowercase())) {
+                            options.add(StudioFontOption(realFamily, fallbackFamily, cat, FontFamily(tf)))
+                        }
+                    }
+                }
+                for (extra in extraAssets) {
+                    runCatching {
+                        val bytes = assets.open("fonts/$extra").use { it.readBytes() }
+                        engine.registerFontBytes(bytes)
+                    }
+                }
+
+                val sysFamilies = runCatching { engine.listAvailableFonts() }.getOrDefault(emptyList())
+                val preferredSystem = listOf("Roboto", "Noto Serif", "Droid Sans Mono", "Cutive Mono", "Carrois Gothic SC")
+                for (sf in preferredSystem) {
+                    val match = sysFamilies.firstOrNull { it.equals(sf, ignoreCase = true) }
+                    if (match != null && seen.add(match.lowercase())) {
+                        val cf = when {
+                            match.contains("Serif", true) -> FontFamily.Serif
+                            match.contains("Mono", true) -> FontFamily.Monospace
+                            else -> FontFamily.SansSerif
+                        }
+                        options.add(StudioFontOption(match, match, "Sistem", cf))
+                    }
+                }
+                for (sf in sysFamilies) {
+                    if (options.size >= 24) break
+                    if (seen.add(sf.lowercase()) && !sf.startsWith(".") && !sf.contains("Emoji", true) && !sf.contains("Symbol", true)) {
+                        val cf = when {
+                            sf.contains("Serif", true) -> FontFamily.Serif
+                            sf.contains("Mono", true) -> FontFamily.Monospace
+                            else -> FontFamily.SansSerif
+                        }
+                        options.add(StudioFontOption(sf, sf, "Sistem", cf))
+                    }
+                }
+                if (options.isEmpty()) {
+                    options.add(StudioFontOption("Roboto", "Roboto", "Sistem", FontFamily.SansSerif))
+                }
+                _studioFonts.value = options
+                fontsInitialized = true
+            }
+        }
+    }
+
+    fun inspectActiveTextLayer(onResult: (TextLayerStyle?) -> Unit) {
+        paintExecutor.execute {
+            val st = runCatching { engine.getActiveTextLayerStyle() }.getOrNull()
+            android.os.Handler(android.os.Looper.getMainLooper()).post { onResult(st) }
+        }
+    }
+
+    fun addOrEditTextLayer(
+        editLayerId: ULong?,
+        text: String,
+        x: Float,
+        y: Float,
+        sizePx: Float,
+        colorHex: String,
+        align: String,
+        fontFamily: String,
+        bold: Boolean,
+        italic: Boolean,
+        tracking: Float,
+        lineHeight: Float,
+        vertical: Boolean
+    ) {
+        dismissCompareOriginal()
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.addOrEditTextLayer(
+                    editLayerId = editLayerId,
+                    text = text,
+                    x = x,
+                    y = y,
+                    sizePx = sizePx,
+                    colorHex = colorHex,
+                    align = align,
+                    fontFamily = fontFamily,
+                    bold = bold,
+                    italic = italic,
+                    tracking = tracking,
+                    lineHeight = lineHeight,
+                    vertical = vertical
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus(if (editLayerId != null) "Metin güncellendi" else "Metin katmanı eklendi", 1800L)
+            }.onFailure { err ->
+                showStatus("Metin hatası: ${err.message}", 2600L)
+            }
+        }
+    }
 
     fun loadLightDistortThumbs() {
         paintExecutor.execute {
