@@ -1231,66 +1231,57 @@ impl KastamonuEngine {
     /// If the currently active layer is a PhotoCraft Text layer, returns its full typography properties
     /// so the Typography Studio opens in `type.edit` mode automatically.
     pub fn get_active_text_layer_style(&self) -> Option<TextLayerStyle> {
-        let mut guard = self.core.lock();
-        let (active_id, doc_w, doc_h, dpi) = {
-            let ds = guard.session.active()?;
-            let id = ds.active_layer()?;
-            let doc = ds.doc();
-            let layer = doc.layers.iter().find(|l| l.id == id)?;
-            if !matches!(layer.content, LayerContent::Text(_)) {
-                return None;
-            }
-            (id, doc.size.width.max(1) as f32, doc.size.height.max(1) as f32, doc.resolution_dpi.max(1.0))
+        let guard = self.core.lock();
+        let ds = guard.session.active()?;
+        let active_id = ds.active_layer()?;
+        let doc = ds.doc();
+        let layer = doc.layers.iter().find(|l| l.id == active_id)?;
+        let LayerContent::Text(t) = &layer.content else {
+            return None;
         };
-        let info = guard.session.execute("type.info", json!({ "layer": active_id.0 })).ok()?;
-        let text = info.get("text").and_then(Value::as_str).unwrap_or("").to_string();
-        let orientation = info.get("orientation").and_then(Value::as_str).unwrap_or("horizontal");
-        let vertical = orientation.eq_ignore_ascii_case("vertical");
-        let run0 = info.get("runs").and_then(Value::as_array).and_then(|a| a.first());
-        let para0 = info.get("paragraphs").and_then(Value::as_array).and_then(|a| a.first());
+        let doc_w = doc.size.width.max(1) as f32;
+        let doc_h = doc.size.height.max(1) as f32;
+        let dpi = doc.resolution_dpi.max(1.0);
 
-        let font_family = run0
-            .and_then(|r| r.get("font").or_else(|| r.get("family")).and_then(Value::as_str))
-            .unwrap_or("Montserrat")
-            .to_string();
-        let size_pt = run0.and_then(|r| r.get("size").and_then(Value::as_f64)).unwrap_or(48.0) as f32;
+        let char_runs = t.char_runs();
+        let st = char_runs.first().map(|r| &r.style);
+        let para_runs = t.paragraph_runs();
+        let p_align = para_runs.first().map(|p| p.style.align).unwrap_or(photocraft_doc::TextAlign::Center);
+
+        let font_family = st
+            .map(|s| s.font_family.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Montserrat".to_string());
+        let size_pt = st.map(|s| s.size_pt).unwrap_or(48.0).max(6.0);
         let size_px = (size_pt * dpi / 72.0).clamp(12.0, 500.0);
-        let weight = run0.and_then(|r| r.get("weight").and_then(Value::as_f64)).unwrap_or(400.0);
-        let faux_bold = run0.and_then(|r| r.get("fauxBold").and_then(Value::as_bool)).unwrap_or(false);
-        let bold = weight >= 600.0 || faux_bold;
-        let italic = run0.and_then(|r| r.get("italic").and_then(Value::as_bool)).unwrap_or(false);
-        let tracking = run0.and_then(|r| r.get("tracking").and_then(Value::as_f64)).unwrap_or(0.0) as f32;
-        let line_height = match run0.and_then(|r| r.get("leading")) {
-            Some(Value::Number(n)) => {
-                let lpt = n.as_f64().unwrap_or(size_pt as f64 * 1.2) as f32;
-                (lpt / size_pt.max(1.0)).clamp(0.7, 2.8)
-            }
-            _ => 1.2,
-        };
-        let color_hex = run0
-            .and_then(|r| r.get("color").and_then(Value::as_str))
-            .unwrap_or("#FFFFFF")
-            .to_string();
-        let align = para0
-            .and_then(|p| p.get("align").and_then(Value::as_str))
-            .unwrap_or("center")
-            .to_string();
-
-        let (norm_x, norm_y) = if let Some(tf) = info.get("transform").and_then(Value::as_array) {
-            if tf.len() >= 6 {
-                let tx = tf[4].as_f64().unwrap_or(doc_w as f64 * 0.5) as f32;
-                let ty = tf[5].as_f64().unwrap_or(doc_h as f64 * 0.5) as f32;
-                ((tx / doc_w).clamp(0.05, 0.95), (ty / doc_h).clamp(0.05, 0.95))
-            } else {
-                (0.5, 0.5)
-            }
-        } else {
-            (0.5, 0.5)
-        };
+        let bold = st.map(|s| s.weight >= 600 || s.faux_bold).unwrap_or(false);
+        let italic = st.map(|s| s.italic || s.faux_italic).unwrap_or(false);
+        let tracking = st.map(|s| s.tracking).unwrap_or(0.0);
+        let line_height = st
+            .and_then(|s| s.leading_pt)
+            .map(|lpt| (lpt / size_pt).clamp(0.7, 2.8))
+            .unwrap_or(1.2);
+        let color_hex = st
+            .map(|s| {
+                let r = (s.color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
+                let g = (s.color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
+                let b = (s.color.b.clamp(0.0, 1.0) * 255.0).round() as u8;
+                format!("#{r:02X}{g:02X}{b:02X}")
+            })
+            .unwrap_or_else(|| "#FFFFFF".to_string());
+        let align = match p_align {
+            photocraft_doc::TextAlign::Left | photocraft_doc::TextAlign::JustifyLeft => "left",
+            photocraft_doc::TextAlign::Right | photocraft_doc::TextAlign::JustifyRight => "right",
+            _ => "center",
+        }
+        .to_string();
+        let vertical = t.orientation == photocraft_doc::Orientation::Vertical;
+        let norm_x = (t.transform.m[4] as f32 / doc_w).clamp(0.05, 0.95);
+        let norm_y = (t.transform.m[5] as f32 / doc_h).clamp(0.05, 0.95);
 
         Some(TextLayerStyle {
             layer_id: active_id.0,
-            text,
+            text: t.text.clone(),
             font_family,
             size_px,
             color_hex,
