@@ -6123,7 +6123,7 @@ mod v08_automated_tests {
             "MASK".into(), 128.0, 128.0, 64.0, "center".into(), "".into(),
             true, false, "all".into(), 100.0, 100.0, 0.0, 1.2, false,
         ).unwrap();
-        assert!(sel_info.has_selection, "type.createSelection must create an active selection mask");
+        assert!(sel_info.can_undo && eng.core.lock().session.active().unwrap().doc().selection.is_some(), "type.createSelection must create an active selection mask");
 
         // Now create a text layer and rasterize it
         eng.add_or_edit_text_layer(
