@@ -1246,7 +1246,7 @@ impl KastamonuEngine {
         let char_runs = t.char_runs();
         let st = char_runs.first().map(|r| &r.style);
         let para_runs = t.paragraph_runs();
-        let p_align = para_runs.first().map(|p| p.style.align).unwrap_or(photocraft_doc::TextAlign::Center);
+        let p_align = para_runs.first().map(|p| p.style.align).unwrap_or(photocraft_doc::text::TextAlign::Center);
 
         let font_family = st
             .map(|s| s.font_family.clone())
@@ -1263,19 +1263,19 @@ impl KastamonuEngine {
             .unwrap_or(1.2);
         let color_hex = st
             .map(|s| {
-                let r = (s.color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
-                let g = (s.color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
-                let b = (s.color.b.clamp(0.0, 1.0) * 255.0).round() as u8;
+                let r = (s.color.c[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                let g = (s.color.c[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+                let b = (s.color.c[2].clamp(0.0, 1.0) * 255.0).round() as u8;
                 format!("#{r:02X}{g:02X}{b:02X}")
             })
             .unwrap_or_else(|| "#FFFFFF".to_string());
         let align = match p_align {
-            photocraft_doc::TextAlign::Left | photocraft_doc::TextAlign::JustifyLeft => "left",
-            photocraft_doc::TextAlign::Right | photocraft_doc::TextAlign::JustifyRight => "right",
+            photocraft_doc::text::TextAlign::Left | photocraft_doc::text::TextAlign::JustifyLeft => "left",
+            photocraft_doc::text::TextAlign::Right | photocraft_doc::text::TextAlign::JustifyRight => "right",
             _ => "center",
         }
         .to_string();
-        let vertical = t.orientation == photocraft_doc::Orientation::Vertical;
+        let vertical = t.orientation == photocraft_doc::text::Orientation::Vertical;
         let norm_x = (t.transform.m[4] as f32 / doc_w).clamp(0.05, 0.95);
         let norm_y = (t.transform.m[5] as f32 / doc_h).clamp(0.05, 0.95);
 
