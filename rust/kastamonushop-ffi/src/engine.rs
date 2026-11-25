@@ -1193,8 +1193,8 @@ impl KastamonuEngine {
         let imported = photocraft_io::import(&file_name, &bytes)
             .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
         let flat = photocraft_compose::flatten(&imported.document);
-        let src_w = flat.size.width.max(1);
-        let src_h = flat.size.height.max(1);
+        let src_w = imported.document.size.width.max(1);
+        let src_h = imported.document.size.height.max(1);
 
         let mut guard = self.core.lock();
         guard.live_stroke = None;
