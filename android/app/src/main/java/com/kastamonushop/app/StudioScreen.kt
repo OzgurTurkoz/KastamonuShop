@@ -191,6 +191,7 @@ fun StonebridgeStudioScreen(
         val topPx = with(density) { 96.dp.toPx() }
         val botPx = bottomInsetPxForPanel(panel)
         s.canvasViewRef?.fitToDocument(turns, topPx, botPx)
+        s.cameraTick++
     }
 
     fun clearGpuPreview() {
@@ -1374,15 +1375,13 @@ fun StonebridgeStudioScreen(
             val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
             val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
             val viewRef = s.canvasViewRef
-            val tick = s.cameraTick
-            if (viewRef != null && tick >= 0) {
-                val (sx0, sy0) = viewRef.docToScreen(docW * s.shapeX0Norm, docH * s.shapeY0Norm)
-                val (sx1, sy1) = viewRef.docToScreen(docW * s.shapeX1Norm, docH * s.shapeY1Norm)
+            val handleHitPx = with(density) { 26.dp.toPx() }
+            if (viewRef != null) {
                 androidx.compose.foundation.Canvas(
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(docW, docH, s.shapeKind, s.shapeFillHex, s.shapeStrokeHex, s.shapeStrokeWidth, s.shapeCornerRadius, s.shapeSides) {
-                            var dragMode = 0 // 0=new, 1=handle0, 2=handle1, 3=move
+                            var dragMode = 3 // 1=handle0, 2=handle1, 3=move (rigid, never resizes!)
                             var lastDocX = 0f
                             var lastDocY = 0f
                             detectDragGestures(
@@ -1391,24 +1390,13 @@ fun StonebridgeStudioScreen(
                                     val (c1x, c1y) = viewRef.docToScreen(docW * s.shapeX1Norm, docH * s.shapeY1Norm)
                                     val d0 = kotlin.math.hypot(pos.x - c0x, pos.y - c0y)
                                     val d1 = kotlin.math.hypot(pos.x - c1x, pos.y - c1y)
-                                    val minX = min(c0x, c1x) - 20f
-                                    val maxX = kotlin.math.max(c0x, c1x) + 20f
-                                    val minY = min(c0y, c1y) - 20f
-                                    val maxY = kotlin.math.max(c0y, c1y) + 20f
                                     val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
                                     lastDocX = dx
                                     lastDocY = dy
                                     dragMode = when {
-                                        d0 <= 68f -> 1
-                                        d1 <= 68f -> 2
-                                        pos.x in minX..maxX && pos.y in minY..maxY -> 3
-                                        else -> {
-                                            s.shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
-                                            s.shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
-                                            s.shapeX1Norm = (s.shapeX0Norm + 0.04f).coerceAtMost(1f)
-                                            s.shapeY1Norm = (s.shapeY0Norm + 0.04f).coerceAtMost(1f)
-                                            0
-                                        }
+                                        d0 <= handleHitPx -> 1
+                                        d1 <= handleHitPx -> 2
+                                        else -> 3
                                     }
                                 },
                                 onDrag = { change, _ ->
@@ -1419,19 +1407,25 @@ fun StonebridgeStudioScreen(
                                             s.shapeX0Norm = (dx / docW).coerceIn(0f, 1f)
                                             s.shapeY0Norm = (dy / docH).coerceIn(0f, 1f)
                                         }
-                                        2, 0 -> {
+                                        2 -> {
                                             s.shapeX1Norm = (dx / docW).coerceIn(0f, 1f)
                                             s.shapeY1Norm = (dy / docH).coerceIn(0f, 1f)
                                         }
-                                        3 -> {
+                                        else -> {
                                             val dnx = (dx - lastDocX) / docW
                                             val dny = (dy - lastDocY) / docH
                                             lastDocX = dx
                                             lastDocY = dy
-                                            s.shapeX0Norm = (s.shapeX0Norm + dnx).coerceIn(-0.2f, 1.2f)
-                                            s.shapeY0Norm = (s.shapeY0Norm + dny).coerceIn(-0.2f, 1.2f)
-                                            s.shapeX1Norm = (s.shapeX1Norm + dnx).coerceIn(-0.2f, 1.2f)
-                                            s.shapeY1Norm = (s.shapeY1Norm + dny).coerceIn(-0.2f, 1.2f)
+                                            val bx0 = min(s.shapeX0Norm, s.shapeX1Norm)
+                                            val bx1 = kotlin.math.max(s.shapeX0Norm, s.shapeX1Norm)
+                                            val by0 = min(s.shapeY0Norm, s.shapeY1Norm)
+                                            val by1 = kotlin.math.max(s.shapeY0Norm, s.shapeY1Norm)
+                                            val cdx = dnx.coerceIn(-0.2f - bx0, 1.2f - bx1)
+                                            val cdy = dny.coerceIn(-0.2f - by0, 1.2f - by1)
+                                            s.shapeX0Norm += cdx
+                                            s.shapeX1Norm += cdx
+                                            s.shapeY0Norm += cdy
+                                            s.shapeY1Norm += cdy
                                         }
                                     }
                                     vm.updateProxyShape(
@@ -1444,6 +1438,10 @@ fun StonebridgeStudioScreen(
                             )
                         }
                 ) {
+                    val _camT = s.cameraTick
+                    if (_camT < 0) return@Canvas
+                    val (sx0, sy0) = viewRef.docToScreen(docW * s.shapeX0Norm, docH * s.shapeY0Norm)
+                    val (sx1, sy1) = viewRef.docToScreen(docW * s.shapeX1Norm, docH * s.shapeY1Norm)
                     val lx = min(sx0, sx1)
                     val ty = min(sy0, sy1)
                     val rw = abs(sx1 - sx0).coerceAtLeast(4f)
@@ -1800,6 +1798,32 @@ fun StonebridgeStudioScreen(
         LaunchedEffect(s.showLayers, state.layers, state.docInfo) {
             if (s.showLayers) {
                 vm.refreshLayerThumbnails()
+            }
+        }
+
+        // Safety pill if every layer is currently hidden
+        if (state.layers.isNotEmpty() && state.layers.none { it.visible }) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 74.dp)
+                    .clickable {
+                        val target = state.layers.lastOrNull { it.isBackground } ?: state.layers.last()
+                        vm.toggleLayerVisibility(target.id, true)
+                    },
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xEE3A2418),
+                tonalElevation = 6.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.VisibilityOff, contentDescription = null, tint = Color(0xFFFFD600), modifier = Modifier.size(16.dp))
+                    Text("Tüm katmanlar gizli — Göster", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
 

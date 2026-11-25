@@ -267,8 +267,10 @@ internal fun PuppetWarpCanvasOverlay(
                 }
             }
     ) {
-        if (canvasViewRef != null && cameraTick >= 0) {
+        if (canvasViewRef != null) {
             Canvas(modifier = Modifier.fillMaxSize()) {
+                val _camTick = cameraTick
+                if (_camTick < 0) return@Canvas
                 pins.forEachIndexed { idx, pin ->
                     val (sx, sy) = canvasViewRef.docToScreen(pin.srcX, pin.srcY)
                     val (dx, dy) = canvasViewRef.docToScreen(pin.dstX, pin.dstY)

@@ -2450,6 +2450,7 @@ class EditorViewModel : ViewModel() {
                     )
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
             }
         }
     }
@@ -2460,8 +2461,17 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 val info = engine.redo()
                 val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                val ids = layers.map { it.id }.toSet()
+                _uiState.update {
+                    it.copy(
+                        docInfo = info,
+                        layers = layers,
+                        bwLayerId = it.bwLayerId?.takeIf { id -> id in ids },
+                        invertLayerId = it.invertLayerId?.takeIf { id -> id in ids }
+                    )
+                }
                 NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
             }
         }
     }

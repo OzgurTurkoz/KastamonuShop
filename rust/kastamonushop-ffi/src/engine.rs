@@ -255,6 +255,9 @@ impl EngineCore {
         photocraft_engine::transform_cmds::set_budget(256 << 20);
 
         let mut session = Session::new();
+        session.edit_prefs(|p| {
+            p.history_options.make_layer_visibility_changes_undoable = false;
+        });
         let _ = session.execute(
             "file.new",
             json!({
@@ -1118,8 +1121,11 @@ impl KastamonuEngine {
         if doc.name.is_empty() {
             doc.name = file_name;
         }
-        let single_layer_id = if doc.layers.len() == 1 {
-            doc.layers.first().map(|l| l.id.0)
+        let added_draw_id = if doc.layers.len() == 1 {
+            let draw_layer = Layer::raster("Çizim Katmanı", doc.pixel_format());
+            let id = draw_layer.id;
+            doc.layers.push(draw_layer);
+            Some(id)
         } else {
             None
         };
@@ -1133,8 +1139,8 @@ impl KastamonuEngine {
         while guard.session.close(0).is_some() {}
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
-        if single_layer_id.is_some() {
-            let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
+        if let Some(did) = added_draw_id {
+            guard.session.set_active_layer(Some(did));
         }
         guard.capture_original_snapshot();
         guard.mark_full_dirty();
@@ -1163,6 +1169,9 @@ impl KastamonuEngine {
         let mut doc = Document::new(file_name, Size::new(w, h), ColorMode::Rgb, SampleType::U8);
         let bg = Layer::new("Background", LayerContent::Raster(surf));
         doc.layers.push(bg);
+        let draw_layer = Layer::raster("Çizim Katmanı", doc.pixel_format());
+        let draw_id = draw_layer.id;
+        doc.layers.push(draw_layer);
 
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -1174,13 +1183,19 @@ impl KastamonuEngine {
         while guard.session.close(0).is_some() {}
         let idx = guard.session.add_document(doc, None);
         guard.session.set_active(idx);
-        let _ = guard.session.execute("layer.new.layer", json!({ "name": "Çizim Katmanı" }));
+        guard.session.set_active_layer(Some(draw_id));
         guard.capture_original_snapshot();
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
 
     pub fn place_image_bytes(&self, file_name: String, bytes: Vec<u8>) -> Result<DocumentInfo, EngineError> {
+        let imported = photocraft_io::import(&file_name, &bytes)
+            .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
+        let flat = photocraft_compose::flatten(&imported.document);
+        let src_w = flat.size.width.max(1);
+        let src_h = flat.size.height.max(1);
+
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.live_dab = None;
@@ -1188,10 +1203,58 @@ impl KastamonuEngine {
         guard.live_filter = None;
         guard.proxy_preview = None;
         guard.dismiss_compare();
-        photocraft_engine::file_cmds::place_bytes(&mut guard.session, &file_name, bytes, None, &json!({}))
-            .map_err(|e| EngineError::IoFailed { detail: e.to_string() })?;
-        // Auto-rasterize placed photo into a normal editable pixel layer so brush/eraser/thumbnails work immediately
-        let _ = guard.session.execute("layer.rasterize.layer", json!({}));
+
+        let (doc_w, doc_h, target_fmt) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            (ds.doc().size.width.max(1), ds.doc().size.height.max(1), ds.doc().pixel_format())
+        };
+
+        let scale = (doc_w as f32 / src_w as f32).min(doc_h as f32 / src_h as f32).min(1.0);
+        let dst_w = ((src_w as f32 * scale).round() as u32).clamp(1, doc_w);
+        let dst_h = ((src_h as f32 * scale).round() as u32).clamp(1, doc_h);
+        let ox = ((doc_w.saturating_sub(dst_w)) / 2) as i32;
+        let oy = ((doc_h.saturating_sub(dst_h)) / 2) as i32;
+
+        let mut rgba = vec![0u8; (dst_w as usize) * (dst_h as usize) * 4];
+        for y in 0..dst_h {
+            let sy = (((y as f32 + 0.5) / scale) - 0.5).clamp(0.0, (src_h - 1) as f32) as usize;
+            for x in 0..dst_w {
+                let sx = (((x as f32 + 0.5) / scale) - 0.5).clamp(0.0, (src_w - 1) as f32) as usize;
+                let p = flat.px[sy * (src_w as usize) + sx];
+                let o = ((y as usize) * (dst_w as usize) + (x as usize)) * 4;
+                rgba[o] = (p[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[o + 1] = (p[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[o + 2] = (p[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[o + 3] = (p[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+        let rect = Rect::from_xywh(ox, oy, dst_w, dst_h);
+        let surf = Surface::from_interleaved(target_fmt, rect, &rgba);
+        let clean_name = std::path::Path::new(&file_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Katman")
+            .to_string();
+
+        let mut new_id = None;
+        guard
+            .session
+            .edit("Katman Ekle", |doc, active| {
+                let layer = Layer::new(clean_name.clone(), LayerContent::Raster(surf.clone()));
+                let id = layer.id;
+                let insert_pos = active
+                    .and_then(|aid| doc.layers.iter().position(|l| l.id == aid).map(|i| i + 1))
+                    .unwrap_or(doc.layers.len());
+                doc.layers.insert(insert_pos.min(doc.layers.len()), layer);
+                *active = Some(id);
+                new_id = Some(id);
+                Ok(())
+            })
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        if let Some(id) = new_id {
+            guard.session.set_active_layer(Some(id));
+        }
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
@@ -4650,10 +4713,14 @@ impl KastamonuEngine {
 
     pub fn set_layer_visibility(&self, layer_id: u64, visible: bool) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
-        guard
-            .session
-            .execute("layer.setProps", json!({ "layer": layer_id, "visible": visible }))
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let ds = guard.session.active_mut().ok_or(EngineError::NoActiveDocument)?;
+        let doc = Arc::make_mut(ds.doc_mut());
+        let layer = doc
+            .layers
+            .iter_mut()
+            .find(|l| l.id.0 == layer_id)
+            .ok_or_else(|| EngineError::CommandFailed { detail: "Katman bulunamadı".into() })?;
+        layer.visible = visible;
         guard.mark_full_dirty();
         Ok(())
     }
@@ -4680,10 +4747,14 @@ impl KastamonuEngine {
 
     pub fn set_layer_locked(&self, layer_id: u64, locked: bool) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
-        guard
-            .session
-            .execute("layer.setProps", json!({ "layer": layer_id, "locks": { "pixels": locked } }))
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let ds = guard.session.active_mut().ok_or(EngineError::NoActiveDocument)?;
+        let doc = Arc::make_mut(ds.doc_mut());
+        let layer = doc
+            .layers
+            .iter_mut()
+            .find(|l| l.id.0 == layer_id)
+            .ok_or_else(|| EngineError::CommandFailed { detail: "Katman bulunamadı".into() })?;
+        layer.locks.pixels = locked;
         Ok(())
     }
 
@@ -6527,5 +6598,50 @@ mod v08_automated_tests {
         assert_eq!((info2.width, info2.height), (64, 48));
         let undone = eng.undo().unwrap();
         assert_eq!((undone.width, undone.height), (256, 192));
+    }
+
+    #[test]
+    fn test_v143_place_image_bytes_is_single_atomic_undo_step() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        let rgba = vec![180u8, 120, 90, 255].repeat(64 * 64);
+        let info0 = eng.open_rgba_bytes("cat.png".into(), 64, 64, rgba).unwrap();
+        assert!(!info0.can_undo, "Freshly opened photo should start with 0 undo steps");
+        assert_eq!(eng.get_layers().unwrap().len(), 2, "Background + Çizim Katmanı");
+
+        let png = eng.export_document_bytes("png".into()).unwrap();
+        let info1 = eng.place_image_bytes("overlay.png".into(), png).unwrap();
+        assert!(info1.can_undo);
+        assert_eq!(eng.get_layers().unwrap().len(), 3);
+
+        let info2 = eng.undo().unwrap();
+        assert_eq!(eng.get_layers().unwrap().len(), 2);
+        assert!(info2.can_redo);
+
+        let _ = eng.redo().unwrap();
+        assert_eq!(eng.get_layers().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_v143_visibility_and_lock_never_wipe_redo_or_hide_background_on_undo() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        let rgba = vec![200u8, 80, 60, 255].repeat(48 * 48);
+        let _ = eng.open_rgba_bytes("photo.png".into(), 48, 48, rgba).unwrap();
+        let png = eng.export_document_bytes("png".into()).unwrap();
+        let _ = eng.place_image_bytes("sky.png".into(), png).unwrap();
+        let _ = eng.move_layer_down().unwrap();
+
+        let after_undo = eng.undo().unwrap();
+        assert!(after_undo.can_redo);
+        let layers = eng.get_layers().unwrap();
+        let bg = layers.iter().find(|l| l.is_background).expect("Background exists");
+        eng.set_layer_locked(bg.id, true).unwrap();
+        eng.set_layer_visibility(bg.id, false).unwrap();
+        eng.set_layer_visibility(bg.id, true).unwrap();
+
+        let info_check = eng.get_document_info().unwrap();
+        assert!(info_check.can_redo, "Lock/visibility toggles must NEVER wipe the Redo stack!");
+        let _ = eng.redo().unwrap();
+        let layers_after = eng.get_layers().unwrap();
+        assert!(layers_after.iter().find(|l| l.is_background).unwrap().visible);
     }
 }
