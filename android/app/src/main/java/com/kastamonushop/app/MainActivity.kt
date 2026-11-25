@@ -298,7 +298,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.4.0",
+                    text = "v1.4.1",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -718,6 +718,8 @@ fun StonebridgeStudioScreen(
     var puppetPins by remember { mutableStateOf<List<PuppetPinPoint>>(emptyList()) }
     var puppetSelectedIdx by remember { mutableIntStateOf(-1) }
     var puppetMode by remember { mutableStateOf("normal") }
+    var puppetUndoStack by remember { mutableStateOf<List<List<PuppetPinPoint>>>(emptyList()) }
+    var puppetRedoStack by remember { mutableStateOf<List<List<PuppetPinPoint>>>(emptyList()) }
     var resizeWidthText by remember { mutableStateOf("1080") }
     var resizeHeightText by remember { mutableStateOf("1080") }
     var resizeLockAspect by remember { mutableStateOf(true) }
@@ -2055,10 +2057,26 @@ fun StonebridgeStudioScreen(
                 pins = puppetPins,
                 selectedIdx = puppetSelectedIdx,
                 onSelectPin = { puppetSelectedIdx = it },
+                onPushUndo = { snapshot ->
+                    puppetUndoStack = (puppetUndoStack + listOf(snapshot)).takeLast(40)
+                    puppetRedoStack = emptyList()
+                },
                 onAddPin = { dx, dy ->
+                    puppetUndoStack = (puppetUndoStack + listOf(puppetPins)).takeLast(40)
+                    puppetRedoStack = emptyList()
                     val next = puppetPins + PuppetPinPoint(dx, dy, dx, dy)
                     puppetPins = next
                     puppetSelectedIdx = next.lastIndex
+                },
+                onDeletePin = { idx ->
+                    if (idx in puppetPins.indices) {
+                        puppetUndoStack = (puppetUndoStack + listOf(puppetPins)).takeLast(40)
+                        puppetRedoStack = emptyList()
+                        val next = puppetPins.toMutableList().apply { removeAt(idx) }
+                        puppetPins = next
+                        puppetSelectedIdx = if (next.isEmpty()) -1 else (idx.coerceAtMost(next.lastIndex))
+                        if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, puppetMode)
+                    }
                 },
                 onMovePin = { idx, nx, ny ->
                     if (idx in puppetPins.indices) {
@@ -2068,6 +2086,10 @@ fun StonebridgeStudioScreen(
                         puppetPins = updated
                         vm.updateProxyPuppetWarp(updated, puppetMode)
                     }
+                },
+                onRestorePins = { prev ->
+                    puppetPins = prev
+                    if (prev.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(prev, puppetMode)
                 },
                 onPinchPan = { dPanX, dPanY, zoomScale, cx, cy ->
                     canvasViewRef?.applyExternalPinchPan(zoomScale, dPanX, dPanY)
@@ -2474,15 +2496,30 @@ fun StonebridgeStudioScreen(
                 TopBarButton(
                     icon = Icons.AutoMirrored.Filled.Undo,
                     label = "Geri",
-                    enabled = if (activePanel == BottomPanel.LIQUIFY_EDIT) state.liquifyCanUndo else (state.docInfo?.canUndo == true),
+                    enabled = when (activePanel) {
+                        BottomPanel.LIQUIFY_EDIT -> state.liquifyCanUndo
+                        BottomPanel.PUPPET_WARP_EDIT -> puppetUndoStack.isNotEmpty()
+                        else -> state.docInfo?.canUndo == true
+                    },
                     onClick = {
-                        if (activePanel == BottomPanel.LIQUIFY_EDIT) {
-                            vm.liquifyUndo()
-                        } else {
-                            if (activePanel == BottomPanel.MIRROR_EDIT || activePanel == BottomPanel.CROP_MENU) {
-                                dismissLivePanelIfActive()
+                        when (activePanel) {
+                            BottomPanel.LIQUIFY_EDIT -> vm.liquifyUndo()
+                            BottomPanel.PUPPET_WARP_EDIT -> {
+                                if (puppetUndoStack.isNotEmpty()) {
+                                    val prev = puppetUndoStack.last()
+                                    puppetRedoStack = puppetRedoStack + listOf(puppetPins)
+                                    puppetUndoStack = puppetUndoStack.dropLast(1)
+                                    puppetPins = prev
+                                    puppetSelectedIdx = puppetSelectedIdx.coerceIn(-1, prev.lastIndex)
+                                    if (prev.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(prev, puppetMode)
+                                }
                             }
-                            vm.undo()
+                            else -> {
+                                if (activePanel == BottomPanel.MIRROR_EDIT || activePanel == BottomPanel.CROP_MENU) {
+                                    dismissLivePanelIfActive()
+                                }
+                                vm.undo()
+                            }
                         }
                     }
                 )
@@ -2490,15 +2527,30 @@ fun StonebridgeStudioScreen(
                 TopBarButton(
                     icon = Icons.AutoMirrored.Filled.Redo,
                     label = "İleri",
-                    enabled = if (activePanel == BottomPanel.LIQUIFY_EDIT) state.liquifyCanRedo else (state.docInfo?.canRedo == true),
+                    enabled = when (activePanel) {
+                        BottomPanel.LIQUIFY_EDIT -> state.liquifyCanRedo
+                        BottomPanel.PUPPET_WARP_EDIT -> puppetRedoStack.isNotEmpty()
+                        else -> state.docInfo?.canRedo == true
+                    },
                     onClick = {
-                        if (activePanel == BottomPanel.LIQUIFY_EDIT) {
-                            vm.liquifyRedo()
-                        } else {
-                            if (activePanel == BottomPanel.MIRROR_EDIT || activePanel == BottomPanel.CROP_MENU) {
-                                dismissLivePanelIfActive()
+                        when (activePanel) {
+                            BottomPanel.LIQUIFY_EDIT -> vm.liquifyRedo()
+                            BottomPanel.PUPPET_WARP_EDIT -> {
+                                if (puppetRedoStack.isNotEmpty()) {
+                                    val next = puppetRedoStack.last()
+                                    puppetUndoStack = puppetUndoStack + listOf(puppetPins)
+                                    puppetRedoStack = puppetRedoStack.dropLast(1)
+                                    puppetPins = next
+                                    puppetSelectedIdx = puppetSelectedIdx.coerceIn(-1, next.lastIndex)
+                                    if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, puppetMode)
+                                }
                             }
-                            vm.redo()
+                            else -> {
+                                if (activePanel == BottomPanel.MIRROR_EDIT || activePanel == BottomPanel.CROP_MENU) {
+                                    dismissLivePanelIfActive()
+                                }
+                                vm.redo()
+                            }
                         }
                     }
                 )
@@ -3908,6 +3960,8 @@ fun StonebridgeStudioScreen(
                     },
                     onDeleteSelected = {
                         if (puppetSelectedIdx in puppetPins.indices) {
+                            puppetUndoStack = (puppetUndoStack + listOf(puppetPins)).takeLast(40)
+                            puppetRedoStack = emptyList()
                             val next = puppetPins.toMutableList().apply { removeAt(puppetSelectedIdx) }
                             puppetPins = next
                             puppetSelectedIdx = if (next.isEmpty()) -1 else (puppetSelectedIdx.coerceAtMost(next.lastIndex))
@@ -3915,6 +3969,10 @@ fun StonebridgeStudioScreen(
                         }
                     },
                     onReset = {
+                        if (puppetPins.isNotEmpty()) {
+                            puppetUndoStack = (puppetUndoStack + listOf(puppetPins)).takeLast(40)
+                            puppetRedoStack = emptyList()
+                        }
                         puppetPins = emptyList()
                         puppetSelectedIdx = -1
                         vm.resetProxyPreview()
@@ -4057,6 +4115,8 @@ fun StonebridgeStudioScreen(
                                     puppetPins = emptyList()
                                     puppetSelectedIdx = -1
                                     puppetMode = "normal"
+                                    puppetUndoStack = emptyList()
+                                    puppetRedoStack = emptyList()
                                     vm.beginProxyPreview()
                                     activePanel = BottomPanel.PUPPET_WARP_EDIT
                                 }
@@ -5721,16 +5781,34 @@ private fun PuppetWarpCanvasOverlay(
     pins: List<PuppetPinPoint>,
     selectedIdx: Int,
     onSelectPin: (Int) -> Unit,
+    onPushUndo: (List<PuppetPinPoint>) -> Unit,
     onAddPin: (Float, Float) -> Unit,
+    onDeletePin: (Int) -> Unit,
     onMovePin: (Int, Float, Float) -> Unit,
+    onRestorePins: (List<PuppetPinPoint>) -> Unit,
     onPinchPan: (Float, Float, Float, Float, Float) -> Unit
 ) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val hitRadiusPx = with(density) { 38.dp.toPx() }
+    val handleOffsetYPx = with(density) { 42.dp.toPx() } // Touch-drag handle sits BELOW pin so finger never hides pin!
+    val deleteOffsetXPx = with(density) { 26.dp.toPx() }
+    val deleteOffsetYPx = with(density) { -24.dp.toPx() }
+    val deleteHitPx = with(density) { 22.dp.toPx() }
+    val normalRadiusPx = with(density) { 6.5.dp.toPx() }
+    val selectedRadiusPx = with(density) { 9.dp.toPx() }
+
     val curPins by rememberUpdatedState(pins)
+    val curSelIdx by rememberUpdatedState(selectedIdx)
     val curCanvas by rememberUpdatedState(canvasViewRef)
     val curOnSelect by rememberUpdatedState(onSelectPin)
+    val curOnPushUndo by rememberUpdatedState(onPushUndo)
     val curOnAdd by rememberUpdatedState(onAddPin)
+    val curOnDelete by rememberUpdatedState(onDeletePin)
     val curOnMove by rememberUpdatedState(onMovePin)
+    val curOnRestore by rememberUpdatedState(onRestorePins)
     val curOnPinch by rememberUpdatedState(onPinchPan)
+
+    var activeDragFinger by remember { mutableStateOf<Offset?>(null) }
 
     Box(
         modifier = Modifier
@@ -5741,22 +5819,66 @@ private fun PuppetWarpCanvasOverlay(
                         val firstDown = awaitFirstDown(requireUnconsumed = false)
                         val v = curCanvas ?: continue
                         val startPos = firstDown.position
-                        // Check if user grabbed an existing pin (44px hit radius)
-                        var grabbedIdx = -1
-                        var bestDist = 48f
-                        curPins.forEachIndexed { i, pin ->
-                            val (px, py) = v.docToScreen(pin.dstX, pin.dstY)
-                            val d = hypot((startPos.x - px).toDouble(), (startPos.y - py).toDouble()).toFloat()
-                            if (d < bestDist) {
-                                bestDist = d
-                                grabbedIdx = i
+                        val snapshotBefore = curPins.toList()
+
+                        // 1. Check floating × delete button on currently selected pin first
+                        if (curSelIdx in curPins.indices) {
+                            val sp = curPins[curSelIdx]
+                            val (spx, spy) = v.docToScreen(sp.dstX, sp.dstY)
+                            val delX = spx + deleteOffsetXPx
+                            val delY = spy + deleteOffsetYPx
+                            if (hypot((startPos.x - delX).toDouble(), (startPos.y - delY).toDouble()).toFloat() <= deleteHitPx) {
+                                firstDown.consume()
+                                // Wait for release so it feels crisp
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    if (ev.changes.none { it.pressed }) break
+                                    ev.changes.forEach { it.consume() }
+                                }
+                                curOnDelete(curSelIdx)
+                                continue
                             }
                         }
-                        if (grabbedIdx >= 0) {
-                            curOnSelect(grabbedIdx)
+
+                        // 2. Check if user grabbed the below-pin offset drag handle of the selected pin
+                        var grabbedIdx = -1
+                        var grabbedViaOffsetHandle = false
+                        if (curSelIdx in curPins.indices) {
+                            val sp = curPins[curSelIdx]
+                            val (spx, spy) = v.docToScreen(sp.dstX, sp.dstY)
+                            val dHandle = hypot((startPos.x - spx).toDouble(), (startPos.y - (spy + handleOffsetYPx)).toDouble()).toFloat()
+                            if (dHandle <= hitRadiusPx * 0.85f) {
+                                grabbedIdx = curSelIdx
+                                grabbedViaOffsetHandle = true
+                            }
                         }
+
+                        // 3. Otherwise collect ALL pins within generous 38.dp invisible hit area (overlap-safe!)
+                        val nearby = ArrayList<Pair<Int, Float>>()
+                        if (grabbedIdx < 0) {
+                            curPins.forEachIndexed { i, pin ->
+                                val (px, py) = v.docToScreen(pin.dstX, pin.dstY)
+                                val d = hypot((startPos.x - px).toDouble(), (startPos.y - py).toDouble()).toFloat()
+                                if (d <= hitRadiusPx) {
+                                    nearby.add(i to d)
+                                }
+                            }
+                            nearby.sortBy { it.second }
+                            if (nearby.isNotEmpty()) {
+                                // Prioritize currently selected pin if it's inside the hit zone so dragging it is rock-solid
+                                grabbedIdx = if (nearby.any { it.first == curSelIdx }) curSelIdx else nearby.first().first
+                            }
+                        }
+
+                        val grabbedPinStartScreen = if (grabbedIdx in curPins.indices) {
+                            val gp = curPins[grabbedIdx]
+                            val (gx, gy) = v.docToScreen(gp.dstX, gp.dstY)
+                            Offset(gx, gy)
+                        } else null
+
                         var wasMultiTouch = false
                         var movedFar = false
+                        var didDragPin = false
                         var prevMid: Offset? = null
                         var prevDist = 0f
 
@@ -5765,7 +5887,13 @@ private fun PuppetWarpCanvasOverlay(
                             val active = ev.changes.filter { it.pressed }
                             if (active.isEmpty()) break
                             if (active.size >= 2) {
+                                if (!wasMultiTouch && didDragPin) {
+                                    // Cancel accidental pin tug when 2nd finger joins for pinch-zoom!
+                                    curOnRestore(snapshotBefore)
+                                    didDragPin = false
+                                }
                                 wasMultiTouch = true
+                                activeDragFinger = null
                                 val p0 = active[0].position
                                 val p1 = active[1].position
                                 val mid = Offset((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f)
@@ -5778,20 +5906,46 @@ private fun PuppetWarpCanvasOverlay(
                                 active.forEach { it.consume() }
                             } else if (!wasMultiTouch) {
                                 val ch = active[0]
-                                val delta = hypot((ch.position.x - startPos.x).toDouble(), (ch.position.y - startPos.y).toDouble()).toFloat()
+                                val deltaX = ch.position.x - startPos.x
+                                val deltaY = ch.position.y - startPos.y
+                                val delta = hypot(deltaX.toDouble(), deltaY.toDouble()).toFloat()
                                 if (delta > 8f) movedFar = true
-                                if (grabbedIdx >= 0 && movedFar) {
-                                    val (dx, dy) = v.screenToDoc(ch.position.x, ch.position.y)
+                                if (grabbedIdx >= 0 && grabbedPinStartScreen != null && movedFar) {
+                                    if (!didDragPin) {
+                                        curOnSelect(grabbedIdx)
+                                        didDragPin = true
+                                    }
+                                    activeDragFinger = ch.position
+                                    // Relative delta + gentle upward lift if grabbed directly on top of pin so thumb never hides it!
+                                    val liftY = if (grabbedViaOffsetHandle) 0f else -with(density) { 18.dp.toPx() } * (delta / 40f).coerceIn(0f, 1f)
+                                    val targetScreenX = grabbedPinStartScreen.x + deltaX
+                                    val targetScreenY = grabbedPinStartScreen.y + deltaY + liftY
+                                    val (dx, dy) = v.screenToDoc(targetScreenX, targetScreenY)
                                     curOnMove(grabbedIdx, dx.coerceIn(0f, docW), dy.coerceIn(0f, docH))
                                 }
                                 ch.consume()
                             }
                         }
-                        // Clean single tap on empty canvas -> drop a new Puppet Pin!
-                        if (!wasMultiTouch && !movedFar && grabbedIdx < 0) {
-                            val (dx, dy) = v.screenToDoc(startPos.x, startPos.y)
-                            if (dx in 0f..docW && dy in 0f..docH) {
-                                curOnAdd(dx, dy)
+                        activeDragFinger = null
+
+                        if (didDragPin) {
+                            // Push pre-drag snapshot so Undo restores the pin cleanly!
+                            curOnPushUndo(snapshotBefore)
+                        } else if (!wasMultiTouch && !movedFar) {
+                            if (nearby.isNotEmpty()) {
+                                // Overlap cycling: if multiple pins are within hit radius & current is already selected, cycle to next!
+                                if (nearby.size > 1 && nearby.any { it.first == curSelIdx }) {
+                                    val curPos = nearby.indexOfFirst { it.first == curSelIdx }
+                                    val nextPinIdx = nearby[(curPos + 1) % nearby.size].first
+                                    curOnSelect(nextPinIdx)
+                                } else {
+                                    curOnSelect(nearby.first().first)
+                                }
+                            } else if (!grabbedViaOffsetHandle) {
+                                val (dx, dy) = v.screenToDoc(startPos.x, startPos.y)
+                                if (dx in 0f..docW && dy in 0f..docH) {
+                                    curOnAdd(dx, dy)
+                                }
                             }
                         }
                     }
@@ -5804,32 +5958,40 @@ private fun PuppetWarpCanvasOverlay(
                     val (sx, sy) = canvasViewRef.docToScreen(pin.srcX, pin.srcY)
                     val (dx, dy) = canvasViewRef.docToScreen(pin.dstX, pin.dstY)
                     val isSel = idx == selectedIdx
-                    // Subtle tether line from anchor src to moved dst
+                    // Subtle anchor-to-current tether line
                     if (hypot((dx - sx).toDouble(), (dy - sy).toDouble()) > 3.0) {
-                        drawCircle(color = Color(0x88FFFFFF), radius = 5f, center = Offset(sx, sy))
+                        drawCircle(color = Color(0x88FFFFFF), radius = 3.5f, center = Offset(sx, sy))
                         drawLine(
-                            color = Color(0xCC4F9CFF),
+                            color = if (isSel) Color(0xDDFFD600) else Color(0xAA4F9CFF),
                             start = Offset(sx, sy),
                             end = Offset(dx, dy),
-                            strokeWidth = 3f
+                            strokeWidth = if (isSel) 3.5f else 2.5f
                         )
                     }
-                    // Outer ring + filled pin head
-                    drawCircle(
-                        color = if (isSel) Color(0xFFFFD600) else Color(0xFF4F9CFF),
-                        radius = if (isSel) 18f else 14f,
-                        center = Offset(dx, dy)
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        radius = if (isSel) 11f else 8f,
-                        center = Offset(dx, dy)
-                    )
-                    drawCircle(
-                        color = if (isSel) Color(0xFFFF6D00) else Color(0xFF1565C0),
-                        radius = 4.5f,
-                        center = Offset(dx, dy)
-                    )
+                    if (isSel) {
+                        // Soft amber selection halo + sleek below-pin finger handle (so thumb never covers pin!)
+                        drawCircle(color = Color(0x44FFD600), radius = selectedRadiusPx * 1.9f, center = Offset(dx, dy))
+                        // Thin stem to below-pin drag handle
+                        val hy = dy + handleOffsetYPx
+                        drawLine(color = Color(0x99FFD600), start = Offset(dx, dy + selectedRadiusPx), end = Offset(dx, hy - 10f), strokeWidth = 2f)
+                        drawCircle(color = Color(0x55FFD600), radius = 13f, center = Offset(dx, hy))
+                        drawCircle(color = Color(0xEEFFD600), radius = 6f, center = Offset(dx, hy))
+
+                        // Floating red × delete button at top-right of selected pin
+                        val delC = Offset(dx + deleteOffsetXPx, dy + deleteOffsetYPx)
+                        drawCircle(color = Color(0xFFE53935), radius = 15f, center = delC)
+                        drawLine(color = Color.White, start = Offset(delC.x - 5.5f, delC.y - 5.5f), end = Offset(delC.x + 5.5f, delC.y + 5.5f), strokeWidth = 2.6f)
+                        drawLine(color = Color.White, start = Offset(delC.x + 5.5f, delC.y - 5.5f), end = Offset(delC.x - 5.5f, delC.y + 5.5f), strokeWidth = 2.6f)
+                    }
+                    // Compact sleek visual pin (never blocks the photo!)
+                    val r = if (isSel) selectedRadiusPx else normalRadiusPx
+                    drawCircle(color = if (isSel) Color(0xFFFFD600) else Color(0xFF4F9CFF), radius = r, center = Offset(dx, dy))
+                    drawCircle(color = Color.White, radius = r * 0.62f, center = Offset(dx, dy))
+                    drawCircle(color = if (isSel) Color(0xFFFF6D00) else Color(0xFF1565C0), radius = r * 0.30f, center = Offset(dx, dy))
+                }
+                // Subtle fingertip guide while dragging
+                activeDragFinger?.let { f ->
+                    drawCircle(color = Color(0x44FFFFFF), radius = 18f, center = f)
                 }
             }
         }
