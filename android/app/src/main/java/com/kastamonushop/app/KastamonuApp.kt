@@ -6,6 +6,7 @@ import android.util.Log
 class KastamonuApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        CrashGuard.install(this)
         try {
             System.loadLibrary("kastamonushop_ffi")
         } catch (t: Throwable) {
