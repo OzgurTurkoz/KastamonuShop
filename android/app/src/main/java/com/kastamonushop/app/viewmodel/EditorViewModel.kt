@@ -235,6 +235,28 @@ class EditorViewModel : ViewModel() {
         if (fontsInitialized && _studioFonts.value.isNotEmpty()) return
         paintExecutor.execute {
             runCatching {
+                val options = ArrayList<StudioFontOption>()
+                val seen = HashSet<String>()
+
+                // 1. Load previously imported user custom fonts from filesDir/user_fonts
+                val userDir = java.io.File(context.filesDir, "user_fonts")
+                if (userDir.exists()) {
+                    userDir.listFiles()?.sortedByDescending { it.lastModified() }?.forEach { f ->
+                        if (f.isFile && (f.name.endsWith(".ttf", true) || f.name.endsWith(".otf", true))) {
+                            runCatching {
+                                val bytes = f.readBytes()
+                                val reg = engine.registerFontBytes(bytes)
+                                val fam = reg.firstOrNull() ?: f.nameWithoutExtension
+                                val tf = Typeface.createFromFile(f)
+                                if (seen.add(fam.lowercase())) {
+                                    options.add(StudioFontOption(fam, fam, "Özel", FontFamily(tf)))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. Load 10 curated bundled Google Fonts from APK assets/fonts
                 val curatedMeta = listOf(
                     Triple("Montserrat.ttf", "Montserrat", "Modern Sans"),
                     Triple("PlayfairDisplay.ttf", "Playfair Display", "Dergi Serif"),
@@ -249,8 +271,6 @@ class EditorViewModel : ViewModel() {
                 )
                 val extraAssets = listOf("Poppins-Bold.ttf", "SpaceMono-Bold.ttf")
                 val assets = context.assets
-                val options = ArrayList<StudioFontOption>()
-                val seen = HashSet<String>()
 
                 for ((fileName, fallbackFamily, cat) in curatedMeta) {
                     runCatching {
@@ -270,6 +290,7 @@ class EditorViewModel : ViewModel() {
                     }
                 }
 
+                // 3. Append Android system fonts discovered by PhotoCraft
                 val sysFamilies = runCatching { engine.listAvailableFonts() }.getOrDefault(emptyList())
                 val preferredSystem = listOf("Roboto", "Noto Serif", "Droid Sans Mono", "Cutive Mono", "Carrois Gothic SC")
                 for (sf in preferredSystem) {
@@ -284,7 +305,7 @@ class EditorViewModel : ViewModel() {
                     }
                 }
                 for (sf in sysFamilies) {
-                    if (options.size >= 24) break
+                    if (options.size >= 28) break
                     if (seen.add(sf.lowercase()) && !sf.startsWith(".") && !sf.contains("Emoji", true) && !sf.contains("Symbol", true)) {
                         val cf = when {
                             sf.contains("Serif", true) -> FontFamily.Serif
@@ -299,6 +320,42 @@ class EditorViewModel : ViewModel() {
                 }
                 _studioFonts.value = options
                 fontsInitialized = true
+            }
+        }
+    }
+
+    fun importCustomFont(context: Context, uri: Uri, onImported: (String) -> Unit) {
+        paintExecutor.execute {
+            runCatching {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("Font dosyası okunamadı")
+                if (bytes.size < 16) error("Geçersiz font dosyası")
+                val b0 = bytes[0].toInt() and 0xFF
+                val b1 = bytes[1].toInt() and 0xFF
+                val b2 = bytes[2].toInt() and 0xFF
+                val b3 = bytes[3].toInt() and 0xFF
+                val magicStr = String(bytes, 0, 4, Charsets.ISO_8859_1)
+                val isValid = (b0 == 0 && b1 == 1 && b2 == 0 && b3 == 0) ||
+                    magicStr == "OTTO" || magicStr == "true" || magicStr == "ttcf"
+                if (!isValid) error("Yalnızca .ttf veya .otf font dosyaları desteklenir")
+
+                val registered = engine.registerFontBytes(bytes)
+                val family = registered.firstOrNull()?.takeIf { it.isNotBlank() }
+                    ?: "OzelFont_${System.currentTimeMillis() % 10000}"
+                val ext = if (magicStr == "OTTO") "otf" else "ttf"
+                val safeName = family.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".$ext"
+                val userDir = java.io.File(context.filesDir, "user_fonts").apply { mkdirs() }
+                val dest = java.io.File(userDir, safeName)
+                dest.writeBytes(bytes)
+
+                val tf = Typeface.createFromFile(dest)
+                val opt = StudioFontOption(family, family, "Özel", FontFamily(tf))
+                val updated = listOf(opt) + _studioFonts.value.filterNot { it.family.equals(family, true) }
+                _studioFonts.value = updated
+                android.os.Handler(android.os.Looper.getMainLooper()).post { onImported(family) }
+                showStatus("Font eklendi: $family", 2000L)
+            }.onFailure { err ->
+                showStatus("Font eklenemedi: ${err.message}", 2600L)
             }
         }
     }
@@ -321,9 +378,18 @@ class EditorViewModel : ViewModel() {
         fontFamily: String,
         bold: Boolean,
         italic: Boolean,
+        underline: Boolean,
+        strikethrough: Boolean,
+        caps: String,
+        hScale: Float,
+        vScale: Float,
         tracking: Float,
         lineHeight: Float,
-        vertical: Boolean
+        vertical: Boolean,
+        warpStyle: String,
+        warpBend: Float,
+        warpHDist: Float,
+        warpVDist: Float
     ) {
         dismissCompareOriginal()
         paintExecutor.execute {
@@ -339,9 +405,18 @@ class EditorViewModel : ViewModel() {
                     fontFamily = fontFamily,
                     bold = bold,
                     italic = italic,
+                    underline = underline,
+                    strikethrough = strikethrough,
+                    caps = caps,
+                    hScale = hScale,
+                    vScale = vScale,
                     tracking = tracking,
                     lineHeight = lineHeight,
-                    vertical = vertical
+                    vertical = vertical,
+                    warpStyle = warpStyle,
+                    warpBend = warpBend,
+                    warpHDist = warpHDist,
+                    warpVDist = warpVDist
                 )
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
@@ -354,62 +429,63 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    fun loadLightDistortThumbs() {
+    fun createTextSelectionMask(
+        text: String,
+        x: Float,
+        y: Float,
+        sizePx: Float,
+        align: String,
+        fontFamily: String,
+        bold: Boolean,
+        italic: Boolean,
+        caps: String,
+        hScale: Float,
+        vScale: Float,
+        tracking: Float,
+        lineHeight: Float,
+        vertical: Boolean
+    ) {
+        dismissCompareOriginal()
         paintExecutor.execute {
             runCatching {
-                val raw = engine.renderLightDistortThumbs(80u)
-                val out = ArrayList<ImageBitmap>(raw.size)
-                for (t in raw) {
-                    val w = t.width.toInt()
-                    val h = t.height.toInt()
-                    if (w > 0 && h > 0 && t.rgba.size >= w * h * 4) {
-                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(t.rgba))
-                        out.add(bmp.asImageBitmap())
-                    }
-                }
-                _lightDistortThumbs.value = out
+                val info = engine.createTextSelectionMask(
+                    text = text,
+                    x = x,
+                    y = y,
+                    sizePx = sizePx,
+                    align = align,
+                    fontFamily = fontFamily,
+                    bold = bold,
+                    italic = italic,
+                    caps = caps,
+                    hScale = hScale,
+                    vScale = vScale,
+                    tracking = tracking,
+                    lineHeight = lineHeight,
+                    vertical = vertical
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Metin seçim maskesi oluşturuldu", 2000L)
+            }.onFailure { err ->
+                showStatus("Maske hatası: ${err.message}", 2600L)
             }
         }
     }
 
-    fun updateProxyLightDistort(
-        kind: String,
-        amount: Float,
-        detail: Float,
-        paramX: Float,
-        paramY: Float,
-        variant: String
-    ) {
-        pendingProxyJob.set(ProxyJob.LightDistort(kind, amount, detail, paramX, paramY, variant))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
-    }
-
-    fun applyLightDistort(
-        kind: String,
-        amount: Float,
-        detail: Float,
-        paramX: Float,
-        paramY: Float,
-        variant: String,
-        label: String
-    ) {
-        pendingProxyJob.set(null)
+    fun rasterizeActiveTextLayer() {
         dismissCompareOriginal()
-        _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
-                val info = engine.applyLightDistort(kind, amount, detail, paramX, paramY, variant)
+                val info = engine.rasterizeActiveTextLayer()
                 val layers = engine.getLayers()
-                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 refreshLayerThumbnails()
-                showStatus("$label uygulandı", 1800L)
+                showStatus("Metin piksel katmanına çevrildi", 1800L)
             }.onFailure { err ->
-                _uiState.update { it.copy(isBusy = false) }
-                showStatus("Efekt hatası: ${err.message}", 2600L)
+                showStatus("Rasterleştirme hatası: ${err.message}", 2400L)
             }
         }
     }

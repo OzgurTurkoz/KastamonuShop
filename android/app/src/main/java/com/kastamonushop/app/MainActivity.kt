@@ -61,6 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -292,7 +293,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.3.0",
+                    text = "v1.3.1",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -900,6 +901,22 @@ fun StonebridgeStudioScreen(
     var textVertical by remember { mutableStateOf(false) }
     var textEditLayerId by remember { mutableStateOf<ULong?>(null) }
     val studioFonts by vm.studioFonts.collectAsState()
+    var textUnderline by remember { mutableStateOf(false) }
+    var textStrike by remember { mutableStateOf(false) }
+    var textCaps by remember { mutableStateOf("normal") }
+    var textHScale by remember { mutableFloatStateOf(100f) }
+    var textVScale by remember { mutableFloatStateOf(100f) }
+    var textWarpStyle by remember { mutableStateOf("none") }
+    var textWarpBend by remember { mutableFloatStateOf(50f) }
+    var textWarpHDist by remember { mutableFloatStateOf(0f) }
+    var textWarpVDist by remember { mutableFloatStateOf(0f) }
+    val importFontLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            vm.importCustomFont(context, uri) { newFam ->
+                textFontFamily = newFam
+            }
+        }
+    }
     var cameraTick by remember { mutableIntStateOf(0) }
 
     var brightnessVal by remember { mutableFloatStateOf(0f) }
@@ -1862,51 +1879,117 @@ fun StonebridgeStudioScreen(
             if (viewRef != null && tick >= 0) {
                 val (sx, sy) = viewRef.docToScreen(docW * textNormX, docH * textNormY)
                 val density = androidx.compose.ui.platform.LocalDensity.current
-                val previewSp = ((textSizePx * viewRef.getCurrentZoom()) / density.fontScale / density.density).coerceIn(10f, 72f)
+                val currentZoom = viewRef.getCurrentZoom().coerceAtLeast(0.05f)
+                val previewSp = ((textSizePx * currentZoom) / density.fontScale / density.density).coerceIn(4f, 96f)
                 val previewColor = remember(textColorHex) {
                     runCatching { Color(AndroidColor.parseColor(textColorHex)) }.getOrDefault(Color.White)
                 }
+                val previewFont = studioFonts.firstOrNull { it.family.equals(textFontFamily, true) }?.composeFont ?: FontFamily.SansSerif
+                val displayTxt = remember(textDraft, textVertical, textCaps) {
+                    val raw0 = textDraft.ifBlank { "Metin..." }
+                    val raw = if (textCaps == "all") raw0.uppercase() else raw0
+                    if (textVertical) raw.replace("\n", " ").toCharArray().joinToString("\n") else raw
+                }
+                val deco = remember(textUnderline, textStrike) {
+                    when {
+                        textUnderline && textStrike -> TextDecoration.combine(listOf(TextDecoration.Underline, TextDecoration.LineThrough))
+                        textUnderline -> TextDecoration.Underline
+                        textStrike -> TextDecoration.LineThrough
+                        else -> TextDecoration.None
+                    }
+                }
+                val padPx = with(density) { 14.dp.toPx() }
                 Box(
                     modifier = Modifier
                         .onSizeChanged { textBoxSize = it }
                         .offset {
                             val halfW = if (textBoxSize.width > 0) textBoxSize.width / 2f else 90f
-                            val halfH = if (textBoxSize.height > 0) textBoxSize.height / 2f else 24f
-                            val maxX = (viewRef.width - textBoxSize.width - 12).coerceAtLeast(12)
-                            val clampedX = (sx - halfW).roundToInt().coerceIn(12, maxX)
-                            val clampedY = (sy - halfH).roundToInt().coerceAtLeast(12)
+                            val halfH = if (textBoxSize.height > 0) textBoxSize.height / 2f else 28f
+                            val maxX = (viewRef.width - textBoxSize.width - 4).coerceAtLeast(4)
+                            val clampedX = (sx - halfW).roundToInt().coerceIn(4, maxX)
+                            val clampedY = (sy - halfH).roundToInt().coerceAtLeast(4)
                             androidx.compose.ui.unit.IntOffset(clampedX, clampedY)
                         }
-                        .widthIn(max = 300.dp)
-                        .border(1.5.dp, Color(0xAA4F9CFF), RoundedCornerShape(8.dp))
-                        .background(Color(0x44111217), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .padding(10.dp)
                 ) {
-                    val previewFont = studioFonts.firstOrNull { it.family.equals(textFontFamily, true) }?.composeFont ?: FontFamily.SansSerif
-                    val displayTxt = remember(textDraft, textVertical) {
-                        val raw = textDraft.ifBlank { "Metin..." }
-                        if (textVertical) raw.replace("\n", " ").toCharArray().joinToString("\n") else raw
+                    // Draggable text box interior (1-finger move)
+                    Box(
+                        modifier = Modifier
+                            .widthIn(min = 32.dp, max = 320.dp)
+                            .border(1.5.dp, Color(0xCC4F9CFF), RoundedCornerShape(8.dp))
+                            .background(Color(0x44111217), RoundedCornerShape(8.dp))
+                            .pointerInput(docW, docH, currentZoom) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    val dxDoc = dragAmount.x / currentZoom
+                                    val dyDoc = dragAmount.y / currentZoom
+                                    textNormX = (textNormX + dxDoc / docW).coerceIn(0.02f, 0.98f)
+                                    textNormY = (textNormY + dyDoc / docH).coerceIn(0.02f, 0.98f)
+                                }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = displayTxt,
+                            color = previewColor,
+                            fontFamily = previewFont,
+                            fontSize = previewSp.sp,
+                            fontWeight = if (textBold) FontWeight.Bold else FontWeight.Normal,
+                            fontStyle = if (textItalic) FontStyle.Italic else FontStyle.Normal,
+                            textDecoration = deco,
+                            letterSpacing = (textTracking / 1000f * previewSp).coerceIn(-4f, 24f).sp,
+                            lineHeight = (previewSp * textLineHeight.coerceIn(0.8f, 2.4f)).sp,
+                            textAlign = when (textAlign) {
+                                "left" -> TextAlign.Start
+                                "right" -> TextAlign.End
+                                else -> TextAlign.Center
+                            },
+                            maxLines = if (textVertical) 16 else 5,
+                            modifier = Modifier.graphicsLayer(
+                                scaleX = (textHScale / 100f).coerceIn(0.5f, 2.0f),
+                                scaleY = (textVScale / 100f).coerceIn(0.5f, 2.0f)
+                            )
+                        )
                     }
-                    Text(
-                        text = displayTxt,
-                        color = previewColor,
-                        fontFamily = previewFont,
-                        fontSize = previewSp.sp,
-                        fontWeight = if (textBold) FontWeight.Bold else FontWeight.Normal,
-                        fontStyle = if (textItalic) FontStyle.Italic else FontStyle.Normal,
-                        letterSpacing = (textTracking / 1000f * previewSp).coerceIn(-4f, 24f).sp,
-                        lineHeight = (previewSp * textLineHeight.coerceIn(0.8f, 2.4f)).sp,
-                        textAlign = when (textAlign) {
-                            "left" -> TextAlign.Start
-                            "right" -> TextAlign.End
-                            else -> TextAlign.Center
-                        },
-                        maxLines = if (textVertical) 16 else 5
+                    // 4 Draggable Corner Handles (outward = grow, inward = shrink down to 6px!)
+                    val corners = listOf(
+                        Triple(Alignment.TopStart, -1f, -1f),
+                        Triple(Alignment.TopEnd, 1f, -1f),
+                        Triple(Alignment.BottomStart, -1f, 1f),
+                        Triple(Alignment.BottomEnd, 1f, 1f)
                     )
+                    corners.forEach { (alignCorner, dirX, dirY) ->
+                        Box(
+                            modifier = Modifier
+                                .align(alignCorner)
+                                .offset(
+                                    x = if (dirX < 0f) (-8).dp else 8.dp,
+                                    y = if (dirY < 0f) (-8).dp else 8.dp
+                                )
+                                .size(24.dp)
+                                .pointerInput(currentZoom, dirX, dirY) {
+                                    detectDragGestures { change, dragAmount ->
+                                        change.consume()
+                                        // Outward projection along corner diagonal scales textSizePx smoothly
+                                        val outwardPx = (dragAmount.x * dirX + dragAmount.y * dirY) * 0.7f
+                                        val deltaDocPx = outwardPx / currentZoom
+                                        textSizePx = (textSizePx + deltaDocPx).coerceIn(6f, 600f)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White)
+                                    .border(2.dp, Color(0xFF4F9CFF), CircleShape)
+                            )
+                        }
+                    }
                 }
             }
         }
-
         // v0.9.5 Interactive On-Canvas Gradient Start/End Drag Overlay (60 FPS Live Proxy)
         if (activePanel == BottomPanel.GRADIENT_EDIT) {
             val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
@@ -2694,19 +2777,37 @@ fun StonebridgeStudioScreen(
                                 textVertical = false
                                 textBold = false
                                 textItalic = false
+                                textUnderline = false
+                                textStrike = false
+                                textCaps = "normal"
+                                textHScale = 100f
+                                textVScale = 100f
+                                textWarpStyle = "none"
+                                textWarpBend = 50f
+                                textWarpHDist = 0f
+                                textWarpVDist = 0f
                                 vm.inspectActiveTextLayer { existing ->
                                     if (existing != null) {
                                         textEditLayerId = existing.layerId
                                         textDraft = existing.text
                                         textFontFamily = existing.fontFamily.ifBlank { "Montserrat" }
-                                        textSizePx = existing.sizePx.coerceIn(24f, 420f)
+                                        textSizePx = existing.sizePx.coerceIn(6f, 600f)
                                         textColorHex = existing.colorHex
                                         textAlign = existing.align
                                         textBold = existing.bold
                                         textItalic = existing.italic
+                                        textUnderline = existing.underline
+                                        textStrike = existing.strikethrough
+                                        textCaps = existing.caps
+                                        textHScale = existing.hScale
+                                        textVScale = existing.vScale
                                         textTracking = existing.tracking
                                         textLineHeight = existing.lineHeight
                                         textVertical = existing.vertical
+                                        textWarpStyle = existing.warpStyle
+                                        textWarpBend = existing.warpBend
+                                        textWarpHDist = existing.warpHDist
+                                        textWarpVDist = existing.warpVDist
                                         textNormX = existing.normX
                                         textNormY = existing.normY
                                     }
@@ -3252,44 +3353,52 @@ fun StonebridgeStudioScreen(
                     TextStudioPanel(
                         isEditingExisting = textEditLayerId != null,
                         onSwitchToNew = { textEditLayerId = null },
-                        text = textDraft,
-                        onText = { textDraft = it },
-                        fonts = studioFonts,
-                        selectedFont = textFontFamily,
-                        onSelectFont = { textFontFamily = it },
-                        colorHex = textColorHex,
-                        onColorHex = { textColorHex = it },
-                        align = textAlign,
-                        onAlign = { textAlign = it },
-                        bold = textBold,
-                        onBold = { textBold = it },
-                        italic = textItalic,
-                        onItalic = { textItalic = it },
-                        vertical = textVertical,
-                        onVertical = { textVertical = it },
-                        sizePx = textSizePx,
-                        defaultSizePx = (docW * 0.08f).coerceIn(36f, 260f),
-                        onSizePx = { textSizePx = it },
-                        tracking = textTracking,
-                        onTracking = { textTracking = it },
-                        lineHeight = textLineHeight,
-                        onLineHeight = { textLineHeight = it },
+                        onImportFont = { importFontLauncher.launch(arrayOf("*/*")) },
+                        text = textDraft, onText = { textDraft = it },
+                        fonts = studioFonts, selectedFont = textFontFamily, onSelectFont = { textFontFamily = it },
+                        colorHex = textColorHex, onColorHex = { textColorHex = it },
+                        align = textAlign, onAlign = { textAlign = it },
+                        bold = textBold, onBold = { textBold = it },
+                        italic = textItalic, onItalic = { textItalic = it },
+                        underline = textUnderline, onUnderline = { textUnderline = it },
+                        strikethrough = textStrike, onStrikethrough = { textStrike = it },
+                        caps = textCaps, onCaps = { textCaps = it },
+                        hScale = textHScale, onHScale = { textHScale = it },
+                        vScale = textVScale, onVScale = { textVScale = it },
+                        vertical = textVertical, onVertical = { textVertical = it },
+                        sizePx = textSizePx, defaultSizePx = (docW * 0.055f).coerceIn(24f, 180f), onSizePx = { textSizePx = it },
+                        tracking = textTracking, onTracking = { textTracking = it },
+                        lineHeight = textLineHeight, onLineHeight = { textLineHeight = it },
+                        warpStyle = textWarpStyle, onWarpStyle = { textWarpStyle = it },
+                        warpBend = textWarpBend, onWarpBend = { textWarpBend = it },
+                        warpHDist = textWarpHDist, onWarpHDist = { textWarpHDist = it },
+                        warpVDist = textWarpVDist, onWarpVDist = { textWarpVDist = it },
+                        onCreateMask = {
+                            vm.createTextSelectionMask(
+                                text = textDraft, x = docW * textNormX, y = docH * textNormY,
+                                sizePx = textSizePx, align = textAlign, fontFamily = textFontFamily,
+                                bold = textBold, italic = textItalic, caps = textCaps,
+                                hScale = textHScale, vScale = textVScale,
+                                tracking = textTracking, lineHeight = textLineHeight, vertical = textVertical
+                            )
+                            activePanel = BottomPanel.DOCK
+                        },
+                        onRasterize = {
+                            vm.rasterizeActiveTextLayer()
+                            activePanel = BottomPanel.DOCK
+                        },
                         onClose = { activePanel = BottomPanel.DOCK },
                         onApply = {
                             vm.addOrEditTextLayer(
                                 editLayerId = textEditLayerId,
-                                text = textDraft,
-                                x = docW * textNormX,
-                                y = docH * textNormY,
-                                sizePx = textSizePx,
-                                colorHex = textColorHex,
-                                align = textAlign,
-                                fontFamily = textFontFamily,
-                                bold = textBold,
-                                italic = textItalic,
-                                tracking = textTracking,
-                                lineHeight = textLineHeight,
-                                vertical = textVertical
+                                text = textDraft, x = docW * textNormX, y = docH * textNormY,
+                                sizePx = textSizePx, colorHex = textColorHex, align = textAlign,
+                                fontFamily = textFontFamily, bold = textBold, italic = textItalic,
+                                underline = textUnderline, strikethrough = textStrike, caps = textCaps,
+                                hScale = textHScale, vScale = textVScale,
+                                tracking = textTracking, lineHeight = textLineHeight, vertical = textVertical,
+                                warpStyle = textWarpStyle, warpBend = textWarpBend,
+                                warpHDist = textWarpHDist, warpVDist = textWarpVDist
                             )
                             activePanel = BottomPanel.DOCK
                         }
@@ -5205,6 +5314,7 @@ private fun LightDistortPanel(
 private fun TextStudioPanel(
     isEditingExisting: Boolean,
     onSwitchToNew: () -> Unit,
+    onImportFont: () -> Unit,
     text: String, onText: (String) -> Unit,
     fonts: List<EditorViewModel.StudioFontOption>,
     selectedFont: String, onSelectFont: (String) -> Unit,
@@ -5212,18 +5322,29 @@ private fun TextStudioPanel(
     align: String, onAlign: (String) -> Unit,
     bold: Boolean, onBold: (Boolean) -> Unit,
     italic: Boolean, onItalic: (Boolean) -> Unit,
+    underline: Boolean, onUnderline: (Boolean) -> Unit,
+    strikethrough: Boolean, onStrikethrough: (Boolean) -> Unit,
+    caps: String, onCaps: (String) -> Unit,
+    hScale: Float, onHScale: (Float) -> Unit,
+    vScale: Float, onVScale: (Float) -> Unit,
     vertical: Boolean, onVertical: (Boolean) -> Unit,
     sizePx: Float, defaultSizePx: Float, onSizePx: (Float) -> Unit,
     tracking: Float, onTracking: (Float) -> Unit,
     lineHeight: Float, onLineHeight: (Float) -> Unit,
+    warpStyle: String, onWarpStyle: (String) -> Unit,
+    warpBend: Float, onWarpBend: (Float) -> Unit,
+    warpHDist: Float, onWarpHDist: (Float) -> Unit,
+    warpVDist: Float, onWarpVDist: (Float) -> Unit,
+    onCreateMask: () -> Unit,
+    onRasterize: () -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by remember { mutableIntStateOf(0) } // 0 = Yazı & Font, 1 = Boyut & Biçim, 2 = Bükme & Maske
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader(
             title = if (isEditingExisting) "Metni Düzenle" else "Tipografi Stüdyosu",
-            subtitle = "Fotoğrafa dokunup konumlandır — canlı yazı tipi önizlemesi",
+            subtitle = "4 köşeden büyüt/küçült, kutudan sürükle",
             applyLabel = if (isEditingExisting) "Güncelle" else "Uygula",
             onClose = onClose,
             onApply = onApply
@@ -5234,105 +5355,170 @@ private fun TextStudioPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("Yazı & Font", fontSize = 11.sp) })
-            FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("Aralık & Boyut", fontSize = 11.sp) })
+            FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("Boyut & Biçim", fontSize = 11.sp) })
+            FilterChip(selected = tab == 2, onClick = { tab = 2 }, label = { Text("Bükme & Maske", fontSize = 11.sp) })
             if (isEditingExisting) {
-                FilterChip(selected = false, onClick = onSwitchToNew, label = { Text("+ Yeni Katman", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = onSwitchToNew, label = { Text("+ Yeni", fontSize = 10.sp) })
             }
         }
-        if (tab == 0) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = onText,
-                singleLine = false,
-                maxLines = 3,
-                placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                val listToShow = if (fonts.isNotEmpty()) fonts else listOf(
-                    EditorViewModel.StudioFontOption("Montserrat", "Montserrat", "Modern", FontFamily.SansSerif)
+        when (tab) {
+            0 -> {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onText,
+                    singleLine = false,
+                    maxLines = 3,
+                    placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth()
                 )
-                listToShow.forEach { opt ->
-                    val isSel = selectedFont.equals(opt.family, ignoreCase = true)
+                // Real-Typeface Font Picker + Custom .ttf/.otf Import button
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Column(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .background(if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color(0xFF232530))
-                            .border(
-                                width = if (isSel) 1.5.dp else 1.dp,
-                                color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF3A3D4D),
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            .clickable { onSelectFont(opt.family) }
+                            .background(Color(0xFF1F2738))
+                            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                            .clickable(onClick = onImportFont)
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(
-                            text = opt.displayName,
-                            fontFamily = opt.composeFont,
-                            color = if (isSel) Color.White else Color(0xFFE0E3EE),
-                            fontSize = 13.sp,
-                            maxLines = 1
-                        )
-                        Text(
-                            text = opt.category,
-                            color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF8C92A8),
-                            fontSize = 9.sp,
-                            maxLines = 1
-                        )
+                        Text("+ Font Ekle", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(".ttf / .otf", color = Color(0xFF8C92A8), fontSize = 9.sp, maxLines = 1)
+                    }
+                    val listToShow = if (fonts.isNotEmpty()) fonts else listOf(
+                        EditorViewModel.StudioFontOption("Montserrat", "Montserrat", "Modern", FontFamily.SansSerif)
+                    )
+                    listToShow.forEach { opt ->
+                        val isSel = selectedFont.equals(opt.family, ignoreCase = true)
+                        Column(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color(0xFF232530))
+                                .border(
+                                    width = if (isSel) 1.5.dp else 1.dp,
+                                    color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF3A3D4D),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable { onSelectFont(opt.family) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = opt.displayName,
+                                fontFamily = opt.composeFont,
+                                color = if (isSel) Color.White else Color(0xFFE0E3EE),
+                                fontSize = 13.sp,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = opt.category,
+                                color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF8C92A8),
+                                fontSize = 9.sp,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf("#FFFFFF", "#000000", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB", "#FF8C00").forEach { hex ->
-                    val c = Color(AndroidColor.parseColor(hex))
-                    Box(
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(c)
-                            .border(
-                                width = if (colorHex.equals(hex, true)) 2.5.dp else 1.dp,
-                                color = if (colorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
-                                shape = CircleShape
-                            )
-                            .clickable { onColorHex(hex) }
+                // Color palette + Bold / Italic / Underline / Strike / Caps
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("#FFFFFF", "#000000", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB", "#FF8C00").forEach { hex ->
+                        val c = Color(AndroidColor.parseColor(hex))
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(c)
+                                .border(
+                                    width = if (colorHex.equals(hex, true)) 2.5.dp else 1.dp,
+                                    color = if (colorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
+                                    shape = CircleShape
+                                )
+                                .clickable { onColorHex(hex) }
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    FilterChip(selected = bold, onClick = { onBold(!bold) }, label = { Text("K", fontWeight = FontWeight.Bold, fontSize = 11.sp) })
+                    FilterChip(selected = italic, onClick = { onItalic(!italic) }, label = { Text("İ", fontStyle = FontStyle.Italic, fontSize = 11.sp) })
+                    FilterChip(selected = underline, onClick = { onUnderline(!underline) }, label = { Text("A", textDecoration = TextDecoration.Underline, fontSize = 11.sp) })
+                    FilterChip(selected = strikethrough, onClick = { onStrikethrough(!strikethrough) }, label = { Text("S", textDecoration = TextDecoration.LineThrough, fontSize = 11.sp) })
+                    FilterChip(
+                        selected = caps != "normal",
+                        onClick = { onCaps(when (caps) { "normal" -> "all"; "all" -> "small"; else -> "normal" }) },
+                        label = { Text(if (caps == "small") "Aa" else "AA", fontSize = 10.sp) }
                     )
                 }
-                Spacer(modifier = Modifier.width(4.dp))
-                FilterChip(selected = bold, onClick = { onBold(!bold) }, label = { Text("K", fontWeight = FontWeight.Bold, fontSize = 11.sp) })
-                FilterChip(selected = italic, onClick = { onItalic(!italic) }, label = { Text("İ", fontStyle = FontStyle.Italic, fontSize = 11.sp) })
-                FilterChip(selected = vertical, onClick = { onVertical(!vertical) }, label = { Text("Dikey", fontSize = 10.sp) })
             }
-        } else {
-            CompactSliderRow("Boyut", "${sizePx.roundToInt()}px", sizePx, 24f..420f, defaultSizePx, onChange = onSizePx)
-            CompactSliderRow("Harf Arası", "${tracking.roundToInt()}", tracking, -80f..400f, 0f, onChange = onTracking)
-            CompactSliderRow(
-                label = "Satır Arası",
-                valueText = if (abs(lineHeight - 1.2f) < 0.03f) "Oto" else String.format(java.util.Locale.US, "%.2fx", lineHeight),
-                value = lineHeight,
-                range = 0.8f..2.4f,
-                defaultValue = 1.2f,
-                onChange = onLineHeight
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                listOf("left" to "Sol", "center" to "Orta", "right" to "Sağ").forEach { (id, lbl) ->
-                    FilterChip(selected = align == id, onClick = { onAlign(id) }, label = { Text(lbl, fontSize = 10.sp) })
+            1 -> {
+                // Quadratic precision slider for 6px..600px (fine control at tiny sizes!)
+                BrushSizeSliderRow("Boyut", sizePx, minPx = 6f, maxPx = 600f, defaultPx = defaultSizePx, onChange = onSizePx)
+                CompactSliderRow("Harf Arası", "${tracking.roundToInt()}", tracking, -80f..400f, 0f, onChange = onTracking)
+                CompactSliderRow(
+                    label = "Satır Arası",
+                    valueText = if (abs(lineHeight - 1.2f) < 0.03f) "Oto" else String.format(java.util.Locale.US, "%.2fx", lineHeight),
+                    value = lineHeight,
+                    range = 0.8f..2.4f,
+                    defaultValue = 1.2f,
+                    onChange = onLineHeight
+                )
+                CompactSliderRow("Yatay Ölçek", "${hScale.roundToInt()}%", hScale, 50f..200f, 100f, onChange = onHScale)
+                CompactSliderRow("Dikey Ölçek", "${vScale.roundToInt()}%", vScale, 50f..200f, 100f, onChange = onVScale)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    listOf("left" to "Sol", "center" to "Orta", "right" to "Sağ").forEach { (id, lbl) ->
+                        FilterChip(selected = align == id, onClick = { onAlign(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    FilterChip(selected = !vertical, onClick = { onVertical(false) }, label = { Text("Yatay", fontSize = 10.sp) })
+                    FilterChip(selected = vertical, onClick = { onVertical(true) }, label = { Text("Dikey", fontSize = 10.sp) })
                 }
-                Spacer(modifier = Modifier.weight(1f))
-                FilterChip(selected = !vertical, onClick = { onVertical(false) }, label = { Text("Yatay", fontSize = 10.sp) })
-                FilterChip(selected = vertical, onClick = { onVertical(true) }, label = { Text("Dikey", fontSize = 10.sp) })
+            }
+            else -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        "none" to "Yok",
+                        "arc" to "Yay",
+                        "arch" to "Kemer",
+                        "flag" to "Bayrak",
+                        "wave" to "Dalga",
+                        "bulge" to "Kabartma",
+                        "fish" to "Balık",
+                        "rise" to "Yükselme",
+                        "twist" to "Büküm"
+                    ).forEach { (id, lbl) ->
+                        FilterChip(selected = warpStyle == id, onClick = { onWarpStyle(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                    }
+                }
+                if (warpStyle != "none") {
+                    CompactSliderRow("Bükme", "${warpBend.roundToInt()}%", warpBend, -100f..100f, 50f, onChange = onWarpBend)
+                    CompactSliderRow("Yatay Eğim", "${warpHDist.roundToInt()}%", warpHDist, -100f..100f, 0f, onChange = onWarpHDist)
+                    CompactSliderRow("Dikey Eğim", "${warpVDist.roundToInt()}%", warpVDist, -100f..100f, 0f, onChange = onWarpVDist)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(onClick = onCreateMask, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
+                        Text("Metin Maskesi (Seçim)", fontSize = 11.sp)
+                    }
+                    if (isEditingExisting) {
+                        FilledTonalButton(onClick = onRasterize, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
+                            Text("Piksele Çevir (Raster)", fontSize = 11.sp)
+                        }
+                    }
+                }
             }
         }
     }

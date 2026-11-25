@@ -87,9 +87,18 @@ pub struct TextLayerStyle {
     pub align: String,
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub caps: String,
+    pub h_scale: f32,
+    pub v_scale: f32,
     pub tracking: f32,
     pub line_height: f32,
     pub vertical: bool,
+    pub warp_style: String,
+    pub warp_bend: f32,
+    pub warp_h_dist: f32,
+    pub warp_v_dist: f32,
     pub norm_x: f32,
     pub norm_y: f32,
 }
@@ -1252,10 +1261,23 @@ impl KastamonuEngine {
             .map(|s| s.font_family.clone())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "Montserrat".to_string());
-        let size_pt = st.map(|s| s.size_pt).unwrap_or(48.0).max(6.0);
-        let size_px = (size_pt * dpi / 72.0).clamp(12.0, 500.0);
+        let size_pt = st.map(|s| s.size_pt).unwrap_or(48.0).max(2.0);
+        let size_px = (size_pt * dpi / 72.0).clamp(6.0, 600.0);
         let bold = st.map(|s| s.weight >= 600 || s.faux_bold).unwrap_or(false);
         let italic = st.map(|s| s.italic || s.faux_italic).unwrap_or(false);
+        let underline = st.map(|s| s.underline).unwrap_or(false);
+        let strikethrough = st.map(|s| s.strikethrough).unwrap_or(false);
+        let caps = st
+            .and_then(|s| serde_json::to_value(s.caps).ok())
+            .and_then(|v| v.as_str().map(str::to_string))
+            .map(|s| match s.to_lowercase().as_str() {
+                "all" | "allcaps" => "all".to_string(),
+                "small" | "smallcaps" => "small".to_string(),
+                _ => "normal".to_string(),
+            })
+            .unwrap_or_else(|| "normal".to_string());
+        let h_scale = st.map(|s| s.horizontal_scale).unwrap_or(100.0).clamp(50.0, 200.0);
+        let v_scale = st.map(|s| s.vertical_scale).unwrap_or(100.0).clamp(50.0, 200.0);
         let tracking = st.map(|s| s.tracking).unwrap_or(0.0);
         let line_height = st
             .and_then(|s| s.leading_pt)
@@ -1276,6 +1298,15 @@ impl KastamonuEngine {
         }
         .to_string();
         let vertical = t.orientation == photocraft_doc::text::Orientation::Vertical;
+        let (warp_style, warp_bend, warp_h_dist, warp_v_dist) = match &t.warp {
+            Some(w) => (
+                photocraft_text::warp::short_style(&w.style).unwrap_or("none").to_string(),
+                w.value.clamp(-100.0, 100.0),
+                w.horizontal_distortion.clamp(-100.0, 100.0),
+                w.vertical_distortion.clamp(-100.0, 100.0),
+            ),
+            None => ("none".to_string(), 50.0, 0.0, 0.0),
+        };
         let norm_x = (t.transform.m[4] as f32 / doc_w).clamp(0.05, 0.95);
         let norm_y = (t.transform.m[5] as f32 / doc_h).clamp(0.05, 0.95);
 
@@ -1288,17 +1319,25 @@ impl KastamonuEngine {
             align,
             bold,
             italic,
+            underline,
+            strikethrough,
+            caps,
+            h_scale,
+            v_scale,
             tracking,
             line_height,
             vertical,
+            warp_style,
+            warp_bend,
+            warp_h_dist,
+            warp_v_dist,
             norm_x,
             norm_y,
         })
     }
 
     /// Creates a new PhotoCraft text layer (`type.create`) or edits an existing text layer in-place
-    /// (`type.edit` + `type.setStyle`) with full typography controls: font family, bold/italic,
-    /// letter spacing (tracking), line spacing (leading), alignment, and horizontal/vertical orientation.
+    /// (`type.edit` + `type.setStyle`) + optional curved text warp (`type.warpText`).
     #[allow(clippy::too_many_arguments)]
     pub fn add_or_edit_text_layer(
         &self,
@@ -1312,6 +1351,170 @@ impl KastamonuEngine {
         font_family: String,
         bold: bool,
         italic: bool,
+        underline: bool,
+        strikethrough: bool,
+        caps: String,
+        h_scale: f32,
+        v_scale: f32,
+        tracking: f32,
+        line_height: f32,
+        vertical: bool,
+        warp_style: String,
+        warp_bend: f32,
+        warp_h_dist: f32,
+        warp_v_dist: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Metin boş olamaz".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+
+        let dpi = guard
+            .session
+            .active()
+            .map(|ds| ds.doc().resolution_dpi.max(1.0))
+            .unwrap_or(72.0);
+        let size_pt = (size_px.max(4.0) * 72.0 / dpi).clamp(2.0, 1296.0);
+        let weight: u32 = if bold { 700 } else { 400 };
+        let tracking_clamped = tracking.clamp(-100.0, 600.0);
+        let leading_val: Value = if (line_height - 1.2).abs() < 0.03 {
+            json!("auto")
+        } else {
+            json!((size_pt * line_height.clamp(0.7, 2.8)).clamp(2.0, 2000.0))
+        };
+        let align_str = match align.as_str() {
+            "left" | "right" | "center" => align.as_str(),
+            _ => "center",
+        };
+        let caps_str = match caps.as_str() {
+            "all" | "small" => caps.as_str(),
+            _ => "normal",
+        };
+        let hs = h_scale.clamp(50.0, 200.0);
+        let vs = v_scale.clamp(50.0, 200.0);
+        let orient_str = if vertical { "vertical" } else { "horizontal" };
+        let chosen_font = font_family.trim().to_string();
+
+        let can_edit_existing = edit_layer_id.and_then(|lid| {
+            let ds = guard.session.active()?;
+            let l = ds.doc().layers.iter().find(|l| l.id.0 == lid)?;
+            if matches!(l.content, LayerContent::Text(_)) { Some(lid) } else { None }
+        });
+
+        let target_layer_id = if let Some(lid) = can_edit_existing {
+            let _ = guard.session.execute(
+                "type.edit",
+                json!({
+                    "layer": lid,
+                    "text": text,
+                    "point": [x, y],
+                }),
+            );
+            let mut style_params = json!({
+                "layer": lid,
+                "size": size_pt,
+                "weight": weight,
+                "fauxBold": bold,
+                "italic": italic,
+                "fauxItalic": italic,
+                "underline": underline,
+                "strikethrough": strikethrough,
+                "caps": caps_str,
+                "horizontalScale": hs,
+                "verticalScale": vs,
+                "color": color_hex,
+                "align": align_str,
+                "tracking": tracking_clamped,
+                "leading": leading_val,
+            });
+            if !chosen_font.is_empty() {
+                style_params["font"] = json!(chosen_font);
+            }
+            guard
+                .session
+                .execute("type.setStyle", style_params)
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            let orient_cmd = if vertical { "type.orientation.vertical" } else { "type.orientation.horizontal" };
+            let _ = guard.session.execute(orient_cmd, json!({ "layer": lid }));
+            Some(lid)
+        } else {
+            let mut params = json!({
+                "text": text,
+                "x": x,
+                "y": y,
+                "size": size_pt,
+                "weight": weight,
+                "fauxBold": bold,
+                "italic": italic,
+                "fauxItalic": italic,
+                "underline": underline,
+                "strikethrough": strikethrough,
+                "caps": caps_str,
+                "horizontalScale": hs,
+                "verticalScale": vs,
+                "color": color_hex,
+                "align": align_str,
+                "tracking": tracking_clamped,
+                "leading": leading_val,
+                "orientation": orient_str,
+            });
+            if !chosen_font.is_empty() {
+                params["font"] = json!(chosen_font);
+            }
+            let res = guard
+                .session
+                .execute("type.create", params)
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            res.get("layer").and_then(Value::as_u64)
+        };
+
+        // Apply or clear curved Text Warp via type.warpText
+        let ws = warp_style.trim();
+        let valid_warp = matches!(
+            ws,
+            "arc" | "arch" | "flag" | "wave" | "bulge" | "fish" | "rise" | "twist" | "inflate" | "squeeze"
+        );
+        if let Some(lid) = target_layer_id {
+            if valid_warp {
+                let _ = guard.session.execute(
+                    "type.warpText",
+                    json!({
+                        "layer": lid,
+                        "style": ws,
+                        "bend": warp_bend.clamp(-100.0, 100.0),
+                        "horizontalDistortion": warp_h_dist.clamp(-100.0, 100.0),
+                        "verticalDistortion": warp_v_dist.clamp(-100.0, 100.0),
+                        "orientation": orient_str,
+                    }),
+                );
+            } else if can_edit_existing.is_some() {
+                let _ = guard.session.execute("type.warpText", json!({ "layer": lid, "style": "none" }));
+            }
+        }
+
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Creates an anti-aliased glyph-shaped selection mask (`type.createSelection`) without leaving a text layer behind.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_text_selection_mask(
+        &self,
+        text: String,
+        x: f32,
+        y: f32,
+        size_px: f32,
+        align: String,
+        font_family: String,
+        bold: bool,
+        italic: bool,
+        caps: String,
+        h_scale: f32,
+        v_scale: f32,
         tracking: f32,
         line_height: f32,
         vertical: bool,
@@ -1330,59 +1533,21 @@ impl KastamonuEngine {
             .active()
             .map(|ds| ds.doc().resolution_dpi.max(1.0))
             .unwrap_or(72.0);
-        let size_pt = (size_px.max(8.0) * 72.0 / dpi).clamp(6.0, 1296.0);
+        let size_pt = (size_px.max(4.0) * 72.0 / dpi).clamp(2.0, 1296.0);
         let weight: u32 = if bold { 700 } else { 400 };
-        let tracking_clamped = tracking.clamp(-100.0, 600.0);
         let leading_val: Value = if (line_height - 1.2).abs() < 0.03 {
             json!("auto")
         } else {
-            json!((size_pt * line_height.clamp(0.7, 2.8)).clamp(4.0, 2000.0))
+            json!((size_pt * line_height.clamp(0.7, 2.8)).clamp(2.0, 2000.0))
         };
         let align_str = match align.as_str() {
             "left" | "right" | "center" => align.as_str(),
             _ => "center",
         };
-        let orient_str = if vertical { "vertical" } else { "horizontal" };
-        let chosen_font = font_family.trim().to_string();
-
-        let can_edit_existing = edit_layer_id.and_then(|lid| {
-            let ds = guard.session.active()?;
-            let l = ds.doc().layers.iter().find(|l| l.id.0 == lid)?;
-            if matches!(l.content, LayerContent::Text(_)) { Some(lid) } else { None }
-        });
-
-        if let Some(lid) = can_edit_existing {
-            let _ = guard.session.execute(
-                "type.edit",
-                json!({
-                    "layer": lid,
-                    "text": text,
-                    "point": [x, y],
-                }),
-            );
-            let mut style_params = json!({
-                "layer": lid,
-                "size": size_pt,
-                "weight": weight,
-                "fauxBold": bold,
-                "italic": italic,
-                "fauxItalic": italic,
-                "color": color_hex,
-                "align": align_str,
-                "tracking": tracking_clamped,
-                "leading": leading_val,
-            });
-            if !chosen_font.is_empty() {
-                style_params["font"] = json!(chosen_font);
-            }
-            guard
-                .session
-                .execute("type.setStyle", style_params)
-                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-            guard.mark_full_dirty();
-            return self.info_from_locked(&guard);
-        }
-
+        let caps_str = match caps.as_str() {
+            "all" | "small" => caps.as_str(),
+            _ => "normal",
+        };
         let mut params = json!({
             "text": text,
             "x": x,
@@ -1392,18 +1557,35 @@ impl KastamonuEngine {
             "fauxBold": bold,
             "italic": italic,
             "fauxItalic": italic,
-            "color": color_hex,
+            "caps": caps_str,
+            "horizontalScale": h_scale.clamp(50.0, 200.0),
+            "verticalScale": v_scale.clamp(50.0, 200.0),
             "align": align_str,
-            "tracking": tracking_clamped,
+            "tracking": tracking.clamp(-100.0, 600.0),
             "leading": leading_val,
-            "orientation": orient_str,
+            "orientation": if vertical { "vertical" } else { "horizontal" },
         });
+        let chosen_font = font_family.trim();
         if !chosen_font.is_empty() {
             params["font"] = json!(chosen_font);
         }
         guard
             .session
-            .execute("type.create", params)
+            .execute("type.createSelection", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_selection_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Rasterizes the currently active Text layer into a normal editable pixel layer (`type.rasterize`).
+    pub fn rasterize_active_text_layer(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard
+            .session
+            .execute("type.rasterize", json!({}))
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
@@ -5876,17 +6058,11 @@ mod v08_automated_tests {
             .add_or_edit_text_layer(
                 None,
                 "Merhaba\nDünya".into(),
-                128.0,
-                128.0,
-                48.0,
-                "#FF4D4F".into(),
-                "center".into(),
-                "".into(),
-                true,
-                true,
-                80.0,
-                1.5,
-                true,
+                128.0, 128.0, 48.0,
+                "#FF4D4F".into(), "center".into(), "".into(),
+                true, true, true, true, "all".into(), 120.0, 90.0,
+                80.0, 1.5, true,
+                "arc".into(), 45.0, 10.0, -5.0,
             )
             .unwrap();
         assert!(info.can_undo);
@@ -5895,7 +6071,13 @@ mod v08_automated_tests {
         assert!(style.vertical, "vertical orientation must round-trip");
         assert!(style.bold);
         assert!(style.italic);
-        assert!((style.tracking - 80.0).abs() < 1.0);
+        assert!(style.underline);
+        assert!(style.strikethrough);
+        assert_eq!(style.caps, "all");
+        assert!((style.h_scale - 120.0).abs() < 1.0);
+        assert!((style.v_scale - 90.0).abs() < 1.0);
+        assert_eq!(style.warp_style, "arc");
+        assert!((style.warp_bend - 45.0).abs() < 1.0);
     }
 
     #[test]
@@ -5903,46 +6085,27 @@ mod v08_automated_tests {
         let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
         eng.new_document("Test".into(), 256, 256).unwrap();
         eng.add_or_edit_text_layer(
-            None,
-            "İlk Yazı".into(),
-            100.0,
-            100.0,
-            40.0,
-            "#FFFFFF".into(),
-            "left".into(),
-            "".into(),
-            false,
-            false,
-            0.0,
-            1.2,
-            false,
-        )
-        .unwrap();
+            None, "İlk Yazı".into(), 100.0, 100.0, 40.0,
+            "#FFFFFF".into(), "left".into(), "".into(),
+            false, false, false, false, "normal".into(), 100.0, 100.0,
+            0.0, 1.2, false, "none".into(), 50.0, 0.0, 0.0,
+        ).unwrap();
         let initial_layers = eng.get_layers().unwrap().len();
         let st1 = eng.get_active_text_layer_style().unwrap();
 
         eng.add_or_edit_text_layer(
-            Some(st1.layer_id),
-            "Güncel Başlık".into(),
-            140.0,
-            160.0,
-            64.0,
-            "#FFEC3D".into(),
-            "center".into(),
-            "".into(),
-            true,
-            false,
-            120.0,
-            1.4,
-            false,
-        )
-        .unwrap();
+            Some(st1.layer_id), "Güncel Başlık".into(), 140.0, 160.0, 10.0,
+            "#FFEC3D".into(), "center".into(), "".into(),
+            true, false, true, false, "small".into(), 110.0, 105.0,
+            120.0, 1.4, false, "flag".into(), -35.0, 0.0, 0.0,
+        ).unwrap();
         assert_eq!(eng.get_layers().unwrap().len(), initial_layers, "type.edit must update existing layer without duplicating");
         let st2 = eng.get_active_text_layer_style().unwrap();
         assert_eq!(st2.layer_id, st1.layer_id);
         assert_eq!(st2.text, "Güncel Başlık");
-        assert!(st2.bold);
-        assert!((st2.tracking - 120.0).abs() < 1.0);
+        assert!(st2.bold && st2.underline);
+        assert_eq!(st2.warp_style, "flag");
+        assert!((st2.size_px - 10.0).abs() < 1.0, "small 10px text size must round-trip");
     }
 
     #[test]
@@ -5950,5 +6113,57 @@ mod v08_automated_tests {
         let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
         assert!(eng.register_font_bytes(Vec::new()).is_empty());
         let _fonts = eng.list_available_fonts();
+    }
+
+    #[test]
+    fn test_text_create_selection_mask_and_rasterize() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 256, 256).unwrap();
+        let sel_info = eng.create_text_selection_mask(
+            "MASK".into(), 128.0, 128.0, 64.0, "center".into(), "".into(),
+            true, false, "all".into(), 100.0, 100.0, 0.0, 1.2, false,
+        ).unwrap();
+        assert!(sel_info.has_selection, "type.createSelection must create an active selection mask");
+
+        // Now create a text layer and rasterize it
+        eng.add_or_edit_text_layer(
+            None, "RASTER".into(), 128.0, 128.0, 48.0,
+            "#FFFFFF".into(), "center".into(), "".into(),
+            false, false, false, false, "normal".into(), 100.0, 100.0,
+            0.0, 1.2, false, "none".into(), 50.0, 0.0, 0.0,
+        ).unwrap();
+        assert!(eng.get_active_text_layer_style().is_some());
+        eng.rasterize_active_text_layer().unwrap();
+        assert!(eng.get_active_text_layer_style().is_none(), "rasterized text layer must become a raster layer");
+    }
+
+    #[test]
+    fn test_text_warp_all_supported_styles() {
+        for style in ["arc", "arch", "flag", "wave", "bulge", "fish", "rise", "twist"] {
+            let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+            eng.new_document("Test".into(), 128, 128).unwrap();
+            eng.add_or_edit_text_layer(
+                None, "WARP".into(), 64.0, 64.0, 32.0,
+                "#FFFFFF".into(), "center".into(), "".into(),
+                false, false, false, false, "normal".into(), 100.0, 100.0,
+                0.0, 1.2, false, style.into(), 40.0, 0.0, 0.0,
+            ).unwrap_or_else(|e| panic!("warp style {style} failed: {e:?}"));
+            let st = eng.get_active_text_layer_style().unwrap();
+            assert_eq!(st.warp_style, style);
+        }
+    }
+
+    #[test]
+    fn test_text_tiny_6px_size_allowed() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 256, 256).unwrap();
+        eng.add_or_edit_text_layer(
+            None, "minik imza".into(), 128.0, 128.0, 6.0,
+            "#FFFFFF".into(), "center".into(), "".into(),
+            false, false, false, false, "normal".into(), 100.0, 100.0,
+            0.0, 1.2, false, "none".into(), 50.0, 0.0, 0.0,
+        ).unwrap();
+        let st = eng.get_active_text_layer_style().unwrap();
+        assert!((st.size_px - 6.0).abs() < 0.5, "6px tiny text must be preserved, got {}", st.size_px);
     }
 }
