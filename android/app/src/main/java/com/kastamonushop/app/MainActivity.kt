@@ -962,7 +962,7 @@ fun StonebridgeStudioScreen(
     fun dismissLivePanelIfActive() {
         when (activePanel) {
             BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE,
-            BottomPanel.CAMERA_RAW_LIVE, BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE,
+            BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE,
             BottomPanel.CINEMA_LOOK_EDIT, BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT,
             BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> {
                 clearAdjustGpuPreviewOnly()
