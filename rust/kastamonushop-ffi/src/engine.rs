@@ -5340,7 +5340,7 @@ mod v08_automated_tests {
         {
             let mut g = eng.core.lock();
             let ds = g.session.active_mut().unwrap();
-            let doc = ds.doc_mut();
+            let doc = Arc::make_mut(ds.doc_mut());
             let bounds = doc.bounds();
             let LayerContent::Raster(surf) = &mut doc.layers[0].content else { panic!("expected raster"); };
             let ch = surf.format().channels();
