@@ -3199,21 +3199,28 @@ impl KastamonuEngine {
                 if let Some((cmd, params)) = build_light_distort_cmd(kind, amt, det, px, py, var, 0.25) {
                     let _ = ps.execute(cmd, params);
                 }
+                if let Some(ds) = ps.active() {
+                    let doc = ds.doc();
+                    let w = doc.size.width.max(1);
+                    let h = doc.size.height.max(1);
+                    if let Some(layer) = doc.layers.iter().find(|l| l.id == id) {
+                        if let LayerContent::Raster(surf) = &layer.content {
+                            let mut rgba = vec![0u8; (w * h * 4) as usize];
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let c = surf.rgba(x as i32, y as i32);
+                                    let i = ((y * w + x) * 4) as usize;
+                                    rgba[i] = (c[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 1] = (c[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 2] = (c[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    rgba[i + 3] = (c[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+                                }
+                            }
+                            results.push(LayerThumbnail { width: w, height: h, rgba });
+                        }
+                    }
+                }
             }
-            let doc = ps.active().ok_or(EngineError::NoActiveDocument)?.doc();
-            let w = doc.size.width.max(1);
-            let h = doc.size.height.max(1);
-            let region = Rect::new(0, 0, w as i32, h as i32);
-            let comp = composite(doc, region);
-            let f32_rgba = comp.read_region(region);
-            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-            for chunk in f32_rgba.chunks_exact(4) {
-                rgba.push((chunk[0].clamp(0.0, 1.0) * 255.0).round() as u8);
-                rgba.push((chunk[1].clamp(0.0, 1.0) * 255.0).round() as u8);
-                rgba.push((chunk[2].clamp(0.0, 1.0) * 255.0).round() as u8);
-                rgba.push((chunk[3].clamp(0.0, 1.0) * 255.0).round() as u8);
-            }
-            results.push(LayerThumbnail { width: w, height: h, rgba });
         }
         Ok(results)
     }
