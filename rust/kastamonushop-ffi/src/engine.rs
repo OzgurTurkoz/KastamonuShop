@@ -864,6 +864,108 @@ fn run_hsl_mixer_on_doc(doc: &mut Document, target_id: LayerId, hsl_hue: &[f32],
 
 /// Maps a StonebridgeCraft Filter Gallery kind + normalized controls (`amount`: 0..100, `detail`: 0..100)
 /// and `scale` (proxy scale for pixel-size filters) into the exact verified PhotoCraft command & JSON.
+
+/// Maps a StonebridgeCraft Light & Distort kind + controls into the exact verified PhotoCraft command & JSON.
+/// Supported kinds: `lensFlare`, `lensBlur`, `wave`, `spherize`, `twirl`.
+fn build_light_distort_cmd(
+    kind: &str,
+    amount: f32,
+    detail: f32,
+    param_x: f32,
+    param_y: f32,
+    variant: &str,
+    scale: f32,
+) -> Option<(&'static str, Value)> {
+    let sc = scale.clamp(0.12, 1.0) as f64;
+    match kind {
+        "lensFlare" => {
+            let lens = match variant {
+                "prime35" | "prime105" | "moviePrime" | "zoom" => variant,
+                _ => "moviePrime",
+            };
+            let brightness = (10.0 + (amount.clamp(0.0, 100.0) as f64) * 2.4).clamp(10.0, 300.0);
+            let cx = (param_x.clamp(0.0, 100.0) as f64) / 100.0;
+            let cy = (param_y.clamp(0.0, 100.0) as f64) / 100.0;
+            Some((
+                "filter.render.lensFlare",
+                json!({
+                    "brightness": brightness,
+                    "centerX": cx,
+                    "centerY": cy,
+                    "lens": lens,
+                }),
+            ))
+        }
+        "lensBlur" => {
+            let shape = match variant {
+                "hexagon" | "octagon" | "pentagon" | "square" | "triangle" => variant,
+                _ => "hexagon",
+            };
+            let radius = ((1.0 + (amount.clamp(0.0, 100.0) as f64) * 0.26) * sc).clamp(0.5, 32.0);
+            let spec_bright = ((detail.clamp(0.0, 100.0) as f64) * 0.80).clamp(0.0, 100.0);
+            Some((
+                "filter.blur.lensBlur",
+                json!({
+                    "radius": radius,
+                    "shape": shape,
+                    "bladeCurvature": 35.0,
+                    "brightness": spec_bright,
+                    "threshold": 210.0,
+                    "depthMap": "none",
+                }),
+            ))
+        }
+        "wave" => {
+            let wtype = match variant {
+                "triangle" | "square" | "sine" => variant,
+                _ => "sine",
+            };
+            let d_inv = (100.0 - detail.clamp(0.0, 100.0)) as f64;
+            let wl_min = ((12.0 + d_inv * 0.65) * sc).clamp(2.0, 990.0);
+            let wl_max = (wl_min * 2.2).clamp(wl_min + 2.0, 999.0);
+            let amp_min = ((1.0 + (amount.clamp(0.0, 100.0) as f64) * 0.28) * sc).clamp(1.0, 990.0);
+            let amp_max = (amp_min * 2.0 + 1.0).clamp(amp_min + 1.0, 999.0);
+            Some((
+                "filter.distort.wave",
+                json!({
+                    "type": wtype,
+                    "generators": 3,
+                    "wavelengthMin": wl_min,
+                    "wavelengthMax": wl_max,
+                    "amplitudeMin": amp_min,
+                    "amplitudeMax": amp_max,
+                    "undefinedAreas": "repeat",
+                    "seed": 42u32,
+                }),
+            ))
+        }
+        "spherize" => {
+            let mode = match variant {
+                "horizontalOnly" | "verticalOnly" | "normal" => variant,
+                _ => "normal",
+            };
+            let amt = (amount.clamp(-100.0, 100.0) as f64);
+            Some((
+                "filter.distort.spherize",
+                json!({
+                    "amount": amt,
+                    "mode": mode,
+                }),
+            ))
+        }
+        "twirl" => {
+            let angle = (amount.clamp(-360.0, 360.0) as f64);
+            Some((
+                "filter.distort.twirl",
+                json!({
+                    "angle": angle,
+                }),
+            ))
+        }
+        _ => None,
+    }
+}
+
 fn build_gallery_filter_cmd(kind: &str, amount: f32, detail: f32, scale: f32) -> Option<(&'static str, Value)> {
     let a = (amount.clamp(0.0, 100.0) / 100.0) as f64;
     let d = (detail.clamp(0.0, 100.0) / 100.0) as f64;
@@ -3043,6 +3145,140 @@ impl KastamonuEngine {
                 .map(|(id, _)| id)
                 .ok_or_else(|| EngineError::CommandFailed {
                     detail: "Filtre uygulanacak fotoğraf katmanı bulunamadı".into(),
+                })?
+        };
+        guard.session.set_active_layer(Some(target_id));
+        guard
+            .session
+            .execute(cmd, params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+
+    /// Renders 6 live mini photo thumbnails (`Orijinal` + 5 Light & Distort effects) on the active document.
+    pub fn render_light_distort_thumbs(&self, thumb_size: u32) -> Result<Vec<LayerThumbnail>, EngineError> {
+        let specs: [(&str, f32, f32, f32, f32, &str); 6] = [
+            ("none", 0.0, 0.0, 50.0, 50.0, ""),
+            ("lensFlare", 55.0, 50.0, 32.0, 28.0, "moviePrime"),
+            ("lensBlur", 45.0, 40.0, 50.0, 50.0, "hexagon"),
+            ("wave", 45.0, 55.0, 50.0, 50.0, "sine"),
+            ("spherize", 65.0, 50.0, 50.0, 50.0, "normal"),
+            ("twirl", 110.0, 50.0, 50.0, 50.0, ""),
+        ];
+        let base_doc = {
+            let guard = self.core.lock();
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let doc = ds.doc();
+            let real_w = doc.size.width.max(1);
+            let real_h = doc.size.height.max(1);
+            let max_d = thumb_size.clamp(48, 96);
+            let scale = (max_d as f32 / real_w.max(real_h) as f32).min(1.0);
+            let tw = ((real_w as f32 * scale).round() as u32).clamp(16, max_d);
+            let th = ((real_h as f32 * scale).round() as u32).clamp(16, max_d);
+            let mut ps = Session::new();
+            ps.add_document((**doc).clone(), None);
+            ps.set_active(0);
+            if tw < real_w || th < real_h {
+                let _ = ps.execute("image.imageSize", json!({ "width": tw, "height": th, "resample": "bilinear" }));
+            }
+            ps.active().map(|d| Arc::clone(d.doc())).ok_or(EngineError::NoActiveDocument)?
+        };
+
+        let mut results = Vec::with_capacity(specs.len());
+        for (kind, amt, det, px, py, var) in specs {
+            let mut ps = Session::new();
+            ps.add_document((*base_doc).clone(), None);
+            ps.set_active(0);
+            let tid = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(id) = tid {
+                ps.set_active_layer(Some(id));
+                if let Some((cmd, params)) = build_light_distort_cmd(kind, amt, det, px, py, var, 0.25) {
+                    let _ = ps.execute(cmd, params);
+                }
+            }
+            let doc = ps.active().ok_or(EngineError::NoActiveDocument)?.doc();
+            let w = doc.size.width.max(1);
+            let h = doc.size.height.max(1);
+            let region = Rect::new(0, 0, w as i32, h as i32);
+            let comp = composite(doc, region);
+            let f32_rgba = comp.read_region(region);
+            let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+            for chunk in f32_rgba.chunks_exact(4) {
+                rgba.push((chunk[0].clamp(0.0, 1.0) * 255.0).round() as u8);
+                rgba.push((chunk[1].clamp(0.0, 1.0) * 255.0).round() as u8);
+                rgba.push((chunk[2].clamp(0.0, 1.0) * 255.0).round() as u8);
+                rgba.push((chunk[3].clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+            results.push(LayerThumbnail { width: w, height: h, rgba });
+        }
+        Ok(results)
+    }
+
+    /// 60 FPS live proxy preview for Light & Distort effects (`lensFlare`, `lensBlur`, `wave`, `spherize`, `twirl`).
+    pub fn update_proxy_light_distort(
+        &self,
+        kind: String,
+        amount: f32,
+        detail: f32,
+        param_x: f32,
+        param_y: f32,
+        variant: String,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        if let Some((cmd, params)) = build_light_distort_cmd(&kind, amount, detail, param_x, param_y, &variant, proxy.scale) {
+            let target_id = ps
+                .active()
+                .and_then(|ds| find_primary_photo_raster_layer(ds.doc(), ds.active_layer()).map(|(id, _)| id));
+            if let Some(tid) = target_id {
+                ps.set_active_layer(Some(tid));
+                let _ = ps.execute(cmd, params);
+            }
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits a Light & Distort effect once at full resolution (undoable).
+    pub fn apply_light_distort(
+        &self,
+        kind: String,
+        amount: f32,
+        detail: f32,
+        param_x: f32,
+        param_y: f32,
+        variant: String,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard.dismiss_compare();
+        let Some((cmd, params)) = build_light_distort_cmd(&kind, amount, detail, param_x, param_y, &variant, 1.0) else {
+            guard.mark_full_dirty();
+            return self.info_from_locked(&guard);
+        };
+        let target_id = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            find_primary_photo_raster_layer(ds.doc(), ds.active_layer())
+                .map(|(id, _)| id)
+                .ok_or_else(|| EngineError::CommandFailed {
+                    detail: "Efekt uygulanacak fotoğraf katmanı bulunamadı".into(),
                 })?
         };
         guard.session.set_active_layer(Some(target_id));
@@ -5363,5 +5599,47 @@ mod v08_automated_tests {
         let px = surf.read_region(doc.bounds());
         assert!((px[0] - 0.04).abs() < 0.005 && (px[1] - 0.04).abs() < 0.005 && (px[2] - 0.06).abs() < 0.005,
             "Near-black neutral pixels must stay untouched by HSL, got ({}, {}, {})", px[0], px[1], px[2]);
+    }
+
+    #[test]
+    fn test_light_distort_all_five_effects_run_cleanly() {
+        let cases = [
+            ("lensFlare", 60.0f32, 50.0f32, 35.0f32, 30.0f32, "moviePrime"),
+            ("lensBlur", 35.0, 45.0, 50.0, 50.0, "hexagon"),
+            ("wave", 40.0, 50.0, 50.0, 50.0, "sine"),
+            ("spherize", 55.0, 50.0, 50.0, 50.0, "normal"),
+            ("twirl", 90.0, 50.0, 50.0, 50.0, ""),
+        ];
+        for (kind, amt, det, px, py, var) in cases {
+            let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+            eng.new_document("Test".into(), 64, 64).unwrap();
+            let info = eng
+                .apply_light_distort(kind.into(), amt, det, px, py, var.into())
+                .unwrap_or_else(|e| panic!("light_distort {kind} failed: {e:?}"));
+            assert!(info.can_undo, "{kind} must push an undo step");
+        }
+    }
+
+    #[test]
+    fn test_render_light_distort_thumbs_returns_6_cards() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 96, 96).unwrap();
+        let thumbs = eng.render_light_distort_thumbs(64).unwrap();
+        assert_eq!(thumbs.len(), 6, "Expected 6 Light & Distort preview thumbnails (Orijinal + 5 effects)");
+        for (i, t) in thumbs.iter().enumerate() {
+            assert!(t.width > 0 && t.height > 0, "Thumb {i} has empty dimensions");
+            assert_eq!(t.rgba.len(), (t.width * t.height * 4) as usize, "Thumb {i} RGBA size mismatch");
+        }
+    }
+
+    #[test]
+    fn test_light_distort_proxy_and_none_reset() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 64, 64).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_light_distort("twirl".into(), 120.0, 50.0, 50.0, 50.0, "".into()).unwrap();
+        eng.update_proxy_light_distort("none".into(), 0.0, 0.0, 50.0, 50.0, "".into()).unwrap();
+        let g = eng.core.lock();
+        assert!(g.proxy_preview.is_some());
     }
 }

@@ -175,6 +175,14 @@ class EditorViewModel : ViewModel() {
         data class RadialBlur(val amount: Float, val method: String) : ProxyJob()
         data class HslMixer(val h: List<Float>, val s: List<Float>, val l: List<Float>) : ProxyJob()
         data class GalleryFilter(val kind: String, val amount: Float, val detail: Float) : ProxyJob()
+        data class LightDistort(
+            val kind: String,
+            val amount: Float,
+            val detail: Float,
+            val paramX: Float,
+            val paramY: Float,
+            val variant: String
+        ) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -203,6 +211,69 @@ class EditorViewModel : ViewModel() {
 
     private val _galleryThumbs = MutableStateFlow<List<ImageBitmap>>(emptyList())
     val galleryThumbs: StateFlow<List<ImageBitmap>> = _galleryThumbs.asStateFlow()
+
+    private val _lightDistortThumbs = MutableStateFlow<List<ImageBitmap>>(emptyList())
+    val lightDistortThumbs: StateFlow<List<ImageBitmap>> = _lightDistortThumbs.asStateFlow()
+
+    fun loadLightDistortThumbs() {
+        paintExecutor.execute {
+            runCatching {
+                val raw = engine.renderLightDistortThumbs(80u)
+                val out = ArrayList<ImageBitmap>(raw.size)
+                for (t in raw) {
+                    val w = t.width.toInt()
+                    val h = t.height.toInt()
+                    if (w > 0 && h > 0 && t.rgba.size >= w * h * 4) {
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(t.rgba))
+                        out.add(bmp.asImageBitmap())
+                    }
+                }
+                _lightDistortThumbs.value = out
+            }
+        }
+    }
+
+    fun updateProxyLightDistort(
+        kind: String,
+        amount: Float,
+        detail: Float,
+        paramX: Float,
+        paramY: Float,
+        variant: String
+    ) {
+        pendingProxyJob.set(ProxyJob.LightDistort(kind, amount, detail, paramX, paramY, variant))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyLightDistort(
+        kind: String,
+        amount: Float,
+        detail: Float,
+        paramX: Float,
+        paramY: Float,
+        variant: String,
+        label: String
+    ) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyLightDistort(kind, amount, detail, paramX, paramY, variant)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("$label uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Efekt hatası: ${err.message}", 2600L)
+            }
+        }
+    }
 
     fun loadGalleryThumbs() {
         paintExecutor.execute {
@@ -784,6 +855,7 @@ class EditorViewModel : ViewModel() {
                     is ProxyJob.RadialBlur -> engine.updateProxyRadialBlur(job.amount, job.method)
                     is ProxyJob.HslMixer -> engine.updateProxyHslMixer(job.h, job.s, job.l)
                     is ProxyJob.GalleryFilter -> engine.updateProxyGalleryFilter(job.kind, job.amount, job.detail)
+                    is ProxyJob.LightDistort -> engine.updateProxyLightDistort(job.kind, job.amount, job.detail, job.paramX, job.paramY, job.variant)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }

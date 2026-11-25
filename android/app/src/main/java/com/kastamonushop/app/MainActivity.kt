@@ -119,7 +119,8 @@ private enum class BottomPanel {
     QUICK_ACTIONS_MENU,
     HSL_MIXER_LIVE,
     POSTER_THRESH_LIVE,
-    FILTER_GALLERY_EDIT
+    FILTER_GALLERY_EDIT,
+    LIGHT_DISTORT_EDIT
 }
 
 private data class BlendModeOption(
@@ -289,7 +290,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.2.1",
+                    text = "v1.2.5",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -699,6 +700,13 @@ fun StonebridgeStudioScreen(
     val loupeBitmap by vm.loupeBitmap.collectAsState()
     val cinemaThumbs by vm.cinemaThumbs.collectAsState()
     val galleryThumbs by vm.galleryThumbs.collectAsState()
+    val lightDistortThumbs by vm.lightDistortThumbs.collectAsState()
+    var ldKind by remember { mutableStateOf("none") }
+    var ldAmount by remember { mutableStateOf(50f) }
+    var ldDetail by remember { mutableStateOf(45f) }
+    var ldX by remember { mutableStateOf(35f) }
+    var ldY by remember { mutableStateOf(30f) }
+    var ldVariant by remember { mutableStateOf("moviePrime") }
     var loupeScreenPos by remember { mutableStateOf<Offset?>(null) }
     val activeLayerPrev by vm.activeLayerPreview.collectAsState()
     val context = LocalContext.current
@@ -964,7 +972,7 @@ fun StonebridgeStudioScreen(
             BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE,
             BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE,
             BottomPanel.CINEMA_LOOK_EDIT, BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT,
-            BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> {
+            BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.LIGHT_DISTORT_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> {
                 clearAdjustGpuPreviewOnly()
                 activePanel = BottomPanel.DOCK
             }
@@ -1016,7 +1024,7 @@ fun StonebridgeStudioScreen(
                 BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); liquifyCursorScreen = null; activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.AUTO_ENHANCE_MENU -> activePanel = BottomPanel.ADJUST_MENU
                 BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.EFFECT_MENU }
-                BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT, BottomPanel.FILTER_GALLERY_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU }
+                BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT, BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.LIGHT_DISTORT_EDIT -> { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU }
                 BottomPanel.QUICK_ACTIONS_MENU -> activePanel = BottomPanel.DOCK
                 BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE -> { vm.endProxyPreview(); activePanel = BottomPanel.ADJUST_MENU }
                 else -> activePanel = BottomPanel.DOCK
@@ -1052,7 +1060,8 @@ fun StonebridgeStudioScreen(
             activePanel == BottomPanel.RADIAL_BLUR_EDIT ||
             activePanel == BottomPanel.HSL_MIXER_LIVE ||
             activePanel == BottomPanel.POSTER_THRESH_LIVE ||
-            activePanel == BottomPanel.FILTER_GALLERY_EDIT
+            activePanel == BottomPanel.FILTER_GALLERY_EDIT ||
+            activePanel == BottomPanel.LIGHT_DISTORT_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -3906,8 +3915,8 @@ fun StonebridgeStudioScreen(
                             onClose = { activePanel = BottomPanel.DOCK }
                         )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             CircularDockButton(
                                 icon = Icons.Default.BlurOn,
@@ -3959,6 +3968,21 @@ fun StonebridgeStudioScreen(
                                     vm.loadGalleryThumbs()
                                     vm.beginProxyPreview()
                                     activePanel = BottomPanel.FILTER_GALLERY_EDIT
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.WbSunny,
+                                label = "Işık/Bük",
+                                onClick = {
+                                    ldKind = "none"
+                                    ldAmount = 50f
+                                    ldDetail = 45f
+                                    ldX = 35f
+                                    ldY = 30f
+                                    ldVariant = "moviePrime"
+                                    vm.loadLightDistortThumbs()
+                                    vm.beginProxyPreview()
+                                    activePanel = BottomPanel.LIGHT_DISTORT_EDIT
                                 }
                             )
                         }
@@ -4121,6 +4145,53 @@ fun StonebridgeStudioScreen(
                     onApply = { lbl ->
                         if (galleryKind == "none") vm.endProxyPreview()
                         else vm.applyGalleryFilter(galleryKind, galleryAmount, galleryDetail, lbl)
+                        activePanel = BottomPanel.DOCK
+                    }
+                )
+                BottomPanel.LIGHT_DISTORT_EDIT -> LightDistortPanel(
+                    thumbs = lightDistortThumbs,
+                    kind = ldKind,
+                    onKind = { k ->
+                        ldKind = k
+                        when (k) {
+                            "lensFlare" -> { ldAmount = 55f; ldX = 35f; ldY = 30f; ldVariant = "moviePrime" }
+                            "lensBlur" -> { ldAmount = 40f; ldDetail = 40f; ldVariant = "hexagon" }
+                            "wave" -> { ldAmount = 40f; ldDetail = 55f; ldVariant = "sine" }
+                            "spherize" -> { ldAmount = 55f; ldVariant = "normal" }
+                            "twirl" -> { ldAmount = 90f; ldVariant = "" }
+                        }
+                        if (k == "none") vm.resetProxyPreview()
+                        else vm.updateProxyLightDistort(k, ldAmount, ldDetail, ldX, ldY, ldVariant)
+                    },
+                    amount = ldAmount,
+                    onAmount = { v ->
+                        ldAmount = v
+                        if (ldKind != "none") vm.updateProxyLightDistort(ldKind, v, ldDetail, ldX, ldY, ldVariant)
+                    },
+                    detail = ldDetail,
+                    onDetail = { v ->
+                        ldDetail = v
+                        if (ldKind != "none") vm.updateProxyLightDistort(ldKind, ldAmount, v, ldX, ldY, ldVariant)
+                    },
+                    posX = ldX,
+                    onPosX = { v ->
+                        ldX = v
+                        if (ldKind == "lensFlare") vm.updateProxyLightDistort(ldKind, ldAmount, ldDetail, v, ldY, ldVariant)
+                    },
+                    posY = ldY,
+                    onPosY = { v ->
+                        ldY = v
+                        if (ldKind == "lensFlare") vm.updateProxyLightDistort(ldKind, ldAmount, ldDetail, ldX, v, ldVariant)
+                    },
+                    variant = ldVariant,
+                    onVariant = { v ->
+                        ldVariant = v
+                        if (ldKind != "none") vm.updateProxyLightDistort(ldKind, ldAmount, ldDetail, ldX, ldY, v)
+                    },
+                    onClose = { vm.endProxyPreview(); activePanel = BottomPanel.FILTER_MENU },
+                    onApply = { lbl ->
+                        if (ldKind == "none") vm.endProxyPreview()
+                        else vm.applyLightDistort(ldKind, ldAmount, ldDetail, ldX, ldY, ldVariant, lbl)
                         activePanel = BottomPanel.DOCK
                     }
                 )
@@ -4992,5 +5063,115 @@ private fun ColorBalanceLivePanel(
         CompactSliderRow("Camgöbeği\nKırmızı", "${cr.roundToInt()}", cr, -100f..100f, defaultValue = 0f) { onChange(it, mg, yb) }
         CompactSliderRow("Macenta\nYeşil", "${mg.roundToInt()}", mg, -100f..100f, defaultValue = 0f) { onChange(cr, it, yb) }
         CompactSliderRow("Sarı / Mavi", "${yb.roundToInt()}", yb, -100f..100f, defaultValue = 0f) { onChange(cr, mg, it) }
+    }
+}
+
+
+@Composable
+private fun LightDistortPanel(
+    thumbs: List<ImageBitmap>,
+    kind: String, onKind: (String) -> Unit,
+    amount: Float, onAmount: (Float) -> Unit,
+    detail: Float, onDetail: (Float) -> Unit,
+    posX: Float, onPosX: (Float) -> Unit,
+    posY: Float, onPosY: (Float) -> Unit,
+    variant: String, onVariant: (String) -> Unit,
+    onClose: () -> Unit,
+    onApply: (String) -> Unit
+) {
+    val items = listOf(
+        "none" to "Orijinal",
+        "lensFlare" to "Mercek",
+        "lensBlur" to "Bokeh",
+        "wave" to "Dalga",
+        "spherize" to "Küre",
+        "twirl" to "Girdap"
+    )
+    val selectedLabel = items.firstOrNull { it.first == kind }?.second ?: "Efekt"
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader(
+            title = if (kind == "none") "Işık & Bükme" else "Efekt: $selectedLabel",
+            subtitle = "Mercek, Bokeh, Dalga, Küre ve Girdap — canlı önizleme",
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = { onApply(selectedLabel) }
+        )
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items.forEachIndexed { idx, (id, lbl) ->
+                val isSel = kind == id
+                Column(
+                    modifier = Modifier.width(62.dp).clickable { onKind(id) },
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF2A2C36))
+                            .border(if (isSel) 2.dp else 1.dp, if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF3E4150), RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val bmp = thumbs.getOrNull(idx)
+                        if (bmp != null) {
+                            Image(
+                                bitmap = bmp,
+                                contentDescription = lbl,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Text(lbl.take(2), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = lbl,
+                        color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFFD0D4E0),
+                        fontSize = 10.sp,
+                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+        when (kind) {
+            "lensFlare" -> {
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("moviePrime" to "Sinema", "zoom" to "Zoom", "prime35" to "35mm", "prime105" to "105mm").forEach { (id, lbl) ->
+                        FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                    }
+                }
+                CompactSliderRow("Parlaklık", "${amount.roundToInt()}%", amount, 0f..100f, 55f, onChange = onAmount)
+                CompactSliderRow("Konum X", "${posX.roundToInt()}%", posX, 0f..100f, 35f, onChange = onPosX)
+                CompactSliderRow("Konum Y", "${posY.roundToInt()}%", posY, 0f..100f, 30f, onChange = onPosY)
+            }
+            "lensBlur" -> {
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("hexagon" to "Altıgen", "octagon" to "Sekizgen", "pentagon" to "Beşgen", "square" to "Kare").forEach { (id, lbl) ->
+                        FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                    }
+                }
+                CompactSliderRow("Bulanıklık", "${amount.roundToInt()}%", amount, 5f..100f, 40f, onChange = onAmount)
+                CompactSliderRow("Parıltı", "${detail.roundToInt()}%", detail, 0f..100f, 40f, onChange = onDetail)
+            }
+            "wave" -> {
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("sine" to "Sinüs", "triangle" to "Üçgen", "square" to "Kare").forEach { (id, lbl) ->
+                        FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                    }
+                }
+                CompactSliderRow("Genlik", "${amount.roundToInt()}%", amount, 5f..100f, 40f, onChange = onAmount)
+                CompactSliderRow("Sıklık", "${detail.roundToInt()}%", detail, 0f..100f, 55f, onChange = onDetail)
+            }
+            "spherize" -> {
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("normal" to "Normal", "horizontalOnly" to "Yatay", "verticalOnly" to "Dikey").forEach { (id, lbl) ->
+                        FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                    }
+                }
+                CompactSliderRow("Şiddet", "${amount.roundToInt()}%", amount, -100f..100f, 0f, onChange = onAmount)
+            }
+            "twirl" -> {
+                CompactSliderRow("Girdap Açısı", "${amount.roundToInt()}°", amount, -360f..360f, 0f, onChange = onAmount)
+            }
+        }
     }
 }
