@@ -2901,6 +2901,7 @@ fun StonebridgeStudioScreen(
                     onBucketTolerance = { bucketTolerance = it },
                     bucketContiguous = bucketContiguous,
                     onBucketContiguous = { bucketContiguous = it },
+                    onBrushSizePreview = { brushSizePreviewTick++ },
                     onClose = { activePanel = BottomPanel.DOCK }
                 )
 
@@ -5053,12 +5054,17 @@ private fun DrawMenuPanel(
     onBucketTolerance: (Float) -> Unit,
     bucketContiguous: Boolean,
     onBucketContiguous: (Boolean) -> Unit,
+    onBrushSizePreview: () -> Unit,
     onClose: () -> Unit
 ) {
+    val activeColor = remember(state.colorHex) {
+        runCatching { Color(AndroidColor.parseColor(state.colorHex)) }.getOrDefault(Color.White)
+    }
     var pickerH by remember { mutableFloatStateOf(210f) }
     var pickerS by remember { mutableFloatStateOf(0.85f) }
     var pickerV by remember { mutableFloatStateOf(1.0f) }
     var showHsvPicker by remember { mutableStateOf(false) }
+    var showBrushFineTune by remember { mutableStateOf(false) }
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -5257,7 +5263,7 @@ private fun DrawMenuPanel(
                                     Box(modifier = Modifier.weight(1f)) {
                                         BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 28f) {
                                             vm.updateBrush(size = it)
-                                            brushSizePreviewTick++
+                                            onBrushSizePreview()
                                         }
                                     }
                                     FilterChip(
@@ -5304,7 +5310,7 @@ private fun DrawMenuPanel(
                         } else if (state.activeTool == ActiveTool.ERASER) {
                             BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 28f) {
                                 vm.updateBrush(size = it)
-                                brushSizePreviewTick++
+                                onBrushSizePreview()
                             }
                             CompactSliderRow("Sertlik", "${(state.brushHardness * 100).toInt()}%", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
                                 vm.updateBrush(hardness = it)
@@ -5317,7 +5323,7 @@ private fun DrawMenuPanel(
                         ) {
                             BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
                                 vm.updateBrush(size = it)
-                                brushSizePreviewTick++
+                                onBrushSizePreview()
                             }
                             if (state.activeTool != ActiveTool.SPOT_HEAL) {
                                 CompactSliderRow("Güç", "%${state.retouchStrength.roundToInt()}", state.retouchStrength, 10f..100f, defaultValue = 55f) {
@@ -5345,7 +5351,7 @@ private fun DrawMenuPanel(
                             }
                             BrushSizeSliderRow("Boyut", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
                                 vm.updateBrush(size = it)
-                                brushSizePreviewTick++
+                                onBrushSizePreview()
                             }
                             CompactSliderRow("Opaklık", "${(state.brushOpacity * 100).toInt()}%", state.brushOpacity, 0.05f..1f, defaultValue = 1f) {
                                 vm.updateBrush(opacity = it)
