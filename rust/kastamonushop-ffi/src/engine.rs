@@ -1261,7 +1261,7 @@ impl KastamonuEngine {
             .map(|s| s.font_family.clone())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "Montserrat".to_string());
-        let size_pt = st.map(|s| s.size_pt).unwrap_or(48.0).max(2.0);
+        let size_pt = st.map(|s| s.size_pt).unwrap_or(48.0).max(0.5);
         let size_px = (size_pt * dpi / 72.0).clamp(6.0, 600.0);
         let bold = st.map(|s| s.weight >= 600 || s.faux_bold).unwrap_or(false);
         let italic = st.map(|s| s.italic || s.faux_italic).unwrap_or(false);
@@ -1276,8 +1276,8 @@ impl KastamonuEngine {
                 _ => "normal".to_string(),
             })
             .unwrap_or_else(|| "normal".to_string());
-        let h_scale = st.map(|s| s.horizontal_scale).unwrap_or(100.0).clamp(50.0, 200.0);
-        let v_scale = st.map(|s| s.vertical_scale).unwrap_or(100.0).clamp(50.0, 200.0);
+        let h_scale = st.map(|s| if s.horizontal_scale <= 5.0 { s.horizontal_scale * 100.0 } else { s.horizontal_scale }).unwrap_or(100.0).clamp(50.0, 200.0);
+        let v_scale = st.map(|s| if s.vertical_scale <= 5.0 { s.vertical_scale * 100.0 } else { s.vertical_scale }).unwrap_or(100.0).clamp(50.0, 200.0);
         let tracking = st.map(|s| s.tracking).unwrap_or(0.0);
         let line_height = st
             .and_then(|s| s.leading_pt)
@@ -1378,7 +1378,7 @@ impl KastamonuEngine {
             .active()
             .map(|ds| ds.doc().resolution_dpi.max(1.0))
             .unwrap_or(72.0);
-        let size_pt = (size_px.max(4.0) * 72.0 / dpi).clamp(2.0, 1296.0);
+        let size_pt = (size_px.max(4.0) * 72.0 / dpi).clamp(0.5, 1296.0);
         let weight: u32 = if bold { 700 } else { 400 };
         let tracking_clamped = tracking.clamp(-100.0, 600.0);
         let leading_val: Value = if (line_height - 1.2).abs() < 0.03 {
@@ -1533,7 +1533,7 @@ impl KastamonuEngine {
             .active()
             .map(|ds| ds.doc().resolution_dpi.max(1.0))
             .unwrap_or(72.0);
-        let size_pt = (size_px.max(4.0) * 72.0 / dpi).clamp(2.0, 1296.0);
+        let size_pt = (size_px.max(4.0) * 72.0 / dpi).clamp(0.5, 1296.0);
         let weight: u32 = if bold { 700 } else { 400 };
         let leading_val: Value = if (line_height - 1.2).abs() < 0.03 {
             json!("auto")
