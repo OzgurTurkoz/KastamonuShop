@@ -490,6 +490,66 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun loadLightDistortThumbs() {
+        paintExecutor.execute {
+            runCatching {
+                val raw = engine.renderLightDistortThumbs(80u)
+                val out = ArrayList<ImageBitmap>(raw.size)
+                for (t in raw) {
+                    val w = t.width.toInt()
+                    val h = t.height.toInt()
+                    if (w > 0 && h > 0 && t.rgba.size >= w * h * 4) {
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(t.rgba))
+                        out.add(bmp.asImageBitmap())
+                    }
+                }
+                _lightDistortThumbs.value = out
+            }
+        }
+    }
+
+    fun updateProxyLightDistort(
+        kind: String,
+        amount: Float,
+        detail: Float,
+        paramX: Float,
+        paramY: Float,
+        variant: String
+    ) {
+        pendingProxyJob.set(ProxyJob.LightDistort(kind, amount, detail, paramX, paramY, variant))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
+    fun applyLightDistort(
+        kind: String,
+        amount: Float,
+        detail: Float,
+        paramX: Float,
+        paramY: Float,
+        variant: String,
+        label: String
+    ) {
+        pendingProxyJob.set(null)
+        dismissCompareOriginal()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyLightDistort(kind, amount, detail, paramX, paramY, variant)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("$label uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Efekt hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
     fun loadGalleryThumbs() {
         paintExecutor.execute {
             runCatching {
