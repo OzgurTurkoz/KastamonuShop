@@ -750,6 +750,9 @@ class EditorViewModel : ViewModel() {
     }
 
     private fun drainPendingProxyJobs() {
+        if (_uiState.value.compareOriginal) {
+            _uiState.update { it.copy(compareOriginal = false) }
+        }
         while (true) {
             val job = pendingProxyJob.getAndSet(null)
             if (job == null) {
@@ -1232,6 +1235,17 @@ class EditorViewModel : ViewModel() {
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("Boya kovası hatası: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun resetProxyPreview() {
+        dismissCompareOriginal()
+        pendingProxyJob.set(null)
+        paintExecutor.execute {
+            runCatching {
+                engine.resetProxyPreview()
+                NativeSurfaceBridge.nativeRenderFrame()
             }
         }
     }

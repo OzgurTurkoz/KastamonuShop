@@ -267,6 +267,15 @@ impl EngineCore {
         if let Some(liq) = &self.live_liquify {
             return Some((Arc::new(liq.preview_doc.clone()), liq.real_size));
         }
+        if self.compare_original {
+            if let Some(orig) = &self.original_snapshot {
+                let orig_sz = (orig.size.width.max(1), orig.size.height.max(1));
+                return Some((Arc::clone(orig), orig_sz));
+            }
+            let doc = self.active_document()?;
+            let sz = (doc.size.width.max(1), doc.size.height.max(1));
+            return Some((doc, sz));
+        }
         if let Some(proxy) = &self.proxy_preview {
             if let Some(ds) = proxy.session.active() {
                 return Some((Arc::clone(ds.doc()), proxy.real_size));
@@ -274,13 +283,6 @@ impl EngineCore {
         }
         let doc = self.active_document()?;
         let sz = (doc.size.width.max(1), doc.size.height.max(1));
-        if self.compare_original {
-            if let Some(orig) = &self.original_snapshot {
-                let orig_sz = (orig.size.width.max(1), orig.size.height.max(1));
-                return Some((Arc::clone(orig), orig_sz));
-            }
-            return Some((doc, sz));
-        }
         if let Some(hid) = self.transform_hidden_layer {
             let mut cloned = (*doc).clone();
             if let Some(l) = cloned.layers.iter_mut().find(|l| l.id == hid) {
@@ -670,6 +672,51 @@ fn build_cinema_look_params(preset: &str, intensity: f32, vignette: f32, grain: 
 /// Fast, zero-scratch-RAM 8-channel HSL Color Mixer using PhotoCraft's exact 8 hue bands
 /// (Red 0°, Orange 30°, Yellow 60°, Green 120°, Aqua 180°, Blue 240°, Purple 270°, Magenta 300°).
 /// Preserves alpha and respects active selection masks — NEVER hits mobile working-memory limits.
+
+/// Ensures a 512px alpha- & layer-preserving ProxyPreviewSession exists on `guard`.
+/// If `undo()`, `redo()`, or another action cleared `proxy_preview`, this rebuilds it
+/// seamlessly on the fly so active slider panels NEVER freeze or stop responding.
+fn ensure_proxy_preview_locked(guard: &mut EngineCore) -> Result<(), EngineError> {
+    if guard.proxy_preview.is_some() {
+        return Ok(());
+    }
+    let (real_doc, active_id) = {
+        let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+        (Arc::clone(ds.doc()), ds.active_layer())
+    };
+    let real_w = real_doc.size.width.max(1);
+    let real_h = real_doc.size.height.max(1);
+    let max_proxy = 512u32;
+    let scale = (max_proxy as f32 / real_w.max(real_h) as f32).min(1.0);
+    let pw = ((real_w as f32 * scale).round() as u32).clamp(1, max_proxy);
+    let ph = ((real_h as f32 * scale).round() as u32).clamp(1, max_proxy);
+
+    let mut ps = Session::new();
+    ps.add_document((*real_doc).clone(), None);
+    ps.set_active(0);
+    if active_id.is_some() {
+        ps.set_active_layer(active_id);
+    }
+    // NOTE: NEVER call layer.flattenImage here — flattening destroys transparent backgrounds by filling solid white!
+    if pw < real_w || ph < real_h {
+        let _ = ps.execute(
+            "image.imageSize",
+            json!({ "width": pw, "height": ph, "resample": "bilinear" }),
+        );
+    }
+    let base_doc = ps
+        .active()
+        .map(|ds| Arc::clone(ds.doc()))
+        .ok_or(EngineError::NoActiveDocument)?;
+    guard.proxy_preview = Some(ProxyPreviewSession {
+        base_doc,
+        session: ps,
+        scale,
+        real_size: (real_w, real_h),
+    });
+    Ok(())
+}
+
 fn run_hsl_mixer_on_doc(doc: &mut Document, target_id: LayerId, hsl_hue: &[f32], hsl_sat: &[f32], hsl_lum: &[f32]) {
     let mut h_adj = [0.0f32; 8];
     let mut s_adj = [0.0f32; 8];
@@ -738,7 +785,15 @@ fn run_hsl_mixer_on_doc(doc: &mut Document, target_id: LayerId, hsl_hue: &[f32],
         };
         if hue < 0.0 { hue += 360.0; }
 
-        // Piecewise linear hat weights across the 8 circular hue bands
+        // True perceptual chroma gating (d = max_c - min_c, NOT HSL s which explodes near black/white!)
+        // Near-neutral blacks, grays, whites, and JPEG noise (d <= 0.03) stay 100% untouched.
+        let ct = ((d - 0.03) / 0.13).clamp(0.0, 1.0);
+        let chroma_w = (ct * ct * (3.0 - 2.0 * ct)) * mask_w;
+        if chroma_w < 1e-4 {
+            continue;
+        }
+
+        // Smooth Hermite weights across the 8 circular hue bands (zero sharp seams on skin tones)
         let mut dh = 0.0f32;
         let mut ds = 0.0f32;
         let mut dl = 0.0f32;
@@ -751,14 +806,15 @@ fn run_hsl_mixer_on_doc(doc: &mut Document, target_id: LayerId, hsl_hue: &[f32],
             let mut diff = hue - curr_b;
             if diff > 180.0 { diff -= 360.0; }
             if diff < -180.0 { diff += 360.0; }
-            let weight = if diff >= 0.0 && diff < right_span {
+            let lin = if diff >= 0.0 && diff < right_span {
                 1.0 - diff / right_span
             } else if diff < 0.0 && (-diff) < left_span {
                 1.0 + diff / left_span
             } else {
                 0.0
             };
-            if weight > 0.0 {
+            if lin > 0.0 {
+                let weight = lin * lin * (3.0 - 2.0 * lin);
                 dh += h_adj[bi] * weight;
                 ds += s_adj[bi] * weight;
                 dl += l_adj[bi] * weight;
@@ -767,11 +823,19 @@ fn run_hsl_mixer_on_doc(doc: &mut Document, target_id: LayerId, hsl_hue: &[f32],
         if dh.abs() < 0.05 && ds.abs() < 0.05 && dl.abs() < 0.05 {
             continue;
         }
-        // Soft chroma ramp so near-neutral grays don't get harsh color banding
-        let chroma_w = (s / 0.12).clamp(0.0, 1.0) * mask_w;
-        let new_h = (hue + dh * 0.45 * chroma_w).rem_euclid(360.0);
-        let new_s = (s * (1.0 + (ds / 100.0) * chroma_w)).clamp(0.0, 1.0);
-        let new_l = (l + (dl / 100.0) * 0.35 * chroma_w * (1.0 - (2.0 * l - 1.0).abs()).max(0.2)).clamp(0.0, 1.0);
+        // Lightroom-calibrated curves:
+        // - Hue: ±30° smooth shift
+        // - Saturation: multiplicative desat; vibrance-protected boost so mid-tones don't clip
+        // - Lightness: parabolic midtone envelope 4*l*(1-l) so blacks never glow and whites never block
+        let new_h = (hue + dh * 0.30 * chroma_w).rem_euclid(360.0);
+        let ds_norm = (ds / 100.0) * chroma_w;
+        let new_s = if ds_norm < 0.0 {
+            (s * (1.0 + ds_norm)).clamp(0.0, 1.0)
+        } else {
+            (s + (1.0 - s) * s.sqrt() * 0.85 * ds_norm).clamp(0.0, 1.0)
+        };
+        let l_env = (4.0 * l * (1.0 - l)).clamp(0.0, 1.0);
+        let new_l = (l + (dl / 100.0) * 0.32 * chroma_w * l_env).clamp(0.0, 1.0);
 
         // HSL -> RGB
         let c = (1.0 - (2.0 * new_l - 1.0).abs()) * new_s;
@@ -1598,6 +1662,25 @@ impl KastamonuEngine {
         Ok(())
     }
 
+    /// Resets the live proxy preview back to its clean untouched `base_doc` (used by Reset / Sıfırla).
+    pub fn reset_proxy_preview(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        ensure_proxy_preview_locked(&mut guard)?;
+        if let Some(proxy) = guard.proxy_preview.as_mut() {
+            let mut ps = Session::new();
+            ps.add_document((*proxy.base_doc).clone(), None);
+            ps.set_active(0);
+            if active_id.is_some() {
+                ps.set_active_layer(active_id);
+            }
+            proxy.session = ps;
+        }
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
     pub fn update_proxy_adjustment(&self, kind: String, params_json: String) -> Result<(), EngineError> {
         let params: Value = if params_json.trim().is_empty() {
             json!({})
@@ -1608,6 +1691,8 @@ impl KastamonuEngine {
         let cmd = format!("layer.newAdjustmentLayer.{kind}");
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -1626,6 +1711,8 @@ impl KastamonuEngine {
     pub fn update_proxy_blur(&self, radius: f32) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -1655,6 +1742,8 @@ impl KastamonuEngine {
     pub fn update_proxy_sharpen(&self, amount: f32) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -1735,6 +1824,8 @@ impl KastamonuEngine {
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -1792,6 +1883,8 @@ impl KastamonuEngine {
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -1880,6 +1973,8 @@ impl KastamonuEngine {
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -1950,6 +2045,8 @@ impl KastamonuEngine {
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -2376,6 +2473,8 @@ impl KastamonuEngine {
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -2432,6 +2531,8 @@ impl KastamonuEngine {
     pub fn update_proxy_motion_blur(&self, angle: f32, distance: f32) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -2492,6 +2593,8 @@ impl KastamonuEngine {
     pub fn update_proxy_radial_blur(&self, amount: f32, method: String) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -2734,6 +2837,8 @@ impl KastamonuEngine {
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -2897,6 +3002,8 @@ impl KastamonuEngine {
     pub fn update_proxy_gallery_filter(&self, kind: String, amount: f32, detail: f32) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
         let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
@@ -3407,9 +3514,6 @@ impl KastamonuEngine {
     /// Instant Before/After compare mode: hides all layers except the original Background (zero undo steps).
     pub fn set_compare_original(&self, enabled: bool) {
         let mut guard = self.core.lock();
-        if enabled {
-            guard.proxy_preview = None;
-        }
         guard.compare_original = enabled;
         guard.mark_selection_dirty();
     }
@@ -5191,5 +5295,73 @@ mod v08_automated_tests {
         let thumbs = eng.render_filter_gallery_thumbs(64).expect("gallery thumbs");
         assert_eq!(thumbs.len(), 10, "must return Orijinal + 9 live filter preview thumbnails");
         assert!(thumbs[0].width <= 64 && !thumbs[0].rgba.is_empty());
+    }
+
+    #[test]
+    fn test_proxy_preview_recovers_after_undo_and_compare_toggle() {
+        let eng = KastamonuEngine::new();
+        eng.new_document(128, 128).unwrap();
+        eng.run_command("layer.newAdjustmentLayer.brightnessContrast".into(), r#"{"brightness":20,"contrast":0}"#.into()).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_adjustment("brightnessContrast".into(), r#"{"brightness":40,"contrast":10}"#.into()).unwrap();
+
+        eng.set_compare_original(true);
+        {
+            let g = eng.core.lock();
+            assert!(g.compare_original);
+            assert!(g.proxy_preview.is_some(), "proxy_preview must survive Önce toggle");
+        }
+        eng.set_compare_original(false);
+
+        eng.undo().unwrap();
+        eng.update_proxy_adjustment("brightnessContrast".into(), r#"{"brightness":-30,"contrast":15}"#.into()).unwrap();
+        let g = eng.core.lock();
+        assert!(g.proxy_preview.is_some(), "proxy_preview must auto-recover after undo()");
+        assert!(!g.compare_original);
+    }
+
+    #[test]
+    fn test_reset_proxy_preview_restores_original_pixels() {
+        let eng = KastamonuEngine::new();
+        eng.new_document(64, 64).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_adjustment("posterize".into(), r#"{"levels":3}"#.into()).unwrap();
+        eng.reset_proxy_preview().unwrap();
+        let g = eng.core.lock();
+        let proxy = g.proxy_preview.as_ref().expect("proxy must remain active after reset");
+        let cur = proxy.session.active().unwrap().doc();
+        assert_eq!(cur.layers.len(), proxy.base_doc.layers.len(), "reset_proxy_preview must restore exact original layer stack");
+    }
+
+    #[test]
+    fn test_hsl_mixer_leaves_near_black_neutral_untouched() {
+        let eng = KastamonuEngine::new();
+        eng.new_document(32, 32).unwrap();
+        {
+            let mut g = eng.core.lock();
+            let ds = g.session.active_mut().unwrap();
+            let doc = ds.doc_mut();
+            let bounds = doc.bounds();
+            let LayerContent::Raster(surf) = &mut doc.layers[0].content else { panic!("expected raster"); };
+            let ch = surf.format().channels();
+            let mut buf = vec![0.0f32; 32 * 32 * ch];
+            for i in 0..(32 * 32) {
+                buf[i * ch] = 0.04;
+                buf[i * ch + 1] = 0.04;
+                buf[i * ch + 2] = 0.06;
+                if ch > 3 { buf[i * ch + 3] = 1.0; }
+            }
+            surf.write_region_par(bounds, &buf);
+        }
+        let mut blue_max = vec![0.0f32; 8];
+        blue_max[4] = 100.0;
+        blue_max[5] = 100.0;
+        eng.apply_hsl_mixer(blue_max.clone(), blue_max.clone(), blue_max).unwrap();
+        let g = eng.core.lock();
+        let doc = g.session.active().unwrap().doc();
+        let LayerContent::Raster(surf) = &doc.layers[0].content else { panic!("expected raster"); };
+        let px = surf.read_region(doc.bounds());
+        assert!((px[0] - 0.04).abs() < 0.005 && (px[1] - 0.04).abs() < 0.005 && (px[2] - 0.06).abs() < 0.005,
+            "Near-black neutral pixels must stay untouched by HSL, got ({}, {}, {})", px[0], px[1], px[2]);
     }
 }

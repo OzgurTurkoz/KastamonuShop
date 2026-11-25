@@ -47,6 +47,7 @@ class VulkanCanvasView(
     private val isSelectWandActive: () -> Boolean = { false },
     private val isBucketActive: () -> Boolean = { false },
     private val isCloneSourcePickActive: () -> Boolean = { false },
+    private val isHandPanActive: () -> Boolean = { false },
     private val onStrokeBegin: (StrokeSample) -> Unit,
     private val onStrokeMove: (List<StrokeSample>) -> Unit,
     private val onStrokeEnd: () -> Unit,
@@ -73,6 +74,9 @@ class VulkanCanvasView(
     private var rotationRad = 0f
 
     private var isMultiTouch = false
+    private var singlePanActive = false
+    private var lastSinglePanX = 0f
+    private var lastSinglePanY = 0f
     private var strokeActive = false
     private var retouchActive = false
     private var rulerActive = false
@@ -283,6 +287,7 @@ class VulkanCanvasView(
             when (event.actionMasked) {
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     isMultiTouch = true
+                    singlePanActive = false
                     eyedropperActive = false
                     mirrorDragActive = false
                     textDragActive = false
@@ -351,7 +356,11 @@ class VulkanCanvasView(
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (isMirrorDragActive()) {
+                if (isHandPanActive()) {
+                    singlePanActive = true
+                    lastSinglePanX = event.x
+                    lastSinglePanY = event.y
+                } else if (isMirrorDragActive()) {
                     mirrorDragActive = true
                     updateMirrorRatioFromScreen(event.x, event.y)
                 } else if (isTextDragActive()) {
@@ -410,6 +419,16 @@ class VulkanCanvasView(
                 }
             }
             MotionEvent.ACTION_MOVE -> {
+                if (singlePanActive) {
+                    panX += (event.x - lastSinglePanX)
+                    panY += (event.y - lastSinglePanY)
+                    lastSinglePanX = event.x
+                    lastSinglePanY = event.y
+                    NativeSurfaceBridge.nativeSetCamera(panX, panY, zoom, rotationRad)
+                    NativeSurfaceBridge.nativeRenderFrame()
+                    onCameraChanged()
+                    return true
+                }
                 if (mirrorDragActive) {
                     updateMirrorRatioFromScreen(event.x, event.y)
                     return true
@@ -482,6 +501,7 @@ class VulkanCanvasView(
             }
             MotionEvent.ACTION_UP -> {
                 onLoupePointer(0f, 0f, 0f, 0f, false)
+                singlePanActive = false
                 mirrorDragActive = false
                 textDragActive = false
                 if (selectDragActive) {
@@ -512,6 +532,7 @@ class VulkanCanvasView(
             }
             MotionEvent.ACTION_CANCEL -> {
                 onLoupePointer(0f, 0f, 0f, 0f, false)
+                singlePanActive = false
                 mirrorDragActive = false
                 textDragActive = false
                 eyedropperActive = false

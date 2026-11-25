@@ -289,7 +289,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.2.0",
+                    text = "v1.2.1",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -573,9 +573,11 @@ private fun CompactSliderRow(
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     defaultValue: Float,
+    forceResetEnabled: Boolean = false,
+    onReset: (() -> Unit)? = null,
     onChange: (Float) -> Unit
 ) {
-    val isModified = abs(value - defaultValue) > ((range.endInclusive - range.start) * 0.004f)
+    val isModified = forceResetEnabled || abs(value - defaultValue) > ((range.endInclusive - range.start) * 0.004f)
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -611,7 +613,7 @@ private fun CompactSliderRow(
                 .size(26.dp)
                 .clip(CircleShape)
                 .background(if (isModified) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color(0xFF2A2C36))
-                .clickable(enabled = isModified) { onChange(defaultValue) },
+                .clickable(enabled = isModified) { if (onReset != null) onReset() else onChange(defaultValue) },
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -703,6 +705,8 @@ fun StonebridgeStudioScreen(
     val density = LocalDensity.current
 
     var showLayers by remember { mutableStateOf(false) }
+    var singleFingerPanMode by remember { mutableStateOf(false) }
+    val currentHandPanState by rememberUpdatedState(singleFingerPanMode)
     var activePanel by remember { mutableStateOf(BottomPanel.DOCK) }
     var showHsvPicker by remember { mutableStateOf(false) }
     var showOpenMenu by remember { mutableStateOf(false) }
@@ -957,7 +961,10 @@ fun StonebridgeStudioScreen(
 
     fun dismissLivePanelIfActive() {
         when (activePanel) {
-            BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE -> {
+            BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE,
+            BottomPanel.CAMERA_RAW_LIVE, BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE,
+            BottomPanel.CINEMA_LOOK_EDIT, BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT,
+            BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> {
                 clearAdjustGpuPreviewOnly()
                 activePanel = BottomPanel.DOCK
             }
@@ -1158,6 +1165,7 @@ fun StonebridgeStudioScreen(
                         val st = vm.uiState.value
                         st.activeTool == ActiveTool.CLONE_STAMP && st.pickingCloneSource
                     },
+                    isHandPanActive = { currentHandPanState },
                     onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
                     onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
                     onStrokeEnd = { vm.finishLiveStroke() },
@@ -2165,9 +2173,10 @@ fun StonebridgeStudioScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceEvenly
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 TopBarButton(
                     icon = Icons.Default.Home,
@@ -2268,7 +2277,9 @@ fun StonebridgeStudioScreen(
                         if (activePanel == BottomPanel.LIQUIFY_EDIT) {
                             vm.liquifyUndo()
                         } else {
-                            dismissLivePanelIfActive()
+                            if (activePanel == BottomPanel.MIRROR_EDIT || activePanel == BottomPanel.CROP_MENU) {
+                                dismissLivePanelIfActive()
+                            }
                             vm.undo()
                         }
                     }
@@ -2282,7 +2293,9 @@ fun StonebridgeStudioScreen(
                         if (activePanel == BottomPanel.LIQUIFY_EDIT) {
                             vm.liquifyRedo()
                         } else {
-                            dismissLivePanelIfActive()
+                            if (activePanel == BottomPanel.MIRROR_EDIT || activePanel == BottomPanel.CROP_MENU) {
+                                dismissLivePanelIfActive()
+                            }
                             vm.redo()
                         }
                     }
@@ -2293,6 +2306,15 @@ fun StonebridgeStudioScreen(
                     label = "Önce",
                     selected = state.compareOriginal,
                     onClick = { vm.toggleCompareOriginal() }
+                )
+
+                TopBarButton(
+                    icon = Icons.Default.OpenWith,
+                    label = "Kaydır",
+                    selected = singleFingerPanMode,
+                    onClick = {
+                        singleFingerPanMode = !singleFingerPanMode
+                    }
                 )
 
                 TopBarButton(
@@ -4095,6 +4117,7 @@ fun StonebridgeStudioScreen(
                 )
                 BottomPanel.POSTER_THRESH_LIVE -> PosterThreshPanel(
                     isPoster = posterMode,
+                    isTouched = posterTouched,
                     onMode = { isP ->
                         posterMode = isP
                         if (posterTouched) {
@@ -4104,15 +4127,31 @@ fun StonebridgeStudioScreen(
                     },
                     posterLevels = posterLevels,
                     onPosterLevels = {
+                        val prevInt = posterLevels.roundToInt()
+                        val nextInt = it.roundToInt()
+                        val wasTouched = posterTouched
                         posterTouched = true
                         posterLevels = it
-                        vm.updateProxyAdjustment("posterize", """{"levels":${it.roundToInt()}}""")
+                        if (!wasTouched || nextInt != prevInt) {
+                            vm.updateProxyAdjustment("posterize", """{"levels":$nextInt}""")
+                        }
                     },
                     threshLevel = threshLevel,
                     onThreshLevel = {
+                        val prevInt = threshLevel.roundToInt()
+                        val nextInt = it.roundToInt()
+                        val wasTouched = posterTouched
                         posterTouched = true
                         threshLevel = it
-                        vm.updateProxyAdjustment("threshold", """{"level":${it.roundToInt()}}""")
+                        if (!wasTouched || nextInt != prevInt) {
+                            vm.updateProxyAdjustment("threshold", """{"level":$nextInt}""")
+                        }
+                    },
+                    onReset = {
+                        posterTouched = false
+                        posterLevels = 8f
+                        threshLevel = 128f
+                        vm.resetProxyPreview()
                     },
                     onClose = { vm.endProxyPreview(); activePanel = BottomPanel.ADJUST_MENU },
                     onApply = {
@@ -4851,22 +4890,43 @@ private fun HslMixerPanel(
 
 @Composable
 private fun PosterThreshPanel(
-    isPoster: Boolean, onMode: (Boolean) -> Unit,
+    isPoster: Boolean,
+    isTouched: Boolean,
+    onMode: (Boolean) -> Unit,
     posterLevels: Float, onPosterLevels: (Float) -> Unit,
     threshLevel: Float, onThreshLevel: (Float) -> Unit,
+    onReset: () -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader(if (isPoster) "Posterize" else "Eşik (S&B)", "60 FPS canlı önizleme — Uygula ile katman oluştur", "Uygula", onClose, onApply)
+        BottomEditorHeader(if (isPoster) "Posterize" else "Eşik (S&B)", "Çubuğu kaydırınca uygulanır — Sıfırla orijinale döner", "Uygula", onClose, onApply)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = isPoster, onClick = { onMode(true) }, label = { Text("Posterize", fontSize = 11.sp) })
             FilterChip(selected = !isPoster, onClick = { onMode(false) }, label = { Text("Eşik (S&B)", fontSize = 11.sp) })
         }
         if (isPoster) {
-            CompactSliderRow("Seviye", "${posterLevels.roundToInt()}", posterLevels, 2f..24f, 6f, onChange = onPosterLevels)
+            CompactSliderRow(
+                label = "Seviye",
+                valueText = if (isTouched) "${posterLevels.roundToInt()}" else "Kapalı",
+                value = posterLevels,
+                range = 2f..24f,
+                defaultValue = 8f,
+                forceResetEnabled = isTouched,
+                onReset = onReset,
+                onChange = onPosterLevels
+            )
         } else {
-            CompactSliderRow("Eşik", "${threshLevel.roundToInt()}", threshLevel, 1f..254f, 128f, onChange = onThreshLevel)
+            CompactSliderRow(
+                label = "Eşik",
+                valueText = if (isTouched) "${threshLevel.roundToInt()}" else "Kapalı",
+                value = threshLevel,
+                range = 1f..254f,
+                defaultValue = 128f,
+                forceResetEnabled = isTouched,
+                onReset = onReset,
+                onChange = onThreshLevel
+            )
         }
     }
 }
