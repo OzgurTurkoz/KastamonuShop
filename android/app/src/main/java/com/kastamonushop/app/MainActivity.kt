@@ -78,6 +78,7 @@ import com.kastamonushop.app.viewmodel.EditorUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -2069,7 +2070,7 @@ fun StonebridgeStudioScreen(
                     }
                 },
                 onPinchPan = { dPanX, dPanY, zoomScale, cx, cy ->
-                    canvasViewRef?.applyExternalPinchPan(dPanX, dPanY, zoomScale, cx, cy)
+                    canvasViewRef?.applyExternalPinchPan(zoomScale, dPanX, dPanY)
                     cameraTick++
                 }
             )
