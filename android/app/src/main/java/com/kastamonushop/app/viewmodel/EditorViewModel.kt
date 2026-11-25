@@ -186,6 +186,30 @@ class EditorViewModel : ViewModel() {
             val paramY: Float,
             val variant: String
         ) : ProxyJob()
+        data class TextPreview(
+            val editLayerId: ULong?,
+            val text: String,
+            val x: Float,
+            val y: Float,
+            val sizePx: Float,
+            val colorHex: String,
+            val align: String,
+            val fontFamily: String,
+            val bold: Boolean,
+            val italic: Boolean,
+            val underline: Boolean,
+            val strikethrough: Boolean,
+            val caps: String,
+            val hScale: Float,
+            val vScale: Float,
+            val tracking: Float,
+            val lineHeight: Float,
+            val vertical: Boolean,
+            val warpStyle: String,
+            val warpBend: Float,
+            val warpHDist: Float,
+            val warpVDist: Float
+        ) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -429,6 +453,42 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun updateProxyTextPreview(
+        editLayerId: ULong?,
+        text: String,
+        x: Float,
+        y: Float,
+        sizePx: Float,
+        colorHex: String,
+        align: String,
+        fontFamily: String,
+        bold: Boolean,
+        italic: Boolean,
+        underline: Boolean,
+        strikethrough: Boolean,
+        caps: String,
+        hScale: Float,
+        vScale: Float,
+        tracking: Float,
+        lineHeight: Float,
+        vertical: Boolean,
+        warpStyle: String,
+        warpBend: Float,
+        warpHDist: Float,
+        warpVDist: Float
+    ) {
+        pendingProxyJob.set(
+            ProxyJob.TextPreview(
+                editLayerId, text, x, y, sizePx, colorHex, align, fontFamily,
+                bold, italic, underline, strikethrough, caps, hScale, vScale,
+                tracking, lineHeight, vertical, warpStyle, warpBend, warpHDist, warpVDist
+            )
+        )
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
+
     fun createTextSelectionMask(
         text: String,
         x: Float,
@@ -443,8 +503,13 @@ class EditorViewModel : ViewModel() {
         vScale: Float,
         tracking: Float,
         lineHeight: Float,
-        vertical: Boolean
+        vertical: Boolean,
+        warpStyle: String,
+        warpBend: Float,
+        warpHDist: Float,
+        warpVDist: Float
     ) {
+        pendingProxyJob.set(null)
         dismissCompareOriginal()
         paintExecutor.execute {
             runCatching {
@@ -462,7 +527,11 @@ class EditorViewModel : ViewModel() {
                     vScale = vScale,
                     tracking = tracking,
                     lineHeight = lineHeight,
-                    vertical = vertical
+                    vertical = vertical,
+                    warpStyle = warpStyle,
+                    warpBend = warpBend,
+                    warpHDist = warpHDist,
+                    warpVDist = warpVDist
                 )
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
@@ -1131,6 +1200,12 @@ class EditorViewModel : ViewModel() {
                     is ProxyJob.HslMixer -> engine.updateProxyHslMixer(job.h, job.s, job.l)
                     is ProxyJob.GalleryFilter -> engine.updateProxyGalleryFilter(job.kind, job.amount, job.detail)
                     is ProxyJob.LightDistort -> engine.updateProxyLightDistort(job.kind, job.amount, job.detail, job.paramX, job.paramY, job.variant)
+                    is ProxyJob.TextPreview -> engine.updateProxyTextPreview(
+                        job.editLayerId, job.text, job.x, job.y, job.sizePx, job.colorHex, job.align,
+                        job.fontFamily, job.bold, job.italic, job.underline, job.strikethrough,
+                        job.caps, job.hScale, job.vScale, job.tracking, job.lineHeight, job.vertical,
+                        job.warpStyle, job.warpBend, job.warpHDist, job.warpVDist
+                    )
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }

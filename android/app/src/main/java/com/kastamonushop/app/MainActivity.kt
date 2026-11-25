@@ -294,7 +294,7 @@ private fun StonebridgeHomeScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Text(
-                    text = "v1.3.1",
+                    text = "v1.3.2",
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -1062,6 +1062,47 @@ fun StonebridgeStudioScreen(
         }
     }
 
+
+    LaunchedEffect(
+        activePanel, textEditLayerId, textDraft, textNormX, textNormY, textSizePx,
+        textColorHex, textAlign, textFontFamily, textBold, textItalic, textUnderline,
+        textStrike, textCaps, textHScale, textVScale, textTracking, textLineHeight,
+        textVertical, textWarpStyle, textWarpBend, textWarpHDist, textWarpVDist
+    ) {
+        if (activePanel == BottomPanel.TEXT_EDIT) {
+            if (textWarpStyle != "none") {
+                val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+                val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+                vm.updateProxyTextPreview(
+                    editLayerId = textEditLayerId,
+                    text = textDraft,
+                    x = docW * textNormX,
+                    y = docH * textNormY,
+                    sizePx = textSizePx,
+                    colorHex = textColorHex,
+                    align = textAlign,
+                    fontFamily = textFontFamily,
+                    bold = textBold,
+                    italic = textItalic,
+                    underline = textUnderline,
+                    strikethrough = textStrike,
+                    caps = textCaps,
+                    hScale = textHScale,
+                    vScale = textVScale,
+                    tracking = textTracking,
+                    lineHeight = textLineHeight,
+                    vertical = textVertical,
+                    warpStyle = textWarpStyle,
+                    warpBend = textWarpBend,
+                    warpHDist = textWarpHDist,
+                    warpVDist = textWarpVDist
+                )
+            } else {
+                vm.resetProxyPreview()
+            }
+        }
+    }
+
     LaunchedEffect(state.fitCameraSignal, canvasViewRef) {
         if (state.fitCameraSignal > 0 && canvasViewRef != null) {
             fitToSafeArea(0, activePanel)
@@ -1089,7 +1130,8 @@ fun StonebridgeStudioScreen(
             activePanel == BottomPanel.HSL_MIXER_LIVE ||
             activePanel == BottomPanel.POSTER_THRESH_LIVE ||
             activePanel == BottomPanel.FILTER_GALLERY_EDIT ||
-            activePanel == BottomPanel.LIGHT_DISTORT_EDIT
+            activePanel == BottomPanel.LIGHT_DISTORT_EDIT ||
+            activePanel == BottomPanel.TEXT_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -1932,7 +1974,7 @@ fun StonebridgeStudioScreen(
                     ) {
                         Text(
                             text = displayTxt,
-                            color = previewColor,
+                            color = if (textWarpStyle == "none") previewColor else Color.Transparent,
                             fontFamily = previewFont,
                             fontSize = previewSp.sp,
                             fontWeight = if (textBold) FontWeight.Bold else FontWeight.Normal,
@@ -2768,6 +2810,7 @@ fun StonebridgeStudioScreen(
                             onClick = {
                                 vm.setTool(ActiveTool.NONE)
                                 vm.ensureStudioFontsLoaded(context)
+                                vm.beginProxyPreview()
                                 val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
                                 textEditLayerId = null
                                 textSizePx = (docW * 0.055f).coerceIn(24f, 180f)
@@ -2944,15 +2987,17 @@ fun StonebridgeStudioScreen(
                                 sizePx = textSizePx, align = textAlign, fontFamily = textFontFamily,
                                 bold = textBold, italic = textItalic, caps = textCaps,
                                 hScale = textHScale, vScale = textVScale,
-                                tracking = textTracking, lineHeight = textLineHeight, vertical = textVertical
+                                tracking = textTracking, lineHeight = textLineHeight, vertical = textVertical,
+                                warpStyle = textWarpStyle, warpBend = textWarpBend,
+                                warpHDist = textWarpHDist, warpVDist = textWarpVDist
                             )
-                            activePanel = BottomPanel.DOCK
+                            activePanel = BottomPanel.SELECT_MENU
                         },
                         onRasterize = {
                             vm.rasterizeActiveTextLayer()
                             activePanel = BottomPanel.DOCK
                         },
-                        onClose = { activePanel = BottomPanel.DOCK },
+                        onClose = { vm.endProxyPreview(); activePanel = BottomPanel.DOCK },
                         onApply = {
                             vm.addOrEditTextLayer(
                                 editLayerId = textEditLayerId,

@@ -1500,6 +1500,131 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+    /// Live 60 FPS proxy preview for Typography Studio (especially curved Text Warp `type.warpText`).
+    /// Renders the exact PhotoCraft text + warp directly on the 512px proxy document so the user sees
+    /// real-time bending, distortion, font, and alignment while dragging sliders.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_proxy_text_preview(
+        &self,
+        edit_layer_id: Option<u64>,
+        text: String,
+        x: f32,
+        y: f32,
+        size_px: f32,
+        color_hex: String,
+        align: String,
+        font_family: String,
+        bold: bool,
+        italic: bool,
+        underline: bool,
+        strikethrough: bool,
+        caps: String,
+        h_scale: f32,
+        v_scale: f32,
+        tracking: f32,
+        line_height: f32,
+        vertical: bool,
+        warp_style: String,
+        warp_bend: f32,
+        warp_h_dist: f32,
+        warp_v_dist: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let sc = proxy.scale;
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+
+        // If editing an existing text layer, hide its original in the proxy so we don't see double text
+        if let Some(eid) = edit_layer_id {
+            if let Some(ds) = ps.active_mut() {
+                let doc = Arc::make_mut(ds.doc_mut());
+                if let Some(l) = doc.layers.iter_mut().find(|l| l.id.0 == eid) {
+                    l.visible = false;
+                }
+            }
+        }
+
+        if !text.trim().is_empty() {
+            let dpi = ps.active().map(|ds| ds.doc().resolution_dpi.max(1.0)).unwrap_or(72.0);
+            let scaled_px = (size_px.max(4.0) * sc).max(2.0);
+            let size_pt = (scaled_px * 72.0 / dpi).clamp(0.5, 1296.0);
+            let weight: u32 = if bold { 700 } else { 400 };
+            let leading_val: Value = if (line_height - 1.2).abs() < 0.03 {
+                json!("auto")
+            } else {
+                json!((size_pt * line_height.clamp(0.7, 2.8)).clamp(1.0, 2000.0))
+            };
+            let align_str = match align.as_str() {
+                "left" | "right" | "center" => align.as_str(),
+                _ => "center",
+            };
+            let caps_str = match caps.as_str() {
+                "all" | "small" => caps.as_str(),
+                _ => "normal",
+            };
+            let orient_str = if vertical { "vertical" } else { "horizontal" };
+            let mut params = json!({
+                "text": text,
+                "x": x * sc,
+                "y": y * sc,
+                "size": size_pt,
+                "weight": weight,
+                "fauxBold": bold,
+                "italic": italic,
+                "fauxItalic": italic,
+                "underline": underline,
+                "strikethrough": strikethrough,
+                "caps": caps_str,
+                "horizontalScale": h_scale.clamp(50.0, 200.0),
+                "verticalScale": v_scale.clamp(50.0, 200.0),
+                "color": color_hex,
+                "align": align_str,
+                "tracking": tracking.clamp(-100.0, 600.0),
+                "leading": leading_val,
+                "orientation": orient_str,
+            });
+            let chosen_font = font_family.trim();
+            if !chosen_font.is_empty() {
+                params["font"] = json!(chosen_font);
+            }
+            if let Ok(res) = ps.execute("type.create", params) {
+                let ws = warp_style.trim();
+                let valid_warp = matches!(
+                    ws,
+                    "arc" | "arch" | "flag" | "wave" | "bulge" | "fish" | "rise" | "twist" | "inflate" | "squeeze"
+                );
+                if valid_warp {
+                    if let Some(lid) = res.get("layer").and_then(Value::as_u64) {
+                        let _ = ps.execute(
+                            "type.warpText",
+                            json!({
+                                "layer": lid,
+                                "style": ws,
+                                "bend": warp_bend.clamp(-100.0, 100.0),
+                                "horizontalDistortion": warp_h_dist.clamp(-100.0, 100.0),
+                                "verticalDistortion": warp_v_dist.clamp(-100.0, 100.0),
+                                "orientation": orient_str,
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
     /// Creates an anti-aliased glyph-shaped selection mask (`type.createSelection`) without leaving a text layer behind.
     #[allow(clippy::too_many_arguments)]
     pub fn create_text_selection_mask(
@@ -1518,6 +1643,10 @@ impl KastamonuEngine {
         tracking: f32,
         line_height: f32,
         vertical: bool,
+        warp_style: String,
+        warp_bend: f32,
+        warp_h_dist: f32,
+        warp_v_dist: f32,
     ) -> Result<DocumentInfo, EngineError> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -1548,6 +1677,7 @@ impl KastamonuEngine {
             "all" | "small" => caps.as_str(),
             _ => "normal",
         };
+        let orient_str = if vertical { "vertical" } else { "horizontal" };
         let mut params = json!({
             "text": text,
             "x": x,
@@ -1563,16 +1693,45 @@ impl KastamonuEngine {
             "align": align_str,
             "tracking": tracking.clamp(-100.0, 600.0),
             "leading": leading_val,
-            "orientation": if vertical { "vertical" } else { "horizontal" },
+            "orientation": orient_str,
         });
         let chosen_font = font_family.trim();
         if !chosen_font.is_empty() {
             params["font"] = json!(chosen_font);
         }
-        guard
-            .session
-            .execute("type.createSelection", params)
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let ws = warp_style.trim();
+        let valid_warp = matches!(
+            ws,
+            "arc" | "arch" | "flag" | "wave" | "bulge" | "fish" | "rise" | "twist" | "inflate" | "squeeze"
+        );
+        if valid_warp {
+            let res = guard
+                .session
+                .execute("type.create", params)
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            if let Some(lid) = res.get("layer").and_then(Value::as_u64) {
+                let _ = guard.session.execute(
+                    "type.warpText",
+                    json!({
+                        "layer": lid,
+                        "style": ws,
+                        "bend": warp_bend.clamp(-100.0, 100.0),
+                        "horizontalDistortion": warp_h_dist.clamp(-100.0, 100.0),
+                        "verticalDistortion": warp_v_dist.clamp(-100.0, 100.0),
+                        "orientation": orient_str,
+                    }),
+                );
+                guard
+                    .session
+                    .execute("type.createSelection", json!({ "layer": lid, "removeLayer": true }))
+                    .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            }
+        } else {
+            guard
+                .session
+                .execute("type.createSelection", params)
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        }
         guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
@@ -6122,6 +6281,7 @@ mod v08_automated_tests {
         let sel_info = eng.create_text_selection_mask(
             "MASK".into(), 128.0, 128.0, 64.0, "center".into(), "".into(),
             true, false, "all".into(), 100.0, 100.0, 0.0, 1.2, false,
+            "arc".into(), 40.0, 0.0, 0.0,
         ).unwrap();
         assert!(sel_info.can_undo && eng.core.lock().session.active().unwrap().doc().selection.is_some(), "type.createSelection must create an active selection mask");
 
@@ -6165,5 +6325,36 @@ mod v08_automated_tests {
         ).unwrap();
         let st = eng.get_active_text_layer_style().unwrap();
         assert!((st.size_px - 6.0).abs() < 0.5, "6px tiny text must be preserved, got {}", st.size_px);
+    }
+
+    #[test]
+    fn test_update_proxy_text_warp_renders_live() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 256, 256).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_text_preview(
+            None, "Stonebridge".into(), 128.0, 128.0, 48.0,
+            "#FFFFFF".into(), "center".into(), "".into(),
+            true, false, false, false, "normal".into(), 100.0, 100.0,
+            0.0, 1.2, false, "arc".into(), 65.0, 15.0, -10.0,
+        ).unwrap();
+        let g = eng.core.lock();
+        let proxy = g.proxy_preview.as_ref().expect("proxy must be active");
+        let pdoc = proxy.session.active().unwrap().doc();
+        assert!(pdoc.layers.len() > proxy.base_doc.layers.len(), "live proxy must contain the warped preview text layer");
+    }
+
+    #[test]
+    fn test_warped_text_selection_mask_leaves_no_extra_layer() {
+        let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
+        eng.new_document("Test".into(), 256, 256).unwrap();
+        let base_layers = eng.get_layers().unwrap().len();
+        eng.create_text_selection_mask(
+            "WARPMASK".into(), 128.0, 128.0, 56.0, "center".into(), "".into(),
+            true, false, "all".into(), 100.0, 100.0, 0.0, 1.2, false,
+            "flag".into(), 50.0, 0.0, 0.0,
+        ).unwrap();
+        assert_eq!(eng.get_layers().unwrap().len(), base_layers, "removeLayer:true must leave no stray text layer behind");
+        assert!(eng.core.lock().session.active().unwrap().doc().selection.is_some());
     }
 }
