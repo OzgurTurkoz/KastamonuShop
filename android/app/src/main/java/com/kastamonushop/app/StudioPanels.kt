@@ -132,7 +132,6 @@ internal fun GradientEditPanel(
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
-    val swatches = listOf("#4F9CFF", "#FF4D4F", "#FAAD14", "#52C41A", "#A855F7", "#FFFFFF", "#000000")
     var gradWheelTarget by remember { mutableIntStateOf(0) } // 1 = start, 2 = end
     if (gradWheelTarget != 0) {
         ProColorWheelDialog(
@@ -146,28 +145,50 @@ internal fun GradientEditPanel(
             }
         )
     }
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("Degrade Katmanı", "Tuvalde sürükleyerek yönü ayarla", "Uygula", onClose, onApply)
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    val startCol = remember(startHex) { runCatching { Color(AndroidColor.parseColor(startHex)) }.getOrDefault(Color(0xFF4F9CFF)) }
+    val endCol = remember(endHex) { runCatching { Color(AndroidColor.parseColor(endHex)) }.getOrDefault(Color.Black) }
+    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Degrade", null, "Uygula", onClose, onApply)
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             listOf("linear" to "Doğrusal", "radial" to "Dairesel", "reflected" to "Yansımalı", "diamond" to "Elmas").forEach { (st, lbl) ->
                 FilterChip(selected = style == st, onClick = { onStyle(st); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
             }
         }
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Başlangıç", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(58.dp))
-            swatches.forEach { hex ->
-                val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
-                Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(c).border(if (startHex.equals(hex, true)) 2.dp else 1.dp, if (startHex.equals(hex, true)) Color.White else Color(0xFF444858), CircleShape).clickable { onStartHex(hex); onPreview() })
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF232632))
+                    .clickable { gradWheelTarget = 1 }
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
+            ) {
+                Box(modifier = Modifier.size(22.dp).clip(CircleShape).background(startCol).border(1.5.dp, Color.White, CircleShape))
+                Text("Başlangıç", color = Color.White, fontSize = 11.sp)
             }
-            Box(modifier = Modifier.size(26.dp).clip(CircleShape).background(Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red))).border(1.5.dp, Color.White, CircleShape).clickable { gradWheelTarget = 1 })
-        }
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Bitiş", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(58.dp))
-            swatches.forEach { hex ->
-                val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
-                Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(c).border(if (endHex.equals(hex, true)) 2.dp else 1.dp, if (endHex.equals(hex, true)) Color.White else Color(0xFF444858), CircleShape).clickable { onEndHex(hex); onPreview() })
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF232632))
+                    .clickable { gradWheelTarget = 2 }
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
+            ) {
+                Box(modifier = Modifier.size(22.dp).clip(CircleShape).background(endCol).border(1.5.dp, Color.White, CircleShape))
+                Text("Bitiş", color = Color.White, fontSize = 11.sp)
             }
-            Box(modifier = Modifier.size(26.dp).clip(CircleShape).background(Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red))).border(1.5.dp, Color.White, CircleShape).clickable { gradWheelTarget = 2 })
         }
         CompactSliderRow("Opaklık", "%${opacity.roundToInt()}", opacity, 10f..100f, 85f) { onOpacity(it); onPreview() }
     }
@@ -185,46 +206,58 @@ internal fun ShapeEditPanel(
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
-    val swatches = listOf("" to "Yok", "#4F9CFF" to "Mavi", "#FF4D4F" to "Kırmızı", "#52C41A" to "Yeşil", "#FAAD14" to "Sarı", "#FFFFFF" to "Beyaz", "#000000" to "Siyah")
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("Vektör Şekil", "İçinden sürükleyip taşı, köşeden boyutlandır", "Uygula", onClose, onApply)
+    var showShapeWheel by remember { mutableStateOf(false) }
+    if (showShapeWheel) {
+        ProColorWheelDialog(
+            initialHex = fillHex.ifBlank { "#4F9CFF" },
+            showOpacity = false,
+            onDismiss = { showShapeWheel = false },
+            onConfirm = { picked, _ ->
+                onFillHex(picked)
+                showShapeWheel = false
+                onPreview()
+            }
+        )
+    }
+    val fillCol = remember(fillHex) {
+        if (fillHex.isBlank()) Color(0xFF2A2C36)
+        else runCatching { Color(AndroidColor.parseColor(fillHex)) }.getOrDefault(Color(0xFF4F9CFF))
+    }
+    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        BottomEditorHeader("Vektör Şekil", null, "Uygula", onClose, onApply)
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("roundedRect" to "Yuvarlak", "rect" to "Kutu", "ellipse" to "Daire", "triangle" to "Üçgen", "polygon" to "Çokgen", "star" to "Yıldız", "line" to "Çizgi").forEach { (k, lbl) ->
                 FilterChip(selected = kind == k, onClick = { onKind(k); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
             }
         }
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Dolgu", fontSize = 11.sp, color = Color(0xFFDCE0EC))
-            swatches.forEach { (hex, _) ->
-                val isSel = fillHex == hex
-                Box(
-                    modifier = Modifier.size(24.dp).clip(CircleShape)
-                        .background(if (hex.isEmpty()) Color(0xFF2A2C36) else Color(AndroidColor.parseColor(hex)))
-                        .border(if (isSel) 2.dp else 1.dp, if (isSel) Color.White else Color(0xFF444858), CircleShape)
-                        .clickable { onFillHex(hex); onPreview() },
-                    contentAlignment = Alignment.Center
-                ) { if (hex.isEmpty()) Text("×", color = Color(0xFFFF6B6B), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-            }
-            var showShapeWheel by remember { mutableStateOf(false) }
-            Box(
-                modifier = Modifier.size(26.dp).clip(CircleShape)
-                    .background(Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)))
-                    .border(1.5.dp, Color.White, CircleShape)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF232632))
                     .clickable { showShapeWheel = true }
-            )
-            if (showShapeWheel) {
-                ProColorWheelDialog(
-                    initialHex = fillHex.ifBlank { "#4F9CFF" },
-                    showOpacity = false,
-                    onDismiss = { showShapeWheel = false },
-                    onConfirm = { picked, _ ->
-                        onFillHex(picked)
-                        showShapeWheel = false
-                        onPreview()
-                    }
-                )
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Box(modifier = Modifier.size(20.dp).clip(CircleShape).background(fillCol).border(1.5.dp, Color.White, CircleShape))
+                Text(if (fillHex.isBlank()) "Renk Seç" else "Dolgu Rengi", color = Color.White, fontSize = 11.sp)
             }
-            FilterChip(selected = showFine, onClick = onToggleFine, label = { Text(if (showFine) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) })
+            FilterChip(
+                selected = fillHex.isBlank(),
+                onClick = { onFillHex(if (fillHex.isBlank()) "#4F9CFF" else ""); onPreview() },
+                label = { Text("Dolgusuz", fontSize = 10.sp) }
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            FilterChip(
+                selected = showFine,
+                onClick = onToggleFine,
+                label = { Text(if (showFine) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) }
+            )
         }
         if (showFine) {
             CompactSliderRow("Kenarlık", "${strokeWidth.roundToInt()}px", strokeWidth, 0f..40f, 6f) { onStrokeWidth(it); onPreview() }
@@ -236,12 +269,22 @@ internal fun ShapeEditPanel(
 
 @Composable
 internal fun AutoEnhancePanel(onClose: () -> Unit, onPick: (String, String) -> Unit) {
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        BottomEditorHeader("Akıllı İyileştir", "Tek dokunuşla otomatik ton, renk veya kontrast", onClose = onClose)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            CircularDockButton(Icons.Default.AutoFixHigh, "Oto Ton", onClick = { onPick("tone", "Oto Ton") })
-            CircularDockButton(Icons.Default.ColorLens, "Oto Renk", onClick = { onPick("color", "Oto Renk") })
-            CircularDockButton(Icons.Default.Contrast, "Oto Kontrast", onClick = { onPick("contrast", "Oto Kontrast") })
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(20.dp))
+        }
+        Row(
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SlimToolChip(Icons.Default.AutoFixHigh, "Oto Ton", false) { onPick("autoTone", "Oto Ton") }
+            SlimToolChip(Icons.Default.Palette, "Oto Renk", false) { onPick("autoColor", "Oto Renk") }
+            SlimToolChip(Icons.Default.Contrast, "Oto Kontrast", false) { onPick("autoContrast", "Oto Kontrast") }
         }
     }
 }
@@ -745,10 +788,23 @@ internal fun TextStudioPanel(
     onApply: () -> Unit
 ) {
     var tab by remember { mutableIntStateOf(0) } // 0 = Yazı & Font, 1 = Boyut & Biçim, 2 = Bükme & Maske
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    var fontQuery by remember { mutableStateOf("") }
+    var showTextWheel by remember { mutableStateOf(false) }
+    if (showTextWheel) {
+        ProColorWheelDialog(
+            initialHex = colorHex,
+            showOpacity = false,
+            onDismiss = { showTextWheel = false },
+            onConfirm = { picked, _ ->
+                onColorHex(picked)
+                showTextWheel = false
+            }
+        )
+    }
+    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader(
-            title = if (isEditingExisting) "Metni Düzenle" else "Tipografi Stüdyosu",
-            subtitle = "4 köşeden büyüt/küçült, kutudan sürükle",
+            title = if (isEditingExisting) "Metni Düzenle" else "Metin",
+            subtitle = null,
             applyLabel = if (isEditingExisting) "Güncelle" else "Uygula",
             onClose = onClose,
             onApply = onApply
@@ -767,18 +823,33 @@ internal fun TextStudioPanel(
         }
         when (tab) {
             0 -> {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = onText,
-                    singleLine = false,
-                    maxLines = 3,
-                    placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                // Real-Typeface Font Picker + Custom .ttf/.otf Import button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = onText,
+                        singleLine = false,
+                        maxLines = 2,
+                        placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    val curTxtCol = remember(colorHex) { runCatching { Color(AndroidColor.parseColor(colorHex)) }.getOrDefault(Color.White) }
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(curTxtCol)
+                            .border(2.5.dp, Color.White, CircleShape)
+                            .clickable { showTextWheel = true }
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(
                         modifier = Modifier
@@ -789,89 +860,52 @@ internal fun TextStudioPanel(
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("+ Font Ekle", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        Text(".ttf / .otf", color = Color(0xFF8C92A8), fontSize = 9.sp, maxLines = 1)
+                        Text("+ Font", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(".ttf/.otf", color = Color(0xFF8C92A8), fontSize = 9.sp, maxLines = 1)
                     }
-                    val listToShow = if (fonts.isNotEmpty()) fonts else listOf(
+                    val baseList = if (fonts.isNotEmpty()) fonts else listOf(
                         EditorViewModel.StudioFontOption("Montserrat", "Montserrat", "Modern", FontFamily.SansSerif)
                     )
-                    listToShow.forEach { opt ->
+                    val filteredFonts = if (fontQuery.isBlank()) baseList else baseList.filter {
+                        it.displayName.contains(fontQuery, ignoreCase = true) || it.category.contains(fontQuery, ignoreCase = true)
+                    }
+                    filteredFonts.forEach { opt ->
                         val isSel = selectedFont.equals(opt.family, ignoreCase = true)
                         Column(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color(0xFF232530))
+                                .background(if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color(0xFF232632))
                                 .border(
                                     width = if (isSel) 1.5.dp else 1.dp,
-                                    color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF3A3D4D),
+                                    color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF363A4A),
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable { onSelectFont(opt.family) }
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = opt.displayName,
+                                text = "AaBb",
                                 fontFamily = opt.composeFont,
-                                color = if (isSel) Color.White else Color(0xFFE0E3EE),
-                                fontSize = 13.sp,
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
                                 maxLines = 1
                             )
                             Text(
-                                text = opt.category,
-                                color = if (isSel) MaterialTheme.colorScheme.primary else Color(0xFF8C92A8),
+                                text = opt.displayName,
+                                color = if (isSel) Color(0xFF8CC5FF) else Color(0xFFA0A6BA),
                                 fontSize = 9.sp,
                                 maxLines = 1
                             )
                         }
                     }
                 }
-                // Color palette + Bold / Italic / Underline / Strike / Caps
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    listOf("#FFFFFF", "#000000", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB", "#FF8C00").forEach { hex ->
-                        val c = Color(AndroidColor.parseColor(hex))
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(CircleShape)
-                                .background(c)
-                                .border(
-                                    width = if (colorHex.equals(hex, true)) 2.5.dp else 1.dp,
-                                    color = if (colorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
-                                    shape = CircleShape
-                                )
-                                .clickable { onColorHex(hex) }
-                        )
-                    }
-                    var showTextColorWheel by remember { mutableStateOf(false) }
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.sweepGradient(
-                                    listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
-                                )
-                            )
-                            .border(1.5.dp, Color.White, CircleShape)
-                            .clickable { showTextColorWheel = true }
-                    )
-                    if (showTextColorWheel) {
-                        ProColorWheelDialog(
-                            initialHex = colorHex,
-                            showOpacity = false,
-                            onDismiss = { showTextColorWheel = false },
-                            onConfirm = { picked, _ ->
-                                onColorHex(picked)
-                                showTextColorWheel = false
-                            }
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
                     FilterChip(selected = bold, onClick = { onBold(!bold) }, label = { Text("K", fontWeight = FontWeight.Bold, fontSize = 11.sp) })
                     FilterChip(selected = italic, onClick = { onItalic(!italic) }, label = { Text("İ", fontStyle = FontStyle.Italic, fontSize = 11.sp) })
                     FilterChip(selected = underline, onClick = { onUnderline(!underline) }, label = { Text("A", textDecoration = TextDecoration.Underline, fontSize = 11.sp) })

@@ -1,6 +1,7 @@
 package com.kastamonushop.app
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -87,7 +88,7 @@ internal fun CameraRawProPanel(
     ) {
         BottomEditorHeader(
             title = "Kamera RAW Pro",
-            subtitle = "Lightroom kalitesinde ışık, doku, 3-yollu grading & kalibrasyon",
+            subtitle = null,
             applyLabel = "Uygula",
             onClose = onClose,
             onApply = onApply
@@ -117,6 +118,13 @@ internal fun CameraRawProPanel(
                 Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A80))
             }
         }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 176.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
         when (s.camTabIdx) {
             0 -> {
                 CompactSliderRow("Pozlama", "${"%.2f".format(s.camExposureVal)} EV", s.camExposureVal, -3f..3f, defaultValue = 0f) { s.camExposureVal = it; onPreview() }
@@ -152,6 +160,7 @@ internal fun CameraRawProPanel(
                 CompactSliderRow("Vinyet", "${s.camVignetteVal.roundToInt()}", s.camVignetteVal, -100f..100f, defaultValue = 0f) { s.camVignetteVal = it; onPreview() }
                 CompactSliderRow("Film Greni", "${s.camGrainVal.roundToInt()}", s.camGrainVal, 0f..100f, defaultValue = 0f) { s.camGrainVal = it; onPreview() }
             }
+        }
         }
     }
 }

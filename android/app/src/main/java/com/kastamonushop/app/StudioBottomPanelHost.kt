@@ -431,15 +431,9 @@ internal fun StudioBottomPanelHost(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CircularDockButton(
-                                icon = Icons.Default.AutoFixHigh,
-                                label = "Oto",
-                                onClick = { s.activePanel = BottomPanel.AUTO_ENHANCE_MENU }
+                            SlimToolChip(Icons.Default.AutoFixHigh, "Oto", false, onClick = { s.activePanel = BottomPanel.AUTO_ENHANCE_MENU }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Camera,
-                                label = "Lens",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Camera, "Lens", false, onClick = {
                                     s.lensDistortion = 0f; s.lensVignette = 0f
                                     s.lensRedCyan = 0f; s.lensBlueYellow = 0f
                                     s.lensVertical = 0f; s.lensHorizontal = 0f
@@ -447,18 +441,12 @@ internal fun StudioBottomPanelHost(
                                     s.activePanel = BottomPanel.LENS_CORRECTION_EDIT
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.ColorLens,
-                                label = "3D LUT",
-                                onClick = {
+                            SlimToolChip(Icons.Default.ColorLens, "3D LUT", false, onClick = {
                                     vm.beginProxyPreview()
                                     s.activePanel = BottomPanel.LUT_IMPORT_EDIT
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.WbSunny,
-                                label = "Kamera",
-                                onClick = {
+                            SlimToolChip(Icons.Default.WbSunny, "Kamera", false, onClick = {
                                     s.camExposureVal = 0f; s.camShadowsVal = 0f; s.camHighlightsVal = 0f; s.camVibranceVal = 0f
                                     s.camTempVal = 0f; s.camTintVal = 0f; s.camClarityVal = 0f; s.camDehazeVal = 0f
                                     s.showCamFineTune = false
@@ -466,30 +454,21 @@ internal fun StudioBottomPanelHost(
                                     s.activePanel = BottomPanel.CAMERA_LIGHT_LIVE
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Brightness6,
-                                label = "Işık",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Brightness6, "Işık", false, onClick = {
                                     s.brightnessVal = 0f
                                     s.contrastVal = 0f
                                     vm.beginProxyPreview()
                                     s.activePanel = BottomPanel.LIGHT_LIVE
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Palette,
-                                label = "Renk",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Palette, "Renk", false, onClick = {
                                     s.hueVal = 0f
                                     s.saturationVal = 0f
                                     vm.beginProxyPreview()
                                     s.activePanel = BottomPanel.COLOR_LIVE
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Equalizer,
-                                label = "Düzeyler",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Equalizer, "Düzeyler", false, onClick = {
                                     s.levelsBlackVal = 0f
                                     s.levelsGammaVal = 1f
                                     s.levelsWhiteVal = 255f
@@ -497,10 +476,7 @@ internal fun StudioBottomPanelHost(
                                     s.activePanel = BottomPanel.LEVELS_LIVE
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.ColorLens,
-                                label = "Denge",
-                                onClick = {
+                            SlimToolChip(Icons.Default.ColorLens, "Denge", false, onClick = {
                                     s.cbCyanRedVal = 0f
                                     s.cbMagentaGreenVal = 0f
                                     s.cbYellowBlueVal = 0f
@@ -508,10 +484,7 @@ internal fun StudioBottomPanelHost(
                                     s.activePanel = BottomPanel.COLOR_BAL_LIVE
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.ShowChart,
-                                label = "Eğriler",
-                                onClick = {
+                            SlimToolChip(Icons.Default.ShowChart, "Eğriler", false, onClick = {
                                     s.curveBlackVal = 0.0f
                                     s.curveShadowVal = 0.25f
                                     s.curveMidVal = 0.50f
@@ -522,10 +495,7 @@ internal fun StudioBottomPanelHost(
                                     s.activePanel = BottomPanel.CURVES_LIVE
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Gradient,
-                                label = "HSL",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Gradient, "HSL", false, onClick = {
                                     s.hslBandIdx = 0
                                     s.hslHue = List(8) { 0f }
                                     s.hslSat = List(8) { 0f }
@@ -534,10 +504,7 @@ internal fun StudioBottomPanelHost(
                                     s.activePanel = BottomPanel.HSL_MIXER_LIVE
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.FilterFrames,
-                                label = "Poster",
-                                onClick = {
+                            SlimToolChip(Icons.Default.FilterFrames, "Poster", false, onClick = {
                                     s.posterMode = true
                                     s.posterLevels = 6f
                                     s.threshLevel = 128f
@@ -954,41 +921,28 @@ private fun StudioBottomPanelHostPart2(
             when (s.activePanel) {
                 BottomPanel.CROP_MENU -> {
                     val hasPendingTransform = s.pendingQuarterTurns != 0 || s.pendingFlipH || s.pendingFlipV
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        BottomEditorHeader(
-                            title = "Kırp & Çevir",
-                            subtitle = if (hasPendingTransform) "Anlık önizleme · kaydetmek için Uygula de" else "Fotoğrafı kırp, anlık döndür veya çevir",
-                            applyLabel = if (hasPendingTransform) "Uygula" else null,
-                            onClose = {
+                        IconButton(
+                            onClick = {
                                 if (hasPendingTransform) onClearGpuPreview()
                                 s.activePanel = BottomPanel.DOCK
                             },
-                            onApply = if (hasPendingTransform) {
-                                {
-                                    val t = s.pendingQuarterTurns
-                                    val fh = s.pendingFlipH
-                                    val fv = s.pendingFlipV
-                                    s.pendingQuarterTurns = 0
-                                    s.pendingFlipH = false
-                                    s.pendingFlipV = false
-                                    vm.applyTransformBatch(t, fh, fv)
-                                    s.activePanel = BottomPanel.DOCK
-                                }
-                            } else null
-                        )
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(20.dp))
+                        }
                         Row(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .weight(1f)
                                 .horizontalScroll(cropScrollState),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CircularDockButton(
-                                icon = Icons.Default.Crop,
-                                label = "Oran Kırp",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Crop, "Oran Kırp", false, onClick = {
                                     if (hasPendingTransform) onClearGpuPreview()
                                     s.canvasViewRef?.fitToDocument(0)
                                     s.cropScale = 0.90f
@@ -1004,10 +958,7 @@ private fun StudioBottomPanelHostPart2(
                                     s.activePanel = BottomPanel.CROP_RATIO_EDIT
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Transform,
-                                label = "Perspektif",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Transform, "Perspektif", false, onClick = {
                                     if (hasPendingTransform) onClearGpuPreview()
                                     s.canvasViewRef?.fitToDocument(0)
                                     s.pTl = Offset(0.12f, 0.12f)
@@ -1017,10 +968,7 @@ private fun StudioBottomPanelHostPart2(
                                     s.activePanel = BottomPanel.PERSPECTIVE_CROP_EDIT
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.PhotoSizeSelectLarge,
-                                label = "Boyut",
-                                onClick = {
+                            SlimToolChip(Icons.Default.PhotoSizeSelectLarge, "Boyut", false, onClick = {
                                     if (hasPendingTransform) onClearGpuPreview()
                                     val dw0 = state.docInfo?.width?.toInt() ?: 1080
                                     val dh0 = state.docInfo?.height?.toInt() ?: 1080
@@ -1031,40 +979,44 @@ private fun StudioBottomPanelHostPart2(
                                     s.activePanel = BottomPanel.IMAGE_RESIZE_EDIT
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.AutoMirrored.Filled.RotateLeft,
-                                label = "90° Sol",
-                                onClick = {
+                            SlimToolChip(Icons.AutoMirrored.Filled.RotateLeft, "90° Sol", false, onClick = {
                                     s.pendingQuarterTurns = (s.pendingQuarterTurns + 3) % 4
                                     onPushGpuTransformPreview(s.pendingQuarterTurns, s.pendingFlipH, s.pendingFlipV)
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.AutoMirrored.Filled.RotateRight,
-                                label = "90° Sağ",
-                                onClick = {
+                            SlimToolChip(Icons.AutoMirrored.Filled.RotateRight, "90° Sağ", false, onClick = {
                                     s.pendingQuarterTurns = (s.pendingQuarterTurns + 1) % 4
                                     onPushGpuTransformPreview(s.pendingQuarterTurns, s.pendingFlipH, s.pendingFlipV)
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Flip,
-                                label = "Yatay",
-                                selected = s.pendingFlipH,
-                                onClick = {
+                            SlimToolChip(Icons.Default.Flip, "Yatay", s.pendingFlipH, onClick = {
                                     s.pendingFlipH = !s.pendingFlipH
                                     onPushGpuTransformPreview(s.pendingQuarterTurns, s.pendingFlipH, s.pendingFlipV)
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.SwapVert,
-                                label = "Dikey",
-                                selected = s.pendingFlipV,
-                                onClick = {
+                            SlimToolChip(Icons.Default.SwapVert, "Dikey", s.pendingFlipV, onClick = {
                                     s.pendingFlipV = !s.pendingFlipV
                                     onPushGpuTransformPreview(s.pendingQuarterTurns, s.pendingFlipH, s.pendingFlipV)
                                 }
                             )
+                        }
+                        if (hasPendingTransform) {
+                            Button(
+                                onClick = {
+                                    val t = s.pendingQuarterTurns
+                                    val fh = s.pendingFlipH
+                                    val fv = s.pendingFlipV
+                                    s.pendingQuarterTurns = 0
+                                    s.pendingFlipH = false
+                                    s.pendingFlipV = false
+                                    vm.applyTransformBatch(t, fh, fv)
+                                    s.activePanel = BottomPanel.DOCK
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier.height(34.dp)
+                            ) {
+                                Text("Uygula", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
                         }
                     }
                 }
@@ -1475,35 +1427,24 @@ private fun StudioBottomPanelHostPart2(
                     onApply = { s.liquifyCursorScreen = null; vm.commitLiquify(); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.EFFECT_MENU -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        BottomEditorHeader(
-                            title = "Hızlı Efektler",
-                            subtitle = "Siyah-Beyaz, Negatif veya 60 FPS Ayna",
-                            onClose = { s.activePanel = BottomPanel.DOCK }
-                        )
+                        IconButton(onClick = { s.activePanel = BottomPanel.DOCK }, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(20.dp))
+                        }
                         Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CircularDockButton(
-                                icon = Icons.Default.FilterBAndW,
-                                label = "Siyah-Beyaz",
-                                selected = state.bwLayerId != null,
-                                onClick = { vm.toggleBlackAndWhite() }
+                            SlimToolChip(Icons.Default.FilterBAndW, "Siyah-Beyaz", state.bwLayerId != null, onClick = { vm.toggleBlackAndWhite() }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.InvertColors,
-                                label = "Negatif",
-                                selected = state.invertLayerId != null,
-                                onClick = { vm.toggleInvert() }
+                            SlimToolChip(Icons.Default.InvertColors, "Negatif", state.invertLayerId != null, onClick = { vm.toggleInvert() }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Compare,
-                                label = "Ayna",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Compare, "Ayna", false, onClick = {
                                     s.selectedMirrorMode = MIRROR_MODES.first()
                                     s.mirrorAxisRatio = 0.50f
                                     s.canvasViewRef?.fitToDocument(0)
@@ -1511,10 +1452,7 @@ private fun StudioBottomPanelHostPart2(
                                     s.activePanel = BottomPanel.MIRROR_EDIT
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.Waves,
-                                label = "Sıvılaştır",
-                                onClick = {
+                            SlimToolChip(Icons.Default.Waves, "Sıvılaştır", false, onClick = {
                                     s.liquifyTool = "forwardWarp"
                                     val docMax = maxOf(state.docInfo?.width?.toInt() ?: 1024, state.docInfo?.height?.toInt() ?: 1024).toFloat()
                                     s.liquifySize = (docMax * 0.14f).coerceIn(48f, 220f)
@@ -1523,10 +1461,7 @@ private fun StudioBottomPanelHostPart2(
                                     s.activePanel = BottomPanel.LIQUIFY_EDIT
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.PushPin,
-                                label = "Kukla",
-                                onClick = {
+                            SlimToolChip(Icons.Default.PushPin, "Kukla", false, onClick = {
                                     s.puppetPins = emptyList()
                                     s.puppetSelectedIdx = -1
                                     s.puppetMode = "normal"
@@ -1536,10 +1471,7 @@ private fun StudioBottomPanelHostPart2(
                                     s.activePanel = BottomPanel.PUPPET_WARP_EDIT
                                 }
                             )
-                            CircularDockButton(
-                                icon = Icons.Default.MovieFilter,
-                                label = "Sinema",
-                                onClick = {
+                            SlimToolChip(Icons.Default.MovieFilter, "Sinema", false, onClick = {
                                     s.cinemaPreset = "golden"
                                     s.cinemaIntensity = 80f
                                     s.cinemaVignette = -25f
