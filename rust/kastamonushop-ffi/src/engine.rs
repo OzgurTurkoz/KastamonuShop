@@ -4573,7 +4573,7 @@ impl KastamonuEngine {
                 clipped: layer.clipped,
                 depth: depth as u32,
                 is_text: matches!(layer.content, LayerContent::Text(_)),
-                fx_badges: Self::effect_badges(&layer.effects),
+                fx_badges: if layer.effects.enabled { Self::effect_badges(&layer.effects.items) } else { Vec::new() },
             });
         }
         Ok(layers)
@@ -6877,7 +6877,7 @@ impl KastamonuEngine {
             let layer = ds.doc().layer(aid).ok_or_else(|| EngineError::CommandFailed {
                 detail: "Katman bulunamadı".into(),
             })?;
-            layer.effects.clone()
+            layer.effects.items.clone()
         };
         let count = effects.len() as u32;
         if count == 0 {
@@ -6910,7 +6910,8 @@ impl KastamonuEngine {
                 let layer = doc
                     .layer_mut(id)
                     .ok_or(photocraft_engine::EngineError::NoLayer(id))?;
-                layer.effects = copied.clone();
+                layer.effects.enabled = true;
+                layer.effects.items = copied.clone();
                 Ok(())
             })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -6930,8 +6931,8 @@ impl KastamonuEngine {
                 photocraft_doc::Effect::OuterGlow(_) => "Dış Işıma",
                 photocraft_doc::Effect::InnerGlow(_) => "İç Işıma",
                 photocraft_doc::Effect::Stroke(_) => "Kontur",
-                photocraft_doc::Effect::ColorOverlay(_) => "Renk",
-                photocraft_doc::Effect::GradientOverlay(_) => "Degrade",
+                photocraft_doc::Effect::ColorOverlay { .. } => "Renk",
+                photocraft_doc::Effect::GradientOverlay { .. } => "Degrade",
                 photocraft_doc::Effect::BevelEmboss(_) => "Kabartma",
                 _ => "fx",
             };
