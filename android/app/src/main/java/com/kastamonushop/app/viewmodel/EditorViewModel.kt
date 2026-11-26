@@ -3560,8 +3560,11 @@ class EditorViewModel : ViewModel() {
     // ==================== v1.7.3 MULTI-FX LAYER STYLE STUDIO ====================
 
     fun updateProxyLayerStyleStack(effectsJson: String) {
-        enqueueProxyOp {
-            engine.updateProxyLayerStyleStack(effectsJson)
+        paintExecutor.execute {
+            runCatching {
+                engine.updateProxyLayerStyleStack(effectsJson)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
         }
     }
 

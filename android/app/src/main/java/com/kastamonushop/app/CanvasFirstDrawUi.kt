@@ -175,7 +175,7 @@ internal fun LeftBrushSidebar(
                                 }
                                 ActiveTool.SELECT_WAND -> {
                                     val tol = (f * 120f).coerceIn(1f, 120f)
-                                    vm.updateWandSettings(tolerance = tol)
+                                    vm.updateWandTolerance(tol)
                                     activeDragBadge = "Tolerans: ${tol.roundToInt()}"
                                 }
                                 ActiveTool.RED_EYE -> {

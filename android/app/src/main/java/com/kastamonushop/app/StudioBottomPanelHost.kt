@@ -547,7 +547,7 @@ internal fun StudioBottomPanelHost(
                                 }
                             )
                         }
-
+                    }
                 }
 
                 BottomPanel.CAMERA_LIGHT_LIVE -> CameraRawProPanel(

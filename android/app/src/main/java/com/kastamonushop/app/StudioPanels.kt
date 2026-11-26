@@ -1630,9 +1630,9 @@ internal fun SelectMenuPanel(
                 FilterChip(selected = false, onClick = { vm.selectInverse() }, label = { Text("Ters Çevir", fontSize = 10.sp) })
                 FilterChip(selected = false, onClick = { vm.featherSelection(6f) }, label = { Text("Yumuşat", fontSize = 10.sp) })
                 FilterChip(selected = false, onClick = { vm.contentAwareRemove() }, label = { Text("Nesneyi Sil", fontSize = 10.sp) })
-                FilterChip(selected = false, onClick = { vm.clearSelectionPixels() }, label = { Text("Temizle", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = { vm.clearSelection() }, label = { Text("Temizle", fontSize = 10.sp) })
                 FilterChip(selected = false, onClick = { vm.revealSelectionMask() }, label = { Text("Maskele", fontSize = 10.sp) })
-                FilterChip(selected = false, onClick = { vm.deselectAll() }, label = { Text("Bırak", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = { vm.deselect() }, label = { Text("Bırak", fontSize = 10.sp) })
             }
         }
     }
