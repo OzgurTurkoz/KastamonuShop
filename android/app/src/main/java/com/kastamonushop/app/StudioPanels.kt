@@ -735,7 +735,7 @@ internal fun TextStudioPanel(
             0 -> {
                 OutlinedTextField(
                     value = text,
-                    onValueChange = onText,
+                    onChange = onText,
                     singleLine = false,
                     maxLines = 3,
                     placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp) },
@@ -1543,17 +1543,17 @@ internal fun BlendIfPanel(
             onClose = onClose,
             onApply = onApply
         )
-        CompactSliderRow("Bu Katman Koyu", "${thisBlack.roundToInt()}", thisBlack, 0f..250f, defaultValue = 0f, onValueChange = onThisBlack)
-        CompactSliderRow("Bu Katman Açık", "${thisWhite.roundToInt()}", thisWhite, 5f..255f, defaultValue = 255f, onValueChange = onThisWhite)
-        CompactSliderRow("Alt Katman Koyu", "${underBlack.roundToInt()}", underBlack, 0f..250f, defaultValue = 0f, onValueChange = onUnderBlack)
-        CompactSliderRow("Alt Katman Açık", "${underWhite.roundToInt()}", underWhite, 5f..255f, defaultValue = 255f, onValueChange = onUnderWhite)
+        CompactSliderRow("Bu Katman Koyu", "${thisBlack.roundToInt()}", thisBlack, 0f..250f, defaultValue = 0f, onChange = onThisBlack)
+        CompactSliderRow("Bu Katman Açık", "${thisWhite.roundToInt()}", thisWhite, 5f..255f, defaultValue = 255f, onChange = onThisWhite)
+        CompactSliderRow("Alt Katman Koyu", "${underBlack.roundToInt()}", underBlack, 0f..250f, defaultValue = 0f, onChange = onUnderBlack)
+        CompactSliderRow("Alt Katman Açık", "${underWhite.roundToInt()}", underWhite, 5f..255f, defaultValue = 255f, onChange = onUnderWhite)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Box(modifier = Modifier.weight(1f)) {
-                CompactSliderRow("Yumuşatma", "${feather.roundToInt()}", feather, 0f..80f, defaultValue = 20f, onValueChange = onFeather)
+                CompactSliderRow("Yumuşatma", "${feather.roundToInt()}", feather, 0f..80f, defaultValue = 20f, onChange = onFeather)
             }
             TextButton(onClick = onReset) {
                 Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A80))

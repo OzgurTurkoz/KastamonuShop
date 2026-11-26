@@ -1972,12 +1972,12 @@ fun StonebridgeStudioScreen(
                     Text("Maske", color = Color(0xFF4F9CFF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     FilterChip(
                         selected = state.colorHex.equals("#000000", ignoreCase = true),
-                        onClick = { vm.setColor("#000000"); vm.setTool(ActiveTool.BRUSH) },
+                        onClick = { vm.setBrushColor("#000000"); vm.setTool(ActiveTool.BRUSH) },
                         label = { Text("Gizle", fontSize = 11.sp) }
                     )
                     FilterChip(
                         selected = state.colorHex.equals("#FFFFFF", ignoreCase = true),
-                        onClick = { vm.setColor("#FFFFFF"); vm.setTool(ActiveTool.BRUSH) },
+                        onClick = { vm.setBrushColor("#FFFFFF"); vm.setTool(ActiveTool.BRUSH) },
                         label = { Text("Göster", fontSize = 11.sp) }
                     )
                     TextButton(onClick = { vm.exitMaskPaintMode() }) {
