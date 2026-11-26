@@ -185,11 +185,11 @@ fun StonebridgeStudioScreen(
                 s.lutText = text
                 vm.updateProxyColorLookup(name, text, s.lutOpacity)
             }
+        }
+    }
     val importAbrLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             vm.importAbrFromUri(context.contentResolver, uri)
-        }
-    }
         }
     }
 

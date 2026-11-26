@@ -6316,9 +6316,7 @@ impl KastamonuEngine {
     pub fn render_generation(&self) -> u64 {
         self.core.lock().render_generation
     }
-}
 
-impl KastamonuEngine {
     // ==================== v1.7.0 PRO BRUSH & RETOUCH STUDIO ====================
 
     pub fn set_brush_dynamics(
@@ -6752,6 +6750,9 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+}
+
+impl KastamonuEngine {
     fn summarize_presets(presets: &[photocraft_paint::BrushPreset]) -> Vec<AbrBrushSummary> {
         presets
             .iter()

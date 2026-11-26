@@ -3393,7 +3393,7 @@ class EditorViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {
-                val name = queryDisplayName(resolver, uri) ?: "FırçaPaketi.abr"
+                val name = uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { null } ?: "FırçaPaketi.abr"
                 val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: error("ABR dosyası okunamadı")
                 val list = engine.importAbrBytes(name, bytes)
