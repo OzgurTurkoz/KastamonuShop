@@ -7151,7 +7151,7 @@ impl KastamonuEngine {
 
     pub fn apply_remove_tool(
         &self,
-        points: Vec<StrokePoint>,
+        points: Vec<StrokeSample>,
         size: f32,
         close_loops: bool,
         sample_all_layers: bool,
@@ -8818,7 +8818,7 @@ LUT_3D_SIZE 2
         let eng = test_engine();
         let rgba = vec![90u8, 140, 200, 255].repeat(64 * 64);
         eng.open_rgba_bytes("caf.png".into(), 64, 64, rgba).unwrap();
-        eng.select_rect(20.0, 20.0, 16.0, 16.0).unwrap();
+        eng.select_rect(20, 20, 16, 16, false, "replace".into()).unwrap();
         eng.begin_proxy_preview().unwrap();
         eng.update_proxy_content_aware_fill(
             "auto".into(), "default".into(), "low".into(), false, false, false, "current".into()
@@ -8836,11 +8836,11 @@ LUT_3D_SIZE 2
         let rgba = vec![120u8, 160, 110, 255].repeat(64 * 64);
         eng.open_rgba_bytes("remove.png".into(), 64, 64, rgba).unwrap();
         let pts = vec![
-            StrokePoint { x: 24.0, y: 24.0, pressure: 1.0 },
-            StrokePoint { x: 36.0, y: 24.0, pressure: 1.0 },
-            StrokePoint { x: 36.0, y: 36.0, pressure: 1.0 },
-            StrokePoint { x: 24.0, y: 36.0, pressure: 1.0 },
-            StrokePoint { x: 24.0, y: 24.0, pressure: 1.0 },
+            StrokeSample { x: 24.0, y: 24.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 36.0, y: 24.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 36.0, y: 36.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 24.0, y: 36.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 24.0, y: 24.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
         ];
         let info = eng.apply_remove_tool(pts, 8.0, true, false, false).unwrap();
         assert!(info.can_undo);
@@ -8851,7 +8851,7 @@ LUT_3D_SIZE 2
         let eng = test_engine();
         let rgba = vec![140u8, 110, 180, 255].repeat(64 * 64);
         eng.open_rgba_bytes("camove.png".into(), 64, 64, rgba).unwrap();
-        eng.select_rect(10.0, 10.0, 16.0, 16.0).unwrap();
+        eng.select_rect(10, 10, 16, 16, false, "replace".into()).unwrap();
         let info = eng.apply_content_aware_move(
             18.0, 12.0, "move".into(), 4, 2, 100.0, 100.0, 0.0, false
         ).unwrap();

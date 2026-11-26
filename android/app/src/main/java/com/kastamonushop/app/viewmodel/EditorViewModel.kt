@@ -3675,12 +3675,11 @@ class EditorViewModel : ViewModel() {
         if (samples.isEmpty()) return
         invalidateProxyQueue()
         val s = _uiState.value
-        val pts = samples.map { StrokePoint(it.x, it.y, it.pressure) }
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
                 val info = engine.applyRemoveTool(
-                    pts, s.brushSize, s.removeCloseLoops, s.removeSampleAllLayers, s.removeNewLayer
+                    samples, s.brushSize, s.removeCloseLoops, s.removeSampleAllLayers, s.removeNewLayer
                 )
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
