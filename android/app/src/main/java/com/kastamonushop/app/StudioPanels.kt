@@ -1103,6 +1103,7 @@ internal fun DrawMenuPanel(
                 ActiveTool.COLOR_REPLACE -> "Renk Değiştirici · dokuyu koruyarak ton değiştir"
                 ActiveTool.EYEDROPPER -> "Fotoğrafa dokunarak renk al (${state.colorHex})"
                 ActiveTool.BUCKET -> "Boya Kovası · doldurmak istediğin alana dokun"
+                ActiveTool.REMOVE_TOOL -> "Kaldırma Aracı · silmek istediğin nesneyi boya veya halka içine al"
                 ActiveTool.SPOT_HEAL -> "Leke Giderme · kusurun üzerinden parmağınla geç"
                 ActiveTool.PATCH -> "Yama · seçili alanı kaynak dokuya sürükle"
                 ActiveTool.RED_EYE -> "Kırmızı Göz · kırmızı göz bebeğine dokun"

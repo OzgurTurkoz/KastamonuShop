@@ -178,34 +178,7 @@ internal fun LeftBrushSidebar(
                                     vm.updateWandTolerance(tol)
                                     activeDragBadge = "Tolerans: ${tol.roundToInt()}"
                                 }
-                                ActiveTool.REMOVE_TOOL -> {
-                    Text(
-                        "Silmek istediğin nesnenin üstünü boya veya etrafını halka içine al.",
-                        color = Color(0xFF9AA4BD),
-                        fontSize = 11.sp
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        ProPill(
-                            selected = state.removeCloseLoops,
-                            onClick = { vm.updateRemoveToolSettings(closeLoops = !state.removeCloseLoops) },
-                            label = { Text("Halkayı Kapat", fontSize = 11.sp) }
-                        )
-                        ProPill(
-                            selected = state.removeSampleAllLayers,
-                            onClick = { vm.updateRemoveToolSettings(sampleAllLayers = !state.removeSampleAllLayers) },
-                            label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
-                        )
-                        ProPill(
-                            selected = state.removeNewLayer,
-                            onClick = { vm.updateRemoveToolSettings(newLayer = !state.removeNewLayer) },
-                            label = { Text("Yeni Katman", fontSize = 11.sp) }
-                        )
-                    }
-                }
-                ActiveTool.RED_EYE -> {
+                                ActiveTool.RED_EYE -> {
                                     val dk = (10f + f * 90f).coerceIn(10f, 100f)
                                     vm.updateRedEyeParams(darken = dk)
                                     activeDragBadge = "Karartma: %${dk.roundToInt()}"
@@ -758,6 +731,33 @@ internal fun ToolSettingsPopoverCard(
                         color = Color(0xFFAEB4C4),
                         fontSize = 11.sp
                     )
+                }
+                ActiveTool.REMOVE_TOOL -> {
+                    Text(
+                        "Silmek istediğin nesnenin üstünü boya veya etrafını halka içine al.",
+                        color = Color(0xFF9AA4BD),
+                        fontSize = 11.sp
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ProPill(
+                            selected = state.removeCloseLoops,
+                            onClick = { vm.updateRemoveToolSettings(closeLoops = !state.removeCloseLoops) },
+                            label = { Text("Halkayı Kapat", fontSize = 11.sp) }
+                        )
+                        ProPill(
+                            selected = state.removeSampleAllLayers,
+                            onClick = { vm.updateRemoveToolSettings(sampleAllLayers = !state.removeSampleAllLayers) },
+                            label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
+                        )
+                        ProPill(
+                            selected = state.removeNewLayer,
+                            onClick = { vm.updateRemoveToolSettings(newLayer = !state.removeNewLayer) },
+                            label = { Text("Yeni Katman", fontSize = 11.sp) }
+                        )
+                    }
                 }
                 ActiveTool.RED_EYE -> {
                     CompactSliderRow("Göz Bebeği", "%${state.redEyePupilSize.roundToInt()}", state.redEyePupilSize, 10f..100f, defaultValue = 50f) {
