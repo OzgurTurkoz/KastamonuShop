@@ -148,7 +148,7 @@ internal fun GradientEditPanel(
     val startCol = remember(startHex) { runCatching { Color(AndroidColor.parseColor(startHex)) }.getOrDefault(Color(0xFF4F9CFF)) }
     val endCol = remember(endHex) { runCatching { Color(AndroidColor.parseColor(endHex)) }.getOrDefault(Color.Black) }
     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("Degrade", null, "Uygula", onClose, onApply)
+        BottomEditorHeader("Degrade", "", "Uygula", onClose, onApply)
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -224,7 +224,7 @@ internal fun ShapeEditPanel(
         else runCatching { Color(AndroidColor.parseColor(fillHex)) }.getOrDefault(Color(0xFF4F9CFF))
     }
     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("Vektör Şekil", null, "Uygula", onClose, onApply)
+        BottomEditorHeader("Vektör Şekil", "", "Uygula", onClose, onApply)
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("roundedRect" to "Yuvarlak", "rect" to "Kutu", "ellipse" to "Daire", "triangle" to "Üçgen", "polygon" to "Çokgen", "star" to "Yıldız", "line" to "Çizgi").forEach { (k, lbl) ->
                 FilterChip(selected = kind == k, onClick = { onKind(k); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
@@ -804,7 +804,7 @@ internal fun TextStudioPanel(
     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader(
             title = if (isEditingExisting) "Metni Düzenle" else "Metin",
-            subtitle = null,
+            subtitle = "",
             applyLabel = if (isEditingExisting) "Güncelle" else "Uygula",
             onClose = onClose,
             onApply = onApply

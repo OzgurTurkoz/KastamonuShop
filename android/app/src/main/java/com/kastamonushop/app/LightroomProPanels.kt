@@ -88,7 +88,7 @@ internal fun CameraRawProPanel(
     ) {
         BottomEditorHeader(
             title = "Kamera RAW Pro",
-            subtitle = null,
+            subtitle = "",
             applyLabel = "Uygula",
             onClose = onClose,
             onApply = onApply
