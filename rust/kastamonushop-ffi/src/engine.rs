@@ -5561,46 +5561,58 @@ impl KastamonuEngine {
                     "protectTones": true
                 }),
             ),
-            "sponge_saturate" => (
-                "paint.sponge".to_string(),
-                json!({
-                    "size": clamped_size,
-                    "hardness": clamped_hard,
-                    "spacing": adaptive_spacing,
-                    "mode": "saturate",
-                    "flow": clamped_str,
-                    "vibrance": true
-                }),
-            ),
-            "sponge_desaturate" => (
-                "paint.sponge".to_string(),
-                json!({
-                    "size": clamped_size,
-                    "hardness": clamped_hard,
-                    "spacing": adaptive_spacing,
-                    "mode": "desaturate",
-                    "flow": clamped_str,
-                    "vibrance": true
-                }),
-            ),
-            "blur_brush" => (
-                "paint.blur".to_string(),
-                json!({
-                    "size": clamped_size,
-                    "hardness": clamped_hard,
-                    "spacing": adaptive_spacing,
-                    "strength": clamped_str
-                }),
-            ),
-            "sharpen_brush" => (
-                "paint.sharpen".to_string(),
-                json!({
-                    "size": clamped_size,
-                    "hardness": clamped_hard,
-                    "spacing": adaptive_spacing,
-                    "strength": clamped_str
-                }),
-            ),
+            "sponge_saturate" => {
+                let sp = if clamped_size > 160.0 { 48.0 } else if clamped_size > 100.0 { 36.0 } else if clamped_size > 50.0 { 26.0 } else { 18.0 };
+                (
+                    "paint.sponge".to_string(),
+                    json!({
+                        "size": clamped_size,
+                        "hardness": clamped_hard,
+                        "spacing": sp,
+                        "mode": "saturate",
+                        "flow": clamped_str,
+                        "vibrance": true
+                    }),
+                )
+            }
+            "sponge_desaturate" => {
+                let sp = if clamped_size > 160.0 { 48.0 } else if clamped_size > 100.0 { 36.0 } else if clamped_size > 50.0 { 26.0 } else { 18.0 };
+                (
+                    "paint.sponge".to_string(),
+                    json!({
+                        "size": clamped_size,
+                        "hardness": clamped_hard,
+                        "spacing": sp,
+                        "mode": "desaturate",
+                        "flow": clamped_str,
+                        "vibrance": true
+                    }),
+                )
+            }
+            "blur_brush" => {
+                let sp = if clamped_size > 160.0 { 62.0 } else if clamped_size > 100.0 { 48.0 } else if clamped_size > 50.0 { 36.0 } else { 24.0 };
+                (
+                    "paint.blur".to_string(),
+                    json!({
+                        "size": clamped_size,
+                        "hardness": clamped_hard,
+                        "spacing": sp,
+                        "strength": clamped_str
+                    }),
+                )
+            }
+            "sharpen_brush" => {
+                let sp = if clamped_size > 160.0 { 62.0 } else if clamped_size > 100.0 { 48.0 } else if clamped_size > 50.0 { 36.0 } else { 24.0 };
+                (
+                    "paint.sharpen".to_string(),
+                    json!({
+                        "size": clamped_size,
+                        "hardness": clamped_hard,
+                        "spacing": sp,
+                        "strength": clamped_str
+                    }),
+                )
+            }
             other => {
                 return Err(EngineError::InvalidParams {
                     detail: format!("Canlı rötuş desteklenmeyen araç: {other}"),
@@ -6474,14 +6486,24 @@ impl KastamonuEngine {
             );
         }
 
+        let clamped_size = size.clamp(1.0, 500.0);
+        let mixer_spacing = if clamped_size > 160.0 {
+            0.48
+        } else if clamped_size > 100.0 {
+            0.38
+        } else if clamped_size > 50.0 {
+            0.30
+        } else {
+            0.22
+        };
         let pt_json = sample_to_json(&sample);
         let params = json!({
             "points": [pt_json],
-            "size": size.clamp(1.0, 500.0),
+            "size": clamped_size,
             "brush": {
-                "size": size.clamp(1.0, 500.0),
+                "size": clamped_size,
                 "hardness": hardness.clamp(0.0, 1.0),
-                "spacing": 0.18,
+                "spacing": mixer_spacing,
                 "spacingEnabled": true
             },
             "wet": wet.clamp(0.0, 100.0),
@@ -6591,6 +6613,15 @@ impl KastamonuEngine {
             _ => "color".to_string(),
         };
         let clamped_size = size.clamp(1.0, 400.0);
+        let crepl_spacing = if clamped_size > 160.0 {
+            0.45
+        } else if clamped_size > 100.0 {
+            0.35
+        } else if clamped_size > 50.0 {
+            0.28
+        } else {
+            0.20
+        };
         let pt_json = sample_to_json(&sample);
         let base_params = json!({
             "points": [pt_json.clone()],
@@ -6598,13 +6629,13 @@ impl KastamonuEngine {
             "brush": {
                 "size": clamped_size,
                 "hardness": hardness.clamp(0.0, 1.0),
-                "spacing": 0.18,
+                "spacing": crepl_spacing,
                 "spacingEnabled": true
             },
             "color": color_hex,
             "mode": safe_mode,
             "sampling": "continuous",
-            "limits": "contiguous",
+            "limits": "discontiguous",
             "tolerance": tolerance.clamp(1.0, 100.0),
             "antiAlias": true
         });

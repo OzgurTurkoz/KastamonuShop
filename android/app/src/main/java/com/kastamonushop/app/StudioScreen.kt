@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -212,15 +213,23 @@ fun StonebridgeStudioScreen(
     }
 
     fun bottomInsetPxForPanel(panel: BottomPanel): Float {
-        val dpVal = when (panel) {
+        val fallbackDp = when (panel) {
             BottomPanel.DOCK -> 112f
             BottomPanel.CURVES_LIVE -> 340f
+            BottomPanel.DRAW_MENU -> 280f
+            BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.LENS_CORRECTION_EDIT -> 300f
             BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE -> 250f
             BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT, BottomPanel.MIRROR_EDIT, BottomPanel.LAYER_TRANSFORM, BottomPanel.LAYER_FX_EDIT -> 250f
             BottomPanel.PERSPECTIVE_CROP_EDIT, BottomPanel.CROP_RATIO_EDIT, BottomPanel.TEXT_EDIT -> 220f
             else -> 190f
         }
-        return with(density) { dpVal.dp.toPx() }
+        val fallbackPx = with(density) { fallbackDp.dp.toPx() }
+        val extraPadPx = with(density) { 26.dp.toPx() }
+        return if (s.measuredBottomBarPx > 10f) {
+            s.measuredBottomBarPx + extraPadPx
+        } else {
+            fallbackPx
+        }
     }
 
     fun fitToSafeArea(turns: Int = s.pendingQuarterTurns, panel: BottomPanel = s.activePanel) {
@@ -408,9 +417,20 @@ fun StonebridgeStudioScreen(
         }
     }
 
-    LaunchedEffect(s.activePanel, s.curveOverlayExpanded, s.canvasViewRef) {
+    LaunchedEffect(s.activePanel, state.activeTool, s.measuredBottomBarPx, s.curveOverlayExpanded, s.canvasViewRef) {
         if (s.canvasViewRef != null) {
             when (s.activePanel) {
+                BottomPanel.DOCK,
+                BottomPanel.DRAW_MENU,
+                BottomPanel.SELECT_MENU,
+                BottomPanel.ADJUST_MENU,
+                BottomPanel.CROP_MENU,
+                BottomPanel.FILTER_MENU,
+                BottomPanel.EFFECT_MENU,
+                BottomPanel.LAYER_MASK_EDIT,
+                BottomPanel.BLEND_IF_EDIT,
+                BottomPanel.LENS_CORRECTION_EDIT,
+                BottomPanel.LUT_IMPORT_EDIT,
                 BottomPanel.CURVES_LIVE,
                 BottomPanel.PERSPECTIVE_CROP_EDIT,
                 BottomPanel.CROP_RATIO_EDIT,
@@ -2358,7 +2378,7 @@ fun StonebridgeStudioScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
-                    .padding(bottom = if (s.activePanel == BottomPanel.DOCK) 114.dp else 210.dp)
+                    .padding(bottom = if (s.measuredBottomBarPx > 10f) with(density) { s.measuredBottomBarPx.toDp() + 18.dp } else if (s.activePanel == BottomPanel.DOCK) 114.dp else 210.dp)
                     .clickable { vm.clearStatus() },
                 shape = RoundedCornerShape(20.dp),
                 color = Color(0xEE111217),
@@ -2380,7 +2400,13 @@ fun StonebridgeStudioScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+                .onGloballyPositioned { coords ->
+                    val h = coords.size.height.toFloat()
+                    if (kotlin.math.abs(h - s.measuredBottomBarPx) > 4f) {
+                        s.measuredBottomBarPx = h
+                    }
+                },
             shape = RoundedCornerShape(22.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
             tonalElevation = 10.dp

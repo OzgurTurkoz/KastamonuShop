@@ -289,6 +289,7 @@ internal class StudioSessionState {
     var textWarpHDist by mutableFloatStateOf(0f)
     var textWarpVDist by mutableFloatStateOf(0f)
     var cameraTick by mutableIntStateOf(0)
+    var measuredBottomBarPx by mutableFloatStateOf(0f)
     var brightnessVal by mutableFloatStateOf(0f)
     var contrastVal by mutableFloatStateOf(0f)
     var hueVal by mutableFloatStateOf(0f)

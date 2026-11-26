@@ -130,6 +130,8 @@ class EditorViewModel : ViewModel() {
     private val paintExecutor = Executors.newSingleThreadExecutor()
     private val pendingLock = Any()
     private val pendingSamples = ArrayList<StrokeSample>(64)
+    @Volatile
+    private var lastDispatchedSample: StrokeSample? = null
     private val drainScheduled = AtomicBoolean(false)
 
     // Coalesced live adjustment preview state
@@ -1954,6 +1956,7 @@ class EditorViewModel : ViewModel() {
         }
 
         synchronized(pendingLock) { pendingSamples.clear() }
+        lastDispatchedSample = sample
         paintExecutor.execute {
             runCatching {
                 when {
@@ -2012,16 +2015,45 @@ class EditorViewModel : ViewModel() {
                 batch = ArrayList(pendingSamples)
                 pendingSamples.clear()
             }
-            val curTool = _uiState.value.activeTool
+            val st = _uiState.value
+            val curTool = st.activeTool
             val isDab = isLiveDabTool(curTool)
             val isClone = curTool == ActiveTool.CLONE_STAMP
             val isMixer = curTool == ActiveTool.MIXER_BRUSH
+            val isHeavy = isMixer || isDab
+            val filtered = if (isHeavy) {
+                val minStep = (st.brushSize * 0.22f).coerceIn(4f, 52f)
+                val minStepSq = minStep * minStep
+                val out = ArrayList<StrokeSample>(batch.size)
+                var prev = lastDispatchedSample
+                for (pt in batch) {
+                    if (prev == null) {
+                        out.add(pt)
+                        prev = pt
+                    } else {
+                        val dx = pt.x - prev.x
+                        val dy = pt.y - prev.y
+                        if (dx * dx + dy * dy >= minStepSq) {
+                            out.add(pt)
+                            prev = pt
+                        }
+                    }
+                }
+                if (out.isNotEmpty()) {
+                    lastDispatchedSample = out.last()
+                }
+                out
+            } else {
+                lastDispatchedSample = batch.lastOrNull() ?: lastDispatchedSample
+                batch
+            }
+            if (filtered.isEmpty()) continue
             runCatching {
                 when {
-                    isClone -> engine.pushLiveClone(batch)
-                    isMixer -> engine.pushLiveMixer(batch)
-                    isDab -> engine.pushLiveDab(batch)
-                    else -> engine.pushLiveStroke(batch)
+                    isClone -> engine.pushLiveClone(filtered)
+                    isMixer -> engine.pushLiveMixer(filtered)
+                    isDab -> engine.pushLiveDab(filtered)
+                    else -> engine.pushLiveStroke(filtered)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }
