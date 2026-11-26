@@ -314,8 +314,8 @@ internal fun LiquifyEditPanel(
                 Text("Sıfırla", fontSize = 11.sp)
             }
         }
-        BrushSizeSliderRow("Boyut", size, minPx = 20f, maxPx = 400f, defaultPx = 120f, onValueChange = onSize)
-        CompactSliderRow("Güç", "%${pressure.roundToInt()}", pressure, 10f..100f, 75f, onValueChange = onPressure)
+        BrushSizeSliderRow("Boyut", size, minPx = 20f, maxPx = 400f, defaultPx = 120f, onChange = onSize)
+        CompactSliderRow("Güç", "%${pressure.roundToInt()}", pressure, 10f..100f, 75f, onChange = onPressure)
     }
 }
 
@@ -409,7 +409,7 @@ internal fun PosterThreshPanel(
                 defaultValue = 8f,
                 forceResetEnabled = isTouched,
                 onReset = onReset,
-                onValueChange = onPosterLevels
+                onChange = onPosterLevels
             )
         } else {
             CompactSliderRow(
@@ -420,7 +420,7 @@ internal fun PosterThreshPanel(
                 defaultValue = 128f,
                 forceResetEnabled = isTouched,
                 onReset = onReset,
-                onValueChange = onThreshLevel
+                onChange = onThreshLevel
             )
         }
     }
@@ -488,9 +488,9 @@ internal fun FilterGalleryPanel(
             }
         }
         if (kind != "none") {
-            CompactSliderRow(if (isPixelate) "Hücre" else "Şiddet", "%${amount.roundToInt()}", amount, 5f..100f, 45f, onValueChange = onAmount)
+            CompactSliderRow(if (isPixelate) "Hücre" else "Şiddet", "%${amount.roundToInt()}", amount, 5f..100f, 45f, onChange = onAmount)
             if (!isPixelate) {
-                CompactSliderRow("Detay", "%${detail.roundToInt()}", detail, 5f..100f, 50f, onValueChange = onDetail)
+                CompactSliderRow("Detay", "%${detail.roundToInt()}", detail, 5f..100f, 50f, onChange = onDetail)
             }
         }
     }
@@ -508,8 +508,8 @@ internal fun LightLivePanel(
 ) {
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader("Işık & Kontrast", "Kaydırdıkça anlık gör, beğenirsen Uygula de", "Uygula", onClose, onApply)
-        CompactSliderRow("Parlaklık", "${brightness.roundToInt()}", brightness, -100f..100f, defaultValue = 0f, onValueChange = onBrightness)
-        CompactSliderRow("Kontrast", "${contrast.roundToInt()}", contrast, -50f..100f, defaultValue = 0f, onValueChange = onContrast)
+        CompactSliderRow("Parlaklık", "${brightness.roundToInt()}", brightness, -100f..100f, defaultValue = 0f, onChange = onBrightness)
+        CompactSliderRow("Kontrast", "${contrast.roundToInt()}", contrast, -50f..100f, defaultValue = 0f, onChange = onContrast)
     }
 }
 
@@ -524,8 +524,8 @@ internal fun ColorLivePanel(
 ) {
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader("Renk & Canlılık", "Kaydırdıkça anlık gör, beğenirsen Uygula de", "Uygula", onClose, onApply)
-        CompactSliderRow("Canlılık", "${saturation.roundToInt()}", saturation, -100f..100f, defaultValue = 0f, onValueChange = onSaturation)
-        CompactSliderRow("Renk Tonu", "${hue.roundToInt()}°", hue, -180f..180f, defaultValue = 0f, onValueChange = onHue)
+        CompactSliderRow("Canlılık", "${saturation.roundToInt()}", saturation, -100f..100f, defaultValue = 0f, onChange = onSaturation)
+        CompactSliderRow("Renk Tonu", "${hue.roundToInt()}°", hue, -180f..180f, defaultValue = 0f, onChange = onHue)
     }
 }
 
@@ -642,9 +642,9 @@ internal fun LightDistortPanel(
                         FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
-                CompactSliderRow("Parlaklık", "${amount.roundToInt()}%", amount, 0f..100f, 55f, onValueChange = onAmount)
-                CompactSliderRow("Konum X", "${posX.roundToInt()}%", posX, 0f..100f, 35f, onValueChange = onPosX)
-                CompactSliderRow("Konum Y", "${posY.roundToInt()}%", posY, 0f..100f, 30f, onValueChange = onPosY)
+                CompactSliderRow("Parlaklık", "${amount.roundToInt()}%", amount, 0f..100f, 55f, onChange = onAmount)
+                CompactSliderRow("Konum X", "${posX.roundToInt()}%", posX, 0f..100f, 35f, onChange = onPosX)
+                CompactSliderRow("Konum Y", "${posY.roundToInt()}%", posY, 0f..100f, 30f, onChange = onPosY)
             }
             "lensBlur" -> {
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -652,8 +652,8 @@ internal fun LightDistortPanel(
                         FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
-                CompactSliderRow("Bulanıklık", "${amount.roundToInt()}%", amount, 5f..100f, 40f, onValueChange = onAmount)
-                CompactSliderRow("Parıltı", "${detail.roundToInt()}%", detail, 0f..100f, 40f, onValueChange = onDetail)
+                CompactSliderRow("Bulanıklık", "${amount.roundToInt()}%", amount, 5f..100f, 40f, onChange = onAmount)
+                CompactSliderRow("Parıltı", "${detail.roundToInt()}%", detail, 0f..100f, 40f, onChange = onDetail)
             }
             "wave" -> {
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -661,8 +661,8 @@ internal fun LightDistortPanel(
                         FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
-                CompactSliderRow("Genlik", "${amount.roundToInt()}%", amount, 5f..100f, 40f, onValueChange = onAmount)
-                CompactSliderRow("Sıklık", "${detail.roundToInt()}%", detail, 0f..100f, 55f, onValueChange = onDetail)
+                CompactSliderRow("Genlik", "${amount.roundToInt()}%", amount, 5f..100f, 40f, onChange = onAmount)
+                CompactSliderRow("Sıklık", "${detail.roundToInt()}%", detail, 0f..100f, 55f, onChange = onDetail)
             }
             "spherize" -> {
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -670,10 +670,10 @@ internal fun LightDistortPanel(
                         FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
-                CompactSliderRow("Şiddet", "${amount.roundToInt()}%", amount, -100f..100f, 0f, onValueChange = onAmount)
+                CompactSliderRow("Şiddet", "${amount.roundToInt()}%", amount, -100f..100f, 0f, onChange = onAmount)
             }
             "twirl" -> {
-                CompactSliderRow("Girdap Açısı", "${amount.roundToInt()}°", amount, -360f..360f, 0f, onValueChange = onAmount)
+                CompactSliderRow("Girdap Açısı", "${amount.roundToInt()}°", amount, -360f..360f, 0f, onChange = onAmount)
             }
         }
     }
@@ -827,18 +827,18 @@ internal fun TextStudioPanel(
             }
             1 -> {
                 // Quadratic precision slider for 6px..600px (fine control at tiny sizes!)
-                BrushSizeSliderRow("Boyut", sizePx, minPx = 6f, maxPx = 600f, defaultPx = defaultSizePx, onValueChange = onSizePx)
-                CompactSliderRow("Harf Arası", "${tracking.roundToInt()}", tracking, -80f..400f, 0f, onValueChange = onTracking)
+                BrushSizeSliderRow("Boyut", sizePx, minPx = 6f, maxPx = 600f, defaultPx = defaultSizePx, onChange = onSizePx)
+                CompactSliderRow("Harf Arası", "${tracking.roundToInt()}", tracking, -80f..400f, 0f, onChange = onTracking)
                 CompactSliderRow(
                     label = "Satır Arası",
                     valueText = if (abs(lineHeight - 1.2f) < 0.03f) "Oto" else String.format(java.util.Locale.US, "%.2fx", lineHeight),
                     value = lineHeight,
                     range = 0.8f..2.4f,
                     defaultValue = 1.2f,
-                    onValueChange = onLineHeight
+                    onChange = onLineHeight
                 )
-                CompactSliderRow("Yatay Ölçek", "${hScale.roundToInt()}%", hScale, 50f..200f, 100f, onValueChange = onHScale)
-                CompactSliderRow("Dikey Ölçek", "${vScale.roundToInt()}%", vScale, 50f..200f, 100f, onValueChange = onVScale)
+                CompactSliderRow("Yatay Ölçek", "${hScale.roundToInt()}%", hScale, 50f..200f, 100f, onChange = onHScale)
+                CompactSliderRow("Dikey Ölçek", "${vScale.roundToInt()}%", vScale, 50f..200f, 100f, onChange = onVScale)
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -872,9 +872,9 @@ internal fun TextStudioPanel(
                     }
                 }
                 if (warpStyle != "none") {
-                    CompactSliderRow("Bükme", "${warpBend.roundToInt()}%", warpBend, -100f..100f, 50f, onValueChange = onWarpBend)
-                    CompactSliderRow("Yatay Eğim", "${warpHDist.roundToInt()}%", warpHDist, -100f..100f, 0f, onValueChange = onWarpHDist)
-                    CompactSliderRow("Dikey Eğim", "${warpVDist.roundToInt()}%", warpVDist, -100f..100f, 0f, onValueChange = onWarpVDist)
+                    CompactSliderRow("Bükme", "${warpBend.roundToInt()}%", warpBend, -100f..100f, 50f, onChange = onWarpBend)
+                    CompactSliderRow("Yatay Eğim", "${warpHDist.roundToInt()}%", warpHDist, -100f..100f, 0f, onChange = onWarpHDist)
+                    CompactSliderRow("Dikey Eğim", "${warpVDist.roundToInt()}%", warpVDist, -100f..100f, 0f, onChange = onWarpVDist)
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -930,7 +930,7 @@ internal fun BlurEditPanel(
 ) {
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader("Bulanıklaştır", "Kaydırdıkça anlık gör, beğenirsen Uygula de", "Uygula", onClose, onApply)
-        CompactSliderRow("Yarıçap", "${radius.roundToInt()}px", radius, 0f..60f, defaultValue = 0f, onValueChange = onRadius)
+        CompactSliderRow("Yarıçap", "${radius.roundToInt()}px", radius, 0f..60f, defaultValue = 0f, onChange = onRadius)
     }
 }
 
@@ -943,7 +943,7 @@ internal fun SharpenEditPanel(
 ) {
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader("Keskinleştir", "Kaydırdıkça anlık gör, beğenirsen Uygula de", "Uygula", onClose, onApply)
-        CompactSliderRow("Miktar", "${amount.roundToInt()}%", amount, 0f..300f, defaultValue = 0f, onValueChange = onAmount)
+        CompactSliderRow("Miktar", "${amount.roundToInt()}%", amount, 0f..300f, defaultValue = 0f, onChange = onAmount)
     }
 }
 
