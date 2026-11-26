@@ -91,6 +91,41 @@ pub struct PuppetPinPoint {
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
+pub struct CameraRawPresetValues {
+    pub exposure: f32,
+    pub contrast: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub whites: f32,
+    pub blacks: f32,
+    pub temperature: f32,
+    pub tint: f32,
+    pub vibrance: f32,
+    pub saturation: f32,
+    pub texture: f32,
+    pub clarity: f32,
+    pub dehaze: f32,
+    pub sharpen_amount: f32,
+    pub noise_luminance: f32,
+    pub noise_color: f32,
+    pub grade_shadow_hue: f32,
+    pub grade_shadow_sat: f32,
+    pub grade_mid_hue: f32,
+    pub grade_mid_sat: f32,
+    pub grade_high_hue: f32,
+    pub grade_high_sat: f32,
+    pub cal_red_hue: f32,
+    pub cal_red_sat: f32,
+    pub cal_green_hue: f32,
+    pub cal_green_sat: f32,
+    pub cal_blue_hue: f32,
+    pub cal_blue_sat: f32,
+    pub vignette_amount: f32,
+    pub grain_amount: f32,
+}
+
+
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct TextLayerStyle {
     pub layer_id: u64,
     pub text: String,
@@ -4847,7 +4882,30 @@ impl KastamonuEngine {
         guard.live_stroke = None;
         guard
             .session
-            .execute("image.adjustments.invert", json!({ "target": "mask" }))
+            .edit("Maskeyi Ters Çevir", |doc, active| {
+                let id = active.ok_or_else(|| photocraft_engine::EngineError::NoActiveLayer)?;
+                let canvas = doc.bounds();
+                let layer = doc
+                    .layer_mut(id)
+                    .ok_or(photocraft_engine::EngineError::NoLayer(id))?;
+                let Some(mask) = layer.mask.as_mut() else {
+                    return Err(photocraft_engine::EngineError::BadParams {
+                        cmd: "layer.layerMask.invert".into(),
+                        msg: "Aktif katmanda maske yok".into(),
+                    });
+                };
+                let old_def = mask.surface.default_pixel().first().copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                let mut next = Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0 - old_def]);
+                let raw = mask.surface.read_region(canvas);
+                let ch = mask.surface.channels().max(1);
+                let mut inv = Vec::with_capacity((canvas.width() as usize) * (canvas.height() as usize));
+                for chunk in raw.chunks_exact(ch) {
+                    inv.push(1.0 - chunk[0].clamp(0.0, 1.0));
+                }
+                next.write_region(canvas, &inv);
+                mask.surface = next;
+                Ok(())
+            })
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
@@ -4882,11 +4940,18 @@ impl KastamonuEngine {
     pub fn toggle_clipping_mask(&self) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.dismiss_compare();
-        let is_clipped = guard.session.active().is_some_and(|ds| {
-            ds.active_layer()
-                .and_then(|aid| ds.doc().layer(aid))
-                .is_some_and(|l| l.clipped)
+        let (is_clipped, can_clip) = guard.session.active().map_or((false, false), |ds| {
+            let aid = ds.active_layer();
+            let doc = ds.doc();
+            let clipped = aid.and_then(|id| doc.layer(id)).is_some_and(|l| l.clipped);
+            let is_bottom = doc.layers.first().map(|l| l.id) == aid;
+            (clipped, doc.layers.len() > 1 && !is_bottom)
         });
+        if !is_clipped && !can_clip {
+            return Err(EngineError::CommandFailed {
+                detail: "Kırpma maskesi için altında en az 1 katman olmalı".into(),
+            });
+        }
         let cmd = if is_clipped {
             "layer.releaseClippingMask"
         } else {
@@ -4982,6 +5047,210 @@ impl KastamonuEngine {
         guard.mark_full_dirty();
         self.info_from_locked(&guard)
     }
+
+    // ==================== v1.6.0: LIGHTROOM RAW & COLOR PRO ====================
+
+    /// Live 60 FPS proxy preview for full Camera RAW Pro JSON parameters (Basic, Detail, 3-Way Color Grading, Calibration, Vignette/Grain).
+    pub fn update_proxy_camera_raw_json(&self, params_json: String) -> Result<(), EngineError> {
+        let params: Value = serde_json::from_str(&params_json)
+            .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?;
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let _ = ps.execute("filter.cameraRaw", params);
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits full Camera RAW Pro JSON parameters to the active layer in 1 clean Undo step.
+    pub fn apply_camera_raw_json(&self, params_json: String) -> Result<DocumentInfo, EngineError> {
+        let params: Value = serde_json::from_str(&params_json)
+            .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?;
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard
+            .session
+            .execute("filter.cameraRaw", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Parses a real Adobe Lightroom / Camera Raw `.xmp` preset file directly into slider values.
+    pub fn parse_xmp_preset_bytes(&self, bytes: Vec<u8>) -> Result<CameraRawPresetValues, EngineError> {
+        let mut cr = photocraft_algo::camera_raw::CameraRaw::default();
+        photocraft_io::camera_raw_xmp::load(&mut cr, &bytes)
+            .map_err(|e| EngineError::IoFailed { detail: e })?;
+        Ok(CameraRawPresetValues {
+            exposure: cr.exposure,
+            contrast: cr.contrast,
+            highlights: cr.highlights,
+            shadows: cr.shadows,
+            whites: cr.whites,
+            blacks: cr.blacks,
+            temperature: cr.temperature,
+            tint: cr.tint,
+            vibrance: cr.vibrance,
+            saturation: cr.saturation,
+            texture: cr.texture,
+            clarity: cr.clarity,
+            dehaze: cr.dehaze,
+            sharpen_amount: cr.sharpen_amount,
+            noise_luminance: cr.noise_luminance,
+            noise_color: cr.noise_color,
+            grade_shadow_hue: cr.grade_shadows.hue,
+            grade_shadow_sat: cr.grade_shadows.sat,
+            grade_mid_hue: cr.grade_midtones.hue,
+            grade_mid_sat: cr.grade_midtones.sat,
+            grade_high_hue: cr.grade_highlights.hue,
+            grade_high_sat: cr.grade_highlights.sat,
+            cal_red_hue: cr.calibration_hue[0],
+            cal_red_sat: cr.calibration_sat[0],
+            cal_green_hue: cr.calibration_hue[1],
+            cal_green_sat: cr.calibration_sat[1],
+            cal_blue_hue: cr.calibration_hue[2],
+            cal_blue_sat: cr.calibration_sat[2],
+            vignette_amount: cr.vignette_amount,
+            grain_amount: cr.grain_amount,
+        })
+    }
+
+    /// Live 60 FPS proxy preview for Lens Correction (`filter.lensCorrection`).
+    pub fn update_proxy_lens_correction(
+        &self,
+        distortion: f32,
+        vignette_amount: f32,
+        red_cyan: f32,
+        blue_yellow: f32,
+        vertical: f32,
+        horizontal: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let _ = ps.execute(
+            "filter.lensCorrection",
+            json!({
+                "distortion": distortion.clamp(-100.0, 100.0) as f64,
+                "vignetteAmount": vignette_amount.clamp(-100.0, 100.0) as f64,
+                "redCyan": red_cyan.clamp(-100.0, 100.0) as f64,
+                "blueYellow": blue_yellow.clamp(-100.0, 100.0) as f64,
+                "vertical": vertical.clamp(-100.0, 100.0) as f64,
+                "horizontal": horizontal.clamp(-100.0, 100.0) as f64
+            }),
+        );
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits Lens Correction (`filter.lensCorrection`) in 1 clean Undo step.
+    pub fn apply_lens_correction(
+        &self,
+        distortion: f32,
+        vignette_amount: f32,
+        red_cyan: f32,
+        blue_yellow: f32,
+        vertical: f32,
+        horizontal: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        guard
+            .session
+            .execute(
+                "filter.lensCorrection",
+                json!({
+                    "distortion": distortion.clamp(-100.0, 100.0) as f64,
+                    "vignetteAmount": vignette_amount.clamp(-100.0, 100.0) as f64,
+                    "redCyan": red_cyan.clamp(-100.0, 100.0) as f64,
+                    "blueYellow": blue_yellow.clamp(-100.0, 100.0) as f64,
+                    "vertical": vertical.clamp(-100.0, 100.0) as f64,
+                    "horizontal": horizontal.clamp(-100.0, 100.0) as f64
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    /// Live 60 FPS proxy preview for imported `.cube` / `.3dl` / `.look` 3D LUT file.
+    pub fn update_proxy_color_lookup(&self, file_name: String, lut_text: String, opacity: f32) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if let Ok(out) = ps.execute(
+            "layer.newAdjustmentLayer.colorLookup",
+            json!({ "data": lut_text, "fileName": file_name, "lutFormat": "auto" }),
+        ) {
+            if let Some(lid) = out.get("layer").and_then(Value::as_u64) {
+                let _ = ps.execute(
+                    "layer.setProps",
+                    json!({ "layer": lid, "opacity": opacity.clamp(0.0, 1.0) }),
+                );
+            }
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    /// Commits an imported `.cube` / `.3dl` / `.look` 3D LUT as a non-destructive Color Lookup adjustment layer.
+    pub fn apply_color_lookup(&self, file_name: String, lut_text: String, opacity: f32) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let out = guard
+            .session
+            .execute(
+                "layer.newAdjustmentLayer.colorLookup",
+                json!({ "data": lut_text, "fileName": file_name, "lutFormat": "auto" }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        if let Some(lid) = out.get("layer").and_then(Value::as_u64) {
+            if let Some(ds) = guard.session.active_mut() {
+                let doc = Arc::make_mut(ds.doc_mut());
+                if let Some(l) = doc.layers.iter_mut().find(|l| l.id.0 == lid) {
+                    l.opacity = opacity.clamp(0.0, 1.0);
+                }
+            }
+        }
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
 
     pub fn add_layer(&self, name: String) -> Result<Vec<LayerSummary>, EngineError> {
         let mut guard = self.core.lock();
@@ -7077,5 +7346,119 @@ mod v08_automated_tests {
         let info = eng.apply_blend_if(40, 210, 20, 235, 25).unwrap();
         assert!(info.can_undo);
         let _ = eng.reset_blend_if().unwrap();
+    }
+
+    #[test]
+    fn test_v160_hide_all_mask_invert_reveals_photo_pixels() {
+        let eng = test_engine();
+        let rgba = vec![240u8, 80, 40, 255].repeat(32 * 32);
+        eng.open_rgba_bytes("inv_mask.png".into(), 32, 32, rgba).unwrap();
+        let _ = eng.add_layer_mask("hideAll".into()).unwrap();
+        // Before invert: untouched black mask hides photo (alpha == 0)
+        {
+            let guard = eng.core.lock();
+            let flat = photocraft_compose::flatten(guard.active_document().unwrap().as_ref());
+            assert!(flat.px[16 * 32 + 16][3] < 0.01, "hideAll must hide pixels");
+        }
+        // After invert: mask becomes white and reveals photo (alpha ~ 1.0)
+        let _ = eng.invert_active_layer_mask().unwrap();
+        {
+            let guard = eng.core.lock();
+            let flat = photocraft_compose::flatten(guard.active_document().unwrap().as_ref());
+            assert!(flat.px[16 * 32 + 16][3] > 0.99, "invert on untouched hideAll must reveal pixels!");
+        }
+    }
+
+    #[test]
+    fn test_v160_single_layer_clipping_mask_is_refused() {
+        let eng = test_engine();
+        eng.new_document("single_clip".into(), 32, 32).unwrap();
+        let res = eng.toggle_clipping_mask();
+        assert!(res.is_err(), "Bottom/single layer must refuse clipping mask");
+    }
+
+    #[test]
+    fn test_v160_camera_raw_pro_grading_calibration_detail_and_xmp_import() {
+        let eng = test_engine();
+        let rgba = vec![140u8, 120, 100, 255].repeat(48 * 48);
+        eng.open_rgba_bytes("raw.png".into(), 48, 48, rgba).unwrap();
+
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+                    crs:Exposure2012="+0.75" crs:Contrast2012="+20" crs:Highlights2012="-30"
+                    crs:Shadows2012="+35" crs:Whites2012="+15" crs:Blacks2012="-10"
+                    crs:Texture="+25" crs:Clarity2012="+18" crs:Dehaze="+12"
+                    crs:Vibrance="+22" crs:Saturation="+10" crs:LuminanceSmoothing="20"/>
+            </rdf:RDF></x:xmpmeta>"#;
+        let parsed = eng.parse_xmp_preset_bytes(xmp.to_vec()).unwrap();
+        assert!((parsed.exposure - 0.75).abs() < 0.01);
+        assert!((parsed.whites - 15.0).abs() < 0.1);
+        assert!((parsed.texture - 25.0).abs() < 0.1);
+
+        let params = json!({
+            "exposure": 0.5, "whites": 20.0, "blacks": -15.0, "texture": 30.0,
+            "noiseLuminance": 25.0, "noiseColor": 20.0, "sharpenAmount": 35.0,
+            "gradeShadows": {"hue": 220.0, "sat": 25.0, "lum": -5.0},
+            "gradeMidtones": {"hue": 40.0, "sat": 15.0, "lum": 0.0},
+            "gradeHighlights": {"hue": 45.0, "sat": 20.0, "lum": 5.0},
+            "calibrationHue": [10.0, -5.0, 15.0],
+            "calibrationSat": [15.0, 10.0, -10.0]
+        }).to_string();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_camera_raw_json(params.clone()).unwrap();
+        let info = eng.apply_camera_raw_json(params).unwrap();
+        assert!(info.can_undo);
+    }
+
+    #[test]
+    fn test_v160_lens_correction_proxy_and_apply() {
+        let eng = test_engine();
+        let rgba = vec![100u8, 150, 200, 255].repeat(48 * 48);
+        eng.open_rgba_bytes("lens.png".into(), 48, 48, rgba).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_lens_correction(-25.0, -15.0, 10.0, -10.0, 5.0, 0.0).unwrap();
+        let info = eng.apply_lens_correction(-25.0, -15.0, 10.0, -10.0, 5.0, 0.0).unwrap();
+        assert!(info.can_undo);
+    }
+
+    #[test]
+    fn test_v160_cube_3d_lut_import_proxy_and_apply() {
+        let eng = test_engine();
+        let rgba = vec![128u8, 128, 128, 255].repeat(32 * 32);
+        eng.open_rgba_bytes("lut.png".into(), 32, 32, rgba).unwrap();
+        let cube = "TITLE "WarmTest"
+LUT_3D_SIZE 2
+0.0 0.0 0.0
+1.0 0.0 0.0
+0.0 1.0 0.0
+1.0 1.0 0.0
+0.0 0.0 1.0
+1.0 0.0 1.0
+0.0 1.0 1.0
+1.0 0.9 0.8
+".to_string();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_color_lookup("warm.cube".into(), cube.clone(), 0.85).unwrap();
+        let info = eng.apply_color_lookup("warm.cube".into(), cube, 0.85).unwrap();
+        assert!(info.can_undo);
+        assert_eq!(eng.get_layers().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_v160_rgb_curves_and_three_tone_color_balance() {
+        let eng = test_engine();
+        let rgba = vec![120u8, 120, 120, 255].repeat(32 * 32);
+        eng.open_rgba_bytes("rgb_cb.png".into(), 32, 32, rgba).unwrap();
+        let c_info = eng.apply_adjustment_once(
+            "curves".into(),
+            r#"{"points":[[0,0],[128,128],[255,255]],"red":[[0,0],[128,160],[255,255]],"green":[[0,0],[128,128],[255,255]],"blue":[[0,0],[128,96],[255,255]]}"#.into(),
+        ).unwrap();
+        assert!(c_info.can_undo);
+        let cb_info = eng.apply_adjustment_once(
+            "colorBalance".into(),
+            r#"{"shadows":[-20,0,25],"midtones":[10,-5,0],"highlights":[25,5,-20],"preserveLuminosity":true}"#.into(),
+        ).unwrap();
+        assert!(cb_info.can_undo);
     }
 }

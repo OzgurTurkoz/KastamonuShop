@@ -110,6 +110,8 @@ internal enum class BottomPanel {
     LAYER_FX_EDIT,
     LAYER_MASK_EDIT,
     BLEND_IF_EDIT,
+    LENS_CORRECTION_EDIT,
+    LUT_IMPORT_EDIT,
     CAMERA_LIGHT_LIVE,
     GRADIENT_EDIT,
     SHAPE_EDIT,

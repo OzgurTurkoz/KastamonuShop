@@ -3167,4 +3167,130 @@ class EditorViewModel : ViewModel() {
             }
         }
     }
+
+    // ==================== v1.6.0: LIGHTROOM RAW & COLOR PRO ====================
+
+    fun updateProxyCameraRawJson(paramsJson: String) {
+        paintExecutor.execute {
+            runCatching {
+                engine.updateProxyCameraRawJson(paramsJson)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun applyCameraRawJson(paramsJson: String) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyCameraRawJson(paramsJson)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Kamera RAW Pro uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Kamera RAW hatası: ${err.message}", 2800L)
+            }
+        }
+    }
+
+    fun importXmpPreset(context: Context, uri: Uri, onLoaded: (uniffi.kastamonushop_ffi.CameraRawPresetValues) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("XMP dosyası okunamadı")
+                val parsed = engine.parseXmpPresetBytes(bytes)
+                withContext(Dispatchers.Main) {
+                    onLoaded(parsed)
+                }
+                showStatus("Lightroom .xmp önayarı yüklendi", 2000L)
+            }.onFailure { err ->
+                showStatus("XMP yüklenemedi: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun updateProxyLensCorrection(
+        distortion: Float,
+        vignetteAmount: Float,
+        redCyan: Float,
+        blueYellow: Float,
+        vertical: Float,
+        horizontal: Float
+    ) {
+        paintExecutor.execute {
+            runCatching {
+                engine.updateProxyLensCorrection(distortion, vignetteAmount, redCyan, blueYellow, vertical, horizontal)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun applyLensCorrection(
+        distortion: Float,
+        vignetteAmount: Float,
+        redCyan: Float,
+        blueYellow: Float,
+        vertical: Float,
+        horizontal: Float
+    ) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyLensCorrection(distortion, vignetteAmount, redCyan, blueYellow, vertical, horizontal)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Lens düzeltmesi uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Lens düzeltme hatası: ${err.message}", 2800L)
+            }
+        }
+    }
+
+    fun importCubeLutFile(context: Context, uri: Uri, onLoaded: (String, String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val name = resolveDisplayName(context.contentResolver, uri) ?: "custom.cube"
+                val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    ?: error("LUT dosyası okunamadı")
+                withContext(Dispatchers.Main) {
+                    onLoaded(name, text)
+                }
+                showStatus("3D LUT yüklendi: $name", 2000L)
+            }.onFailure { err ->
+                showStatus("LUT okunamadı: ${err.message}", 3000L)
+            }
+        }
+    }
+
+    fun updateProxyColorLookup(fileName: String, lutText: String, opacityPct: Float) {
+        paintExecutor.execute {
+            runCatching {
+                engine.updateProxyColorLookup(fileName, lutText, (opacityPct / 100f).coerceIn(0f, 1f))
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun applyColorLookup(fileName: String, lutText: String, opacityPct: Float) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyColorLookup(fileName, lutText, (opacityPct / 100f).coerceIn(0f, 1f))
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("3D LUT uygulandı: $fileName", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("3D LUT hatası: ${err.message}", 3000L)
+            }
+        }
+    }
 }

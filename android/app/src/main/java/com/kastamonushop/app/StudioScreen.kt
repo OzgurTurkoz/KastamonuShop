@@ -156,6 +156,37 @@ fun StonebridgeStudioScreen(
             }
         }
     }
+    val importXmpLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            vm.importXmpPreset(context, uri) { p ->
+                s.camExposureVal = p.exposure; s.camContrastVal = p.contrast
+                s.camHighlightsVal = p.highlights; s.camShadowsVal = p.shadows
+                s.camWhitesVal = p.whites; s.camBlacksVal = p.blacks
+                s.camTempVal = p.temperature; s.camTintVal = p.tint
+                s.camVibranceVal = p.vibrance; s.camSatVal = p.saturation
+                s.camTextureVal = p.texture; s.camClarityVal = p.clarity
+                s.camDehazeVal = p.dehaze; s.camSharpenVal = p.sharpenAmount
+                s.camNoiseLumVal = p.noiseLuminance; s.camNoiseColVal = p.noiseColor
+                s.camGradeShadowHue = p.gradeShadowHue; s.camGradeShadowSat = p.gradeShadowSat
+                s.camGradeMidHue = p.gradeMidHue; s.camGradeMidSat = p.gradeMidSat
+                s.camGradeHighHue = p.gradeHighHue; s.camGradeHighSat = p.gradeHighSat
+                s.camCalRedHue = p.calRedHue; s.camCalRedSat = p.calRedSat
+                s.camCalGreenHue = p.calGreenHue; s.camCalGreenSat = p.calGreenSat
+                s.camCalBlueHue = p.calBlueHue; s.camCalBlueSat = p.calBlueSat
+                s.camVignetteVal = p.vignetteAmount; s.camGrainVal = p.grainAmount
+                vm.updateProxyCameraRawJson(buildCameraRawProJson(s))
+            }
+        }
+    }
+    val importLutLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            vm.importCubeLutFile(context, uri) { name, text ->
+                s.lutFileName = name
+                s.lutText = text
+                vm.updateProxyColorLookup(name, text, s.lutOpacity)
+            }
+        }
+    }
 
 
     // 60 FPS GPU Mirror Effect state (zero CPU lag!)
@@ -278,7 +309,7 @@ fun StonebridgeStudioScreen(
                 BottomPanel.PUPPET_WARP_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); s.activePanel = BottomPanel.DOCK }
                 BottomPanel.LAYER_FX_EDIT, BottomPanel.BLEND_IF_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK }
-                BottomPanel.CAMERA_LIGHT_LIVE -> { clearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU }
+                BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.LENS_CORRECTION_EDIT, BottomPanel.LUT_IMPORT_EDIT -> { clearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU }
                 BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); s.liquifyCursorScreen = null; s.activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.AUTO_ENHANCE_MENU -> s.activePanel = BottomPanel.ADJUST_MENU
                 BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.EFFECT_MENU }
@@ -362,7 +393,7 @@ fun StonebridgeStudioScreen(
             s.activePanel == BottomPanel.FILTER_GALLERY_EDIT ||
             s.activePanel == BottomPanel.LIGHT_DISTORT_EDIT ||
             s.activePanel == BottomPanel.TEXT_EDIT ||
-            s.activePanel == BottomPanel.PUPPET_WARP_EDIT || s.activePanel == BottomPanel.BLEND_IF_EDIT
+            s.activePanel == BottomPanel.PUPPET_WARP_EDIT || s.activePanel == BottomPanel.BLEND_IF_EDIT || s.activePanel == BottomPanel.LENS_CORRECTION_EDIT || s.activePanel == BottomPanel.LUT_IMPORT_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -2351,6 +2382,8 @@ fun StonebridgeStudioScreen(
                 cropScrollState = cropScrollState,
                 effectScrollState = effectScrollState,
                 onImportFont = { importFontLauncher.launch(arrayOf("*/*")) },
+                onImportXmp = { importXmpLauncher.launch(arrayOf("*/*")) },
+                onImportLut = { importLutLauncher.launch(arrayOf("*/*")) },
                 onPushCurveGpu = { y0, y1, y2, y3, y4 -> pushCurveGpu(y0, y1, y2, y3, y4) },
                 onPushGpuMirrorPreview = { mode, ratio -> pushGpuMirrorPreview(mode, ratio) },
                 onFitToSafeArea = { turns, panel -> fitToSafeArea(turns, panel) },

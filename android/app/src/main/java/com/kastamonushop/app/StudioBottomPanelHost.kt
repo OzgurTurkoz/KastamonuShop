@@ -104,6 +104,8 @@ internal fun StudioBottomPanelHost(
     cropScrollState: ScrollState,
     effectScrollState: ScrollState,
     onImportFont: () -> Unit,
+    onImportXmp: () -> Unit,
+    onImportLut: () -> Unit,
     onPushCurveGpu: (Float, Float, Float, Float, Float) -> Unit,
     onPushGpuMirrorPreview: (MirrorModeOption, Float) -> Unit,
     onFitToSafeArea: (Int, BottomPanel) -> Unit,
@@ -389,6 +391,25 @@ internal fun StudioBottomPanelHost(
                                 onClick = { s.activePanel = BottomPanel.AUTO_ENHANCE_MENU }
                             )
                             CircularDockButton(
+                                icon = Icons.Default.Camera,
+                                label = "Lens",
+                                onClick = {
+                                    s.lensDistortion = 0f; s.lensVignette = 0f
+                                    s.lensRedCyan = 0f; s.lensBlueYellow = 0f
+                                    s.lensVertical = 0f; s.lensHorizontal = 0f
+                                    vm.beginProxyPreview()
+                                    s.activePanel = BottomPanel.LENS_CORRECTION_EDIT
+                                }
+                            )
+                            CircularDockButton(
+                                icon = Icons.Default.ColorLens,
+                                label = "3D LUT",
+                                onClick = {
+                                    vm.beginProxyPreview()
+                                    s.activePanel = BottomPanel.LUT_IMPORT_EDIT
+                                }
+                            )
+                            CircularDockButton(
                                 icon = Icons.Default.WbSunny,
                                 label = "Kamera",
                                 onClick = {
@@ -483,26 +504,17 @@ internal fun StudioBottomPanelHost(
                     }
                 }
 
-                BottomPanel.CAMERA_LIGHT_LIVE -> CameraLightPanel(
-                    exposure = s.camExposureVal, onExposure = { s.camExposureVal = it },
-                    shadows = s.camShadowsVal, onShadows = { s.camShadowsVal = it },
-                    highlights = s.camHighlightsVal, onHighlights = { s.camHighlightsVal = it },
-                    vibrance = s.camVibranceVal, onVibrance = { s.camVibranceVal = it },
-                    temp = s.camTempVal, onTemp = { s.camTempVal = it },
-                    tint = s.camTintVal, onTint = { s.camTintVal = it },
-                    clarity = s.camClarityVal, onClarity = { s.camClarityVal = it },
-                    dehaze = s.camDehazeVal, onDehaze = { s.camDehazeVal = it },
-                    showFine = s.showCamFineTune, onToggleFine = { s.showCamFineTune = !s.showCamFineTune },
-                    onPreview = { vm.updateProxyCameraLight(s.camExposureVal, s.camShadowsVal, s.camHighlightsVal, s.camVibranceVal, s.camTempVal, s.camTintVal, s.camClarityVal, s.camDehazeVal) },
+                BottomPanel.CAMERA_LIGHT_LIVE -> CameraRawProPanel(
+                    s = s,
+                    onPreview = { vm.updateProxyCameraRawJson(buildCameraRawProJson(s)) },
+                    onImportXmp = onImportXmp,
+                    onReset = {
+                        resetCameraRawProState(s)
+                        vm.resetProxyPreview()
+                    },
                     onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU },
                     onApply = {
-                        val isNeutral = abs(s.camExposureVal) < 0.02f &&
-                            s.camShadowsVal.roundToInt() == 0 && s.camHighlightsVal.roundToInt() == 0 &&
-                            s.camVibranceVal.roundToInt() == 0 && s.camTempVal.roundToInt() == 0 &&
-                            s.camTintVal.roundToInt() == 0 && s.camClarityVal.roundToInt() == 0 &&
-                            s.camDehazeVal.roundToInt() == 0
-                        if (isNeutral) onClearAdjustGpuPreviewOnly()
-                        else vm.applyCameraLight(s.camExposureVal, s.camShadowsVal, s.camHighlightsVal, s.camVibranceVal, s.camTempVal, s.camTintVal, s.camClarityVal, s.camDehazeVal)
+                        vm.applyCameraRawJson(buildCameraRawProJson(s))
                         s.activePanel = BottomPanel.DOCK
                     }
                 )
@@ -624,35 +636,88 @@ internal fun StudioBottomPanelHost(
                     }
                 )
 
-                BottomPanel.COLOR_BAL_LIVE -> ColorBalanceLivePanel(
-                    cr = s.cbCyanRedVal,
-                    mg = s.cbMagentaGreenVal,
-                    yb = s.cbYellowBlueVal,
-                    onChange = { c, m, y ->
-                        s.cbCyanRedVal = c
-                        s.cbMagentaGreenVal = m
-                        s.cbYellowBlueVal = y
-                        vm.updateProxyAdjustment("colorBalance", """{"midtones":[${c.roundToInt()},${m.roundToInt()},${y.roundToInt()}],"preserveLuminosity":true}""")
-                    },
-                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU },
-                    onApply = {
-                        val cr = s.cbCyanRedVal.roundToInt()
-                        val mg = s.cbMagentaGreenVal.roundToInt()
-                        val yb = s.cbYellowBlueVal.roundToInt()
-                        if (cr == 0 && mg == 0 && yb == 0) onClearAdjustGpuPreviewOnly()
-                        else vm.applyAdjustmentOnce("colorBalance", """{"midtones":[$cr,$mg,$yb],"preserveLuminosity":true}""", "Renk Dengesi")
-                        s.activePanel = BottomPanel.DOCK
+                BottomPanel.COLOR_BAL_LIVE -> {
+                    fun buildCbJson(): String =
+                        """{"shadows":[${s.cbShadowCR.roundToInt()},${s.cbShadowMG.roundToInt()},${s.cbShadowYB.roundToInt()}],"midtones":[${s.cbCyanRedVal.roundToInt()},${s.cbMagentaGreenVal.roundToInt()},${s.cbYellowBlueVal.roundToInt()}],"highlights":[${s.cbHighCR.roundToInt()},${s.cbHighMG.roundToInt()},${s.cbHighYB.roundToInt()}],"preserveLuminosity":true}"""
+                    val curCR = when (s.cbToneIdx) { 0 -> s.cbShadowCR; 2 -> s.cbHighCR; else -> s.cbCyanRedVal }
+                    val curMG = when (s.cbToneIdx) { 0 -> s.cbShadowMG; 2 -> s.cbHighMG; else -> s.cbMagentaGreenVal }
+                    val curYB = when (s.cbToneIdx) { 0 -> s.cbShadowYB; 2 -> s.cbHighYB; else -> s.cbYellowBlueVal }
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        BottomEditorHeader(
+                            title = "Renk Dengesi (3 Ton)",
+                            subtitle = "Gölgeler, Orta Tonlar ve Aydınlıklar ayrı ayrı",
+                            applyLabel = "Uygula",
+                            onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU },
+                            onApply = {
+                                vm.applyAdjustmentOnce("colorBalance", buildCbJson(), "Renk dengesi uygulandı")
+                                s.activePanel = BottomPanel.DOCK
+                            }
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("Gölgeler", "Orta Tonlar", "Aydınlıklar").forEachIndexed { idx, lbl ->
+                                FilterChip(
+                                    selected = s.cbToneIdx == idx,
+                                    onClick = { s.cbToneIdx = idx },
+                                    label = { Text(lbl, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        CompactSliderRow("Cyan / Kırmızı", "${curCR.roundToInt()}", curCR, -100f..100f, defaultValue = 0f) {
+                            when (s.cbToneIdx) { 0 -> s.cbShadowCR = it; 2 -> s.cbHighCR = it; else -> s.cbCyanRedVal = it }
+                            vm.updateProxyAdjustment("colorBalance", buildCbJson())
+                        }
+                        CompactSliderRow("Magenta / Yeşil", "${curMG.roundToInt()}", curMG, -100f..100f, defaultValue = 0f) {
+                            when (s.cbToneIdx) { 0 -> s.cbShadowMG = it; 2 -> s.cbHighMG = it; else -> s.cbMagentaGreenVal = it }
+                            vm.updateProxyAdjustment("colorBalance", buildCbJson())
+                        }
+                        CompactSliderRow("Sarı / Mavi", "${curYB.roundToInt()}", curYB, -100f..100f, defaultValue = 0f) {
+                            when (s.cbToneIdx) { 0 -> s.cbShadowYB = it; 2 -> s.cbHighYB = it; else -> s.cbYellowBlueVal = it }
+                            vm.updateProxyAdjustment("colorBalance", buildCbJson())
+                        }
                     }
-                )
-
+                }
                 BottomPanel.CURVES_LIVE -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        fun buildRgbCurvesJson(): String {
+                            fun fmtPts(pts: List<Float>): String {
+                                val xs = listOf(0, 64, 128, 192, 255)
+                                return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
+                            }
+                            val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                            return """{"points":${fmtPts(mPts)},"red":${fmtPts(s.curveRedPts)},"green":${fmtPts(s.curveGreenPts)},"blue":${fmtPts(s.curveBluePts)}}"""
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("RGB", "Kırmızı", "Yeşil", "Mavi").forEachIndexed { idx, lbl ->
+                                FilterChip(
+                                    selected = s.curveChannelIdx == idx,
+                                    onClick = { s.curveChannelIdx = idx },
+                                    label = { Text(lbl, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                        if (s.curveChannelIdx > 0) {
+                            val chPts = when (s.curveChannelIdx) { 1 -> s.curveRedPts; 2 -> s.curveGreenPts; else -> s.curveBluePts }
+                            fun setCh(i: Int, v: Float) {
+                                val next = chPts.toMutableList().apply { this[i] = v }
+                                when (s.curveChannelIdx) { 1 -> s.curveRedPts = next; 2 -> s.curveGreenPts = next; else -> s.curveBluePts = next }
+                                vm.updateProxyAdjustment("curves", buildRgbCurvesJson())
+                            }
+                            CompactSliderRow("Gölgeler", "${(chPts[1] * 255).roundToInt()}", chPts[1], 0f..1f, defaultValue = 0.25f) { setCh(1, it) }
+                            CompactSliderRow("Orta Ton", "${(chPts[2] * 255).roundToInt()}", chPts[2], 0f..1f, defaultValue = 0.50f) { setCh(2, it) }
+                            CompactSliderRow("Aydınlık", "${(chPts[3] * 255).roundToInt()}", chPts[3], 0f..1f, defaultValue = 0.75f) { setCh(3, it) }
+                        }
                         BottomEditorHeader(
-                            title = "Eğriler (Curves)",
-                            subtitle = if (s.curveOverlayExpanded) "Fotoğraf üzerindeki 5 noktayı parmağınla sürükle" else "Elle kontrol için sol kutucuğa dokun",
+                            title = "Eğriler (RGB Curves)",
+                            subtitle = if (s.curveOverlayExpanded) "Fotoğraf üzerindeki 5 noktayı parmağınla sürükle" else "RGB / R / G / B kanallarını bağımsız ayarla",
                             applyLabel = "Uygula",
                             onClose = {
                                 s.curveOverlayExpanded = false
@@ -807,6 +872,8 @@ internal fun StudioBottomPanelHost(
                     cropScrollState = cropScrollState,
                     effectScrollState = effectScrollState,
                     onImportFont = onImportFont,
+                    onImportXmp = onImportXmp,
+                    onImportLut = onImportLut,
                     onPushGpuMirrorPreview = onPushGpuMirrorPreview,
                     onFitToSafeArea = onFitToSafeArea,
                     onClearGpuPreview = onClearGpuPreview,
@@ -830,6 +897,8 @@ private fun StudioBottomPanelHostPart2(
     cropScrollState: ScrollState,
     effectScrollState: ScrollState,
     onImportFont: () -> Unit,
+    onImportXmp: () -> Unit,
+    onImportLut: () -> Unit,
     onPushGpuMirrorPreview: (MirrorModeOption, Float) -> Unit,
     onFitToSafeArea: (Int, BottomPanel) -> Unit,
     onClearGpuPreview: () -> Unit,
@@ -1683,7 +1752,12 @@ private fun StudioBottomPanelHostPart2(
                                 s.fxOpacityVal = it
                                 pushFxLive()
                             }
-                            if (s.fxKind == "dropShadow" || s.fxKind == "innerShadow" || s.fxKind == "gradientOverlay") {
+                            if (s.fxKind == "gradientOverlay") {
+                                CompactSliderRow("Açı", "${s.fxDistanceVal.roundToInt()}°", s.fxDistanceVal, 0f..360f, defaultValue = 90f) {
+                                    s.fxDistanceVal = it
+                                    pushFxLive()
+                                }
+                            } else if (s.fxKind == "dropShadow" || s.fxKind == "innerShadow") {
                                 CompactSliderRow("Uzaklık", "${s.fxDistanceVal.roundToInt()}px", s.fxDistanceVal, 0f..80f, defaultValue = 12f) {
                                     s.fxDistanceVal = it
                                     pushFxLive()
@@ -1756,6 +1830,38 @@ private fun StudioBottomPanelHostPart2(
                         }
                     )
                 }
+                BottomPanel.LENS_CORRECTION_EDIT -> LensCorrectionPanel(
+                    s = s,
+                    onPreview = { vm.updateProxyLensCorrection(s.lensDistortion, s.lensVignette, s.lensRedCyan, s.lensBlueYellow, s.lensVertical, s.lensHorizontal) },
+                    onReset = {
+                        s.lensDistortion = 0f; s.lensVignette = 0f; s.lensRedCyan = 0f
+                        s.lensBlueYellow = 0f; s.lensVertical = 0f; s.lensHorizontal = 0f
+                        vm.resetProxyPreview()
+                    },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = {
+                        vm.applyLensCorrection(s.lensDistortion, s.lensVignette, s.lensRedCyan, s.lensBlueYellow, s.lensVertical, s.lensHorizontal)
+                        s.activePanel = BottomPanel.DOCK
+                    }
+                )
+                BottomPanel.LUT_IMPORT_EDIT -> CubeLutPanel(
+                    fileName = s.lutFileName,
+                    opacityPct = s.lutOpacity,
+                    onPickFile = onImportLut,
+                    onOpacity = {
+                        s.lutOpacity = it
+                        if (s.lutText.isNotBlank()) vm.updateProxyColorLookup(s.lutFileName, s.lutText, it)
+                    },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onApply = {
+                        if (s.lutText.isNotBlank()) {
+                            vm.applyColorLookup(s.lutFileName, s.lutText, s.lutOpacity)
+                        } else {
+                            vm.endProxyPreview()
+                        }
+                        s.activePanel = BottomPanel.DOCK
+                    }
+                )
                 else -> Unit
             }
 
