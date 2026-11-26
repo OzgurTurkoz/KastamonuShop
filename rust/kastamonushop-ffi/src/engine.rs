@@ -799,7 +799,7 @@ fn ensure_proxy_preview_locked(guard: &mut EngineCore) -> Result<(), EngineError
     };
     let real_w = real_doc.size.width.max(1);
     let real_h = real_doc.size.height.max(1);
-    let max_proxy = 512u32;
+    let max_proxy = 384u32;
     let scale = (max_proxy as f32 / real_w.max(real_h) as f32).min(1.0);
     let pw = ((real_w as f32 * scale).round() as u32).clamp(1, max_proxy);
     let ph = ((real_h as f32 * scale).round() as u32).clamp(1, max_proxy);
@@ -2651,7 +2651,7 @@ impl KastamonuEngine {
         };
         let real_w = real_doc.size.width.max(1);
         let real_h = real_doc.size.height.max(1);
-        let max_proxy = 512u32;
+        let max_proxy = 384u32;
         let scale = (max_proxy as f32 / real_w.max(real_h) as f32).min(1.0);
         let pw = ((real_w as f32 * scale).round() as u32).clamp(1, max_proxy);
         let ph = ((real_h as f32 * scale).round() as u32).clamp(1, max_proxy);
@@ -2804,7 +2804,7 @@ impl KastamonuEngine {
         };
         let real_w = real_doc.size.width.max(1);
         let real_h = real_doc.size.height.max(1);
-        let max_proxy = 512u32;
+        let max_proxy = 384u32;
         let scale = (max_proxy as f32 / real_w.max(real_h) as f32).min(1.0);
         let pw = ((real_w as f32 * scale).round() as u32).clamp(1, max_proxy);
         let ph = ((real_h as f32 * scale).round() as u32).clamp(1, max_proxy);

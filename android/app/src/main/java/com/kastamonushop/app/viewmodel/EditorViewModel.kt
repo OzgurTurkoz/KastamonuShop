@@ -243,9 +243,42 @@ class EditorViewModel : ViewModel() {
             val warpVDist: Float
         ) : ProxyJob()
         data class PuppetWarp(val pins: List<PuppetPinPoint>, val mode: String, val density: String, val expansion: Float) : ProxyJob()
+        data class BlendIf(val thisBlack: Int, val thisWhite: Int, val underBlack: Int, val underWhite: Int, val feather: Int) : ProxyJob()
+        data class CameraRawJson(val paramsJson: String) : ProxyJob()
+        data class LensCorrection(
+            val distortion: Float,
+            val vignetteAmount: Float,
+            val redCyan: Float,
+            val blueYellow: Float,
+            val vertical: Float,
+            val horizontal: Float
+        ) : ProxyJob()
+        data class ColorLookup(val fileName: String, val lutText: String, val opacity: Float) : ProxyJob()
+        data class LayerStyleStack(val effectsJson: String) : ProxyJob()
     }
-    private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
+    private data class StampedProxyJob(val gen: Long, val job: ProxyJob)
+    private val proxyGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+    private val pendingProxyJob = AtomicReference<StampedProxyJob?>(null)
+    @Volatile
+    private var lastEnqueuedProxyJob: ProxyJob? = null
     private val proxyDrainScheduled = AtomicBoolean(false)
+
+    private fun invalidateProxyQueue(): Long {
+        val g = proxyGeneration.incrementAndGet()
+        pendingProxyJob.set(null)
+        lastEnqueuedProxyJob = null
+        return g
+    }
+
+    private fun enqueueProxyJob(job: ProxyJob) {
+        if (job == lastEnqueuedProxyJob) return
+        lastEnqueuedProxyJob = job
+        val gen = proxyGeneration.get()
+        pendingProxyJob.set(StampedProxyJob(gen, job))
+        if (proxyDrainScheduled.compareAndSet(false, true)) {
+            paintExecutor.execute { drainPendingProxyJobs() }
+        }
+    }
 
     @Volatile
     private var lastWandTapDoc: Pair<Float, Float>? = null
@@ -510,16 +543,13 @@ class EditorViewModel : ViewModel() {
         warpHDist: Float,
         warpVDist: Float
     ) {
-        pendingProxyJob.set(
+        enqueueProxyJob(
             ProxyJob.TextPreview(
                 editLayerId, text, x, y, sizePx, colorHex, align, fontFamily,
                 bold, italic, underline, strikethrough, caps, hScale, vScale,
                 tracking, lineHeight, vertical, warpStyle, warpBend, warpHDist, warpVDist
             )
         )
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
     }
 
     fun createTextSelectionMask(
@@ -542,7 +572,7 @@ class EditorViewModel : ViewModel() {
         warpHDist: Float,
         warpVDist: Float
     ) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         paintExecutor.execute {
             runCatching {
@@ -582,10 +612,7 @@ class EditorViewModel : ViewModel() {
         density: String = "normal",
         expansion: Float = 2f
     ) {
-        pendingProxyJob.set(ProxyJob.PuppetWarp(pins, mode, density, expansion))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.PuppetWarp(pins, mode, density, expansion))
     }
 
     fun fetchPuppetMeshSegments(
@@ -611,7 +638,7 @@ class EditorViewModel : ViewModel() {
         density: String = "normal",
         expansion: Float = 2f
     ) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -630,7 +657,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun resizeImage(width: Int, height: Int, resample: String) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -698,10 +725,7 @@ class EditorViewModel : ViewModel() {
         paramY: Float,
         variant: String
     ) {
-        pendingProxyJob.set(ProxyJob.LightDistort(kind, amount, detail, paramX, paramY, variant))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.LightDistort(kind, amount, detail, paramX, paramY, variant))
     }
 
     fun applyLightDistort(
@@ -713,7 +737,7 @@ class EditorViewModel : ViewModel() {
         variant: String,
         label: String
     ) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -751,14 +775,11 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateProxyGalleryFilter(kind: String, amount: Float, detail: Float) {
-        pendingProxyJob.set(ProxyJob.GalleryFilter(kind, amount, detail))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.GalleryFilter(kind, amount, detail))
     }
 
     fun applyGalleryFilter(kind: String, amount: Float, detail: Float, label: String) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -1228,52 +1249,42 @@ class EditorViewModel : ViewModel() {
     // --- 60 FPS Exact Proxy Preview Engine ("Genel Güç") ---
     fun beginLayerProxyPreview() {
         dismissCompareOriginal()
-        pendingProxyJob.set(null)
+        val gen = invalidateProxyQueue()
         paintExecutor.execute {
+            if (gen != proxyGeneration.get()) return@execute
             runCatching {
                 engine.beginLayerProxyPreview()
-                NativeSurfaceBridge.nativeRenderFrame()
+                if (gen == proxyGeneration.get()) NativeSurfaceBridge.nativeRenderFrame()
             }
         }
     }
 
     fun updateProxyLayerEffect(kind: String, colorHex: String, size: Float, opacity: Float, distance: Float) {
-        pendingProxyJob.set(ProxyJob.LayerFx(kind, colorHex, size, opacity, distance))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.LayerFx(kind, colorHex, size, opacity, distance))
     }
 
     fun beginProxyPreview() {
         dismissCompareOriginal()
-        pendingProxyJob.set(null)
+        val gen = invalidateProxyQueue()
         paintExecutor.execute {
+            if (gen != proxyGeneration.get()) return@execute
             runCatching {
                 engine.beginProxyPreview()
-                NativeSurfaceBridge.nativeRenderFrame()
+                if (gen == proxyGeneration.get()) NativeSurfaceBridge.nativeRenderFrame()
             }
         }
     }
 
     fun updateProxyAdjustment(kind: String, paramsJson: String) {
-        pendingProxyJob.set(ProxyJob.Adjust(kind, paramsJson))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.Adjust(kind, paramsJson))
     }
 
     fun updateProxyBlur(radius: Float) {
-        pendingProxyJob.set(ProxyJob.Blur(radius))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.Blur(radius))
     }
 
     fun updateProxySharpen(amount: Float) {
-        pendingProxyJob.set(ProxyJob.Sharpen(amount))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.Sharpen(amount))
     }
 
     private fun drainPendingProxyJobs() {
@@ -1281,13 +1292,16 @@ class EditorViewModel : ViewModel() {
             _uiState.update { it.copy(compareOriginal = false) }
         }
         while (true) {
-            val job = pendingProxyJob.getAndSet(null)
-            if (job == null) {
+            val stamped = pendingProxyJob.getAndSet(null)
+            if (stamped == null) {
                 proxyDrainScheduled.set(false)
                 if (pendingProxyJob.get() == null) return
                 if (!proxyDrainScheduled.compareAndSet(false, true)) return
                 continue
             }
+            // Drop stale preview jobs immediately if user closed/switched panel or committed Apply
+            if (stamped.gen != proxyGeneration.get()) continue
+            val job = stamped.job
             runCatching {
                 when (job) {
                     is ProxyJob.Adjust -> engine.updateProxyAdjustment(job.kind, job.paramsJson)
@@ -1319,8 +1333,24 @@ class EditorViewModel : ViewModel() {
                         job.warpStyle, job.warpBend, job.warpHDist, job.warpVDist
                     )
                     is ProxyJob.PuppetWarp -> engine.updateProxyPuppetWarp(job.pins, job.mode, job.density, job.expansion)
+                    is ProxyJob.BlendIf -> engine.updateProxyBlendIf(
+                        job.thisBlack.coerceIn(0, 255).toUByte(),
+                        job.thisWhite.coerceIn(0, 255).toUByte(),
+                        job.underBlack.coerceIn(0, 255).toUByte(),
+                        job.underWhite.coerceIn(0, 255).toUByte(),
+                        job.feather.coerceIn(0, 80).toUByte()
+                    )
+                    is ProxyJob.CameraRawJson -> engine.updateProxyCameraRawJson(job.paramsJson)
+                    is ProxyJob.LensCorrection -> engine.updateProxyLensCorrection(
+                        job.distortion, job.vignetteAmount, job.redCyan,
+                        job.blueYellow, job.vertical, job.horizontal
+                    )
+                    is ProxyJob.ColorLookup -> engine.updateProxyColorLookup(job.fileName, job.lutText, job.opacity)
+                    is ProxyJob.LayerStyleStack -> engine.updateProxyLayerStyleStack(job.effectsJson)
                 }
-                NativeSurfaceBridge.nativeRenderFrame()
+                if (stamped.gen == proxyGeneration.get()) {
+                    NativeSurfaceBridge.nativeRenderFrame()
+                }
             }
         }
     }
@@ -1336,10 +1366,7 @@ class EditorViewModel : ViewModel() {
         clarity: Float,
         dehaze: Float
     ) {
-        pendingProxyJob.set(ProxyJob.CameraLight(exposure, shadows, highlights, vibrance, temperature, tint, clarity, dehaze))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.CameraLight(exposure, shadows, highlights, vibrance, temperature, tint, clarity, dehaze))
     }
 
     fun applyCameraLight(
@@ -1352,7 +1379,7 @@ class EditorViewModel : ViewModel() {
         clarity: Float,
         dehaze: Float
     ) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -1382,10 +1409,7 @@ class EditorViewModel : ViewModel() {
         endHex: String,
         opacity: Float
     ) {
-        pendingProxyJob.set(ProxyJob.Gradient(fromX, fromY, toX, toY, style, startHex, endHex, opacity))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.Gradient(fromX, fromY, toX, toY, style, startHex, endHex, opacity))
     }
 
     fun applyGradientFill(
@@ -1398,7 +1422,7 @@ class EditorViewModel : ViewModel() {
         endHex: String,
         opacity: Float
     ) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -1429,12 +1453,9 @@ class EditorViewModel : ViewModel() {
         cornerRadius: Float,
         sides: Int
     ) {
-        pendingProxyJob.set(
+        enqueueProxyJob(
             ProxyJob.Shape(kind, x0, y0, x1, y1, fillHex, strokeHex, strokeWidth, cornerRadius, sides.coerceIn(3, 12).toUInt())
         )
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
     }
 
     fun createShapeLayer(
@@ -1449,7 +1470,7 @@ class EditorViewModel : ViewModel() {
         cornerRadius: Float,
         sides: Int
     ) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -1476,7 +1497,7 @@ class EditorViewModel : ViewModel() {
 
     fun beginLiquify() {
         dismissCompareOriginal()
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         pendingLiquifyPt.set(null)
         paintExecutor.execute {
             runCatching {
@@ -1595,7 +1616,7 @@ class EditorViewModel : ViewModel() {
 
     fun applyAutoEnhance(mode: String, label: String) {
         dismissCompareOriginal()
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
@@ -1613,14 +1634,11 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateProxyCinemaLook(preset: String, intensity: Float, vignette: Float, grain: Float) {
-        pendingProxyJob.set(ProxyJob.CinemaLook(preset, intensity, vignette, grain))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.CinemaLook(preset, intensity, vignette, grain))
     }
 
     fun applyCinemaLook(preset: String, intensity: Float, vignette: Float, grain: Float) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -1639,14 +1657,11 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateProxyMotionBlur(angle: Float, distance: Float) {
-        pendingProxyJob.set(ProxyJob.MotionBlur(angle, distance))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.MotionBlur(angle, distance))
     }
 
     fun applyMotionBlur(angle: Float, distance: Float) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -1665,14 +1680,11 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateProxyRadialBlur(amount: Float, method: String) {
-        pendingProxyJob.set(ProxyJob.RadialBlur(amount, method))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.RadialBlur(amount, method))
     }
 
     fun applyRadialBlur(amount: Float, method: String) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -1693,7 +1705,7 @@ class EditorViewModel : ViewModel() {
 
     fun smartRemoveBackground() {
         dismissCompareOriginal()
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
@@ -1712,7 +1724,7 @@ class EditorViewModel : ViewModel() {
 
     fun smartPortraitBlur(radius: Float = 18f) {
         dismissCompareOriginal()
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
@@ -1730,14 +1742,11 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateProxyHslMixer(h: List<Float>, s: List<Float>, l: List<Float>) {
-        pendingProxyJob.set(ProxyJob.HslMixer(h, s, l))
-        if (proxyDrainScheduled.compareAndSet(false, true)) {
-            paintExecutor.execute { drainPendingProxyJobs() }
-        }
+        enqueueProxyJob(ProxyJob.HslMixer(h, s, l))
     }
 
     fun applyHslMixer(h: List<Float>, s: List<Float>, l: List<Float>) {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
@@ -1776,17 +1785,18 @@ class EditorViewModel : ViewModel() {
 
     fun resetProxyPreview() {
         dismissCompareOriginal()
-        pendingProxyJob.set(null)
+        val gen = invalidateProxyQueue()
         paintExecutor.execute {
+            if (gen != proxyGeneration.get()) return@execute
             runCatching {
                 engine.resetProxyPreview()
-                NativeSurfaceBridge.nativeRenderFrame()
+                if (gen == proxyGeneration.get()) NativeSurfaceBridge.nativeRenderFrame()
             }
         }
     }
 
     fun endProxyPreview() {
-        pendingProxyJob.set(null)
+        invalidateProxyQueue()
         paintExecutor.execute {
             runCatching {
                 engine.endProxyPreview()
@@ -3246,18 +3256,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateProxyBlendIf(thisBlack: Int, thisWhite: Int, underBlack: Int, underWhite: Int, feather: Int) {
-        paintExecutor.execute {
-            runCatching {
-                engine.updateProxyBlendIf(
-                    thisBlack.coerceIn(0, 255).toUByte(),
-                    thisWhite.coerceIn(0, 255).toUByte(),
-                    underBlack.coerceIn(0, 255).toUByte(),
-                    underWhite.coerceIn(0, 255).toUByte(),
-                    feather.coerceIn(0, 80).toUByte()
-                )
-                NativeSurfaceBridge.nativeRenderFrame()
-            }
-        }
+        enqueueProxyJob(ProxyJob.BlendIf(thisBlack, thisWhite, underBlack, underWhite, feather))
     }
 
     fun applyBlendIf(thisBlack: Int, thisWhite: Int, underBlack: Int, underWhite: Int, feather: Int) {
@@ -3293,15 +3292,11 @@ class EditorViewModel : ViewModel() {
     // ==================== v1.6.0: LIGHTROOM RAW & COLOR PRO ====================
 
     fun updateProxyCameraRawJson(paramsJson: String) {
-        paintExecutor.execute {
-            runCatching {
-                engine.updateProxyCameraRawJson(paramsJson)
-                NativeSurfaceBridge.nativeRenderFrame()
-            }
-        }
+        enqueueProxyJob(ProxyJob.CameraRawJson(paramsJson))
     }
 
     fun applyCameraRawJson(paramsJson: String) {
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
@@ -3342,12 +3337,17 @@ class EditorViewModel : ViewModel() {
         vertical: Float,
         horizontal: Float
     ) {
-        paintExecutor.execute {
-            runCatching {
-                engine.updateProxyLensCorrection(distortion, vignetteAmount, redCyan, blueYellow, vertical, horizontal)
-                NativeSurfaceBridge.nativeRenderFrame()
-            }
-        }
+        // Quantize to integer steps matching UI display so sub-pixel slider jitter never floods Rust
+        enqueueProxyJob(
+            ProxyJob.LensCorrection(
+                kotlin.math.round(distortion),
+                kotlin.math.round(vignetteAmount),
+                kotlin.math.round(redCyan),
+                kotlin.math.round(blueYellow),
+                kotlin.math.round(vertical),
+                kotlin.math.round(horizontal)
+            )
+        )
     }
 
     fun applyLensCorrection(
@@ -3358,6 +3358,7 @@ class EditorViewModel : ViewModel() {
         vertical: Float,
         horizontal: Float
     ) {
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
@@ -3391,15 +3392,12 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateProxyColorLookup(fileName: String, lutText: String, opacityPct: Float) {
-        paintExecutor.execute {
-            runCatching {
-                engine.updateProxyColorLookup(fileName, lutText, (opacityPct / 100f).coerceIn(0f, 1f))
-                NativeSurfaceBridge.nativeRenderFrame()
-            }
-        }
+        val op = (kotlin.math.round(opacityPct) / 100f).coerceIn(0f, 1f)
+        enqueueProxyJob(ProxyJob.ColorLookup(fileName, lutText, op))
     }
 
     fun applyColorLookup(fileName: String, lutText: String, opacityPct: Float) {
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
@@ -3587,15 +3585,11 @@ class EditorViewModel : ViewModel() {
     // ==================== v1.7.3 MULTI-FX LAYER STYLE STUDIO ====================
 
     fun updateProxyLayerStyleStack(effectsJson: String) {
-        paintExecutor.execute {
-            runCatching {
-                engine.updateProxyLayerStyleStack(effectsJson)
-                NativeSurfaceBridge.nativeRenderFrame()
-            }
-        }
+        enqueueProxyJob(ProxyJob.LayerStyleStack(effectsJson))
     }
 
     fun applyLayerStyleStack(effectsJson: String) {
+        invalidateProxyQueue()
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {

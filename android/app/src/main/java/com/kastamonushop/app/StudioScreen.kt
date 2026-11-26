@@ -2117,6 +2117,51 @@ fun StonebridgeStudioScreen(
             }
         }
 
+        // Floating 1-Tap Canvas Controls (Ortala + Tek Parmak Kaydır) — always accessible without opening Diğer menu
+        if (!s.showLayers) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 72.dp, end = 10.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xCC181C26),
+                tonalElevation = 4.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = { fitToSafeArea(s.pendingQuarterTurns, s.activePanel) },
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.CenterFocusStrong,
+                            contentDescription = "Fotoğrafı Ekrana Ortala",
+                            tint = Color(0xFFE3E8F4),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { s.singleFingerPanMode = !s.singleFingerPanMode },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(if (s.singleFingerPanMode) Color(0xFF4F9CFF) else Color.Transparent)
+                    ) {
+                        Icon(
+                            Icons.Default.PanTool,
+                            contentDescription = "Tek Parmak Kaydır",
+                            tint = if (s.singleFingerPanMode) Color.White else Color(0xFFB8C0D4),
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+            }
+        }
+
         // Right Floating Layers Drawer
         if (s.showLayers) {
             val activeLayer = state.layers.firstOrNull { it.isActive }
