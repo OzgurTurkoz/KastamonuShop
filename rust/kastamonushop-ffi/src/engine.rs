@@ -8000,7 +8000,7 @@ mod v08_automated_tests {
                 PuppetPinPoint { rotate_deg: None, depth: 0, src_x: 24.0, src_y: 48.0, dst_x: 24.0, dst_y: 48.0 },
                 PuppetPinPoint { rotate_deg: None, depth: 0, src_x: 72.0, src_y: 48.0, dst_x: 72.0, dst_y: 62.0 },
             ];
-            eng.apply_puppet_warp(pins, mode.into())
+            eng.apply_puppet_warp(pins, mode.into(), "normal".into(), 2.0)
                 .unwrap_or_else(|e| panic!("puppetWarp mode {mode} failed: {e:?}"));
         }
     }
