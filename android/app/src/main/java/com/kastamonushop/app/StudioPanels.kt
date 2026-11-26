@@ -1614,6 +1614,8 @@ internal fun SelectMenuPanel(
     vm: EditorViewModel,
     state: EditorUiState,
     selectScrollState: androidx.compose.foundation.ScrollState,
+    onOpenContentAwareFill: () -> Unit = {},
+    onOpenContentAwareMove: () -> Unit = {},
     onClose: () -> Unit
 ) {
     Column(
@@ -1663,7 +1665,9 @@ internal fun SelectMenuPanel(
                 ProPill(selected = false, onClick = { vm.layerViaCopy() }, label = { Text("Katmana Kopyala", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = { vm.selectInverse() }, label = { Text("Ters Çevir", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = { vm.featherSelection(6f) }, label = { Text("Yumuşat", fontSize = 10.sp) })
-                ProPill(selected = false, onClick = { vm.contentAwareRemove() }, label = { Text("Nesneyi Sil", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = onOpenContentAwareFill, label = { Text("İçerik Dolgu", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = onOpenContentAwareMove, label = { Text("Akıllı Taşı", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { vm.contentAwareRemove() }, label = { Text("Hızlı Sil", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = { vm.clearSelection() }, label = { Text("Temizle", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = { vm.revealSelectionMask() }, label = { Text("Maskele", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = { vm.deselect() }, label = { Text("Bırak", fontSize = 10.sp) })

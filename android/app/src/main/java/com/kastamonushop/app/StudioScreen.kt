@@ -519,6 +519,7 @@ fun StonebridgeStudioScreen(
                     isRetouchActive = {
                         val t = vm.uiState.value.activeTool
                         t == ActiveTool.SPOT_HEAL ||
+                            t == ActiveTool.REMOVE_TOOL ||
                             t == ActiveTool.PATCH ||
                             t == ActiveTool.SELECT_QUICK ||
                             t == ActiveTool.SELECT_BRUSH_ADD ||
@@ -552,6 +553,8 @@ fun StonebridgeStudioScreen(
                         val t = vm.uiState.value.activeTool
                         if (t == ActiveTool.SELECT_QUICK || t == ActiveTool.SELECT_BRUSH_ADD || t == ActiveTool.SELECT_BRUSH_SUB) {
                             vm.applySelectionStroke(samples)
+                        } else if (t == ActiveTool.REMOVE_TOOL) {
+                            vm.applyRemoveTool(samples)
                         } else if (t == ActiveTool.PATCH && samples.size >= 2) {
                             val dx = (samples.last().x - samples.first().x).roundToInt()
                             val dy = (samples.last().y - samples.first().y).roundToInt()
@@ -762,6 +765,7 @@ fun StonebridgeStudioScreen(
         if (s.retouchTrailPoints.isNotEmpty()) {
             val viewRef = s.canvasViewRef
             val trailColor = when (state.activeTool) {
+                ActiveTool.REMOVE_TOOL -> Color(0x99FF2EA6)
                 ActiveTool.SPOT_HEAL -> Color(0x88FF5A5F)
                 ActiveTool.SELECT_BRUSH_SUB -> Color(0x88FF4D4F)
                 ActiveTool.SELECT_QUICK -> Color(0x882ED573)
@@ -2113,6 +2117,59 @@ fun StonebridgeStudioScreen(
                 ) {
                     Icon(Icons.Default.VisibilityOff, contentDescription = null, tint = Color(0xFFFFD600), modifier = Modifier.size(16.dp))
                     Text("Tüm katmanlar gizli — Göster", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+
+        // Interactive On-Canvas Drag Overlay for Content-Aware Move / Extend (v1.8.0)
+        if (s.activePanel == BottomPanel.CONTENT_AWARE_MOVE_EDIT) {
+            val view = s.canvasViewRef
+            val bounds = state.selectionBounds
+            if (view != null && bounds != null) {
+                val _tick = s.cameraTick
+                val z = view.getCurrentZoom().coerceAtLeast(0.05f)
+                val (ox0, oy0) = view.docToScreen(bounds.x0.toFloat(), bounds.y0.toFloat())
+                val (ox1, oy1) = view.docToScreen(bounds.x1.toFloat(), bounds.y1.toFloat())
+                val cxDoc = (bounds.x0 + bounds.x1) * 0.5f + s.camMoveDx
+                val cyDoc = (bounds.y0 + bounds.y1) * 0.5f + s.camMoveDy
+                val wDoc = (bounds.x1 - bounds.x0).coerceAtLeast(8) * (s.camMoveScale / 100f)
+                val hDoc = (bounds.y1 - bounds.y0).coerceAtLeast(8) * (s.camMoveScale / 100f)
+                val (tCx, tCy) = view.docToScreen(cxDoc, cyDoc)
+                val hw = wDoc * z * 0.5f
+                val hh = hDoc * z * 0.5f
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(bounds, z) {
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                s.camMoveDx += dragAmount.x / z
+                                s.camMoveDy += dragAmount.y / z
+                            }
+                        }
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        // Original selection dashed box
+                        drawRect(
+                            color = Color(0x88FFFFFF),
+                            topLeft = Offset(ox0, oy0),
+                            size = Size((ox1 - ox0).coerceAtLeast(2f), (oy1 - oy0).coerceAtLeast(2f)),
+                            style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)))
+                        )
+                        // Destination box (rotated & scaled around destination center)
+                        val rad = Math.toRadians(s.camMoveRotate.toDouble())
+                        val cosR = kotlin.math.cos(rad).toFloat()
+                        val sinR = kotlin.math.sin(rad).toFloat()
+                        fun rotPt(lx: Float, ly: Float) = Offset(tCx + lx * cosR - ly * sinR, tCy + lx * sinR + ly * cosR)
+                        val p0 = rotPt(-hw, -hh); val p1 = rotPt(hw, -hh)
+                        val p2 = rotPt(hw, hh); val p3 = rotPt(-hw, hh)
+                        val quad = Path().apply { moveTo(p0.x, p0.y); lineTo(p1.x, p1.y); lineTo(p2.x, p2.y); lineTo(p3.x, p3.y); close() }
+                        val accent = if (s.camMoveMode == "extend") Color(0xFF2ED573) else Color(0xFF4F9CFF)
+                        drawPath(quad, color = accent.copy(alpha = 0.16f))
+                        drawPath(quad, color = accent, style = Stroke(width = 3f))
+                        drawLine(accent.copy(alpha = 0.7f), Offset((ox0 + ox1) * 0.5f, (oy0 + oy1) * 0.5f), Offset(tCx, tCy), strokeWidth = 2f)
+                        drawCircle(accent, radius = 7f, center = Offset(tCx, tCy))
+                    }
                 }
             }
         }

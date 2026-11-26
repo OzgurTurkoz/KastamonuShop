@@ -178,7 +178,34 @@ internal fun LeftBrushSidebar(
                                     vm.updateWandTolerance(tol)
                                     activeDragBadge = "Tolerans: ${tol.roundToInt()}"
                                 }
-                                ActiveTool.RED_EYE -> {
+                                ActiveTool.REMOVE_TOOL -> {
+                    Text(
+                        "Silmek istediğin nesnenin üstünü boya veya etrafını halka içine al.",
+                        color = Color(0xFF9AA4BD),
+                        fontSize = 11.sp
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ProPill(
+                            selected = state.removeCloseLoops,
+                            onClick = { vm.updateRemoveToolSettings(closeLoops = !state.removeCloseLoops) },
+                            label = { Text("Halkayı Kapat", fontSize = 11.sp) }
+                        )
+                        ProPill(
+                            selected = state.removeSampleAllLayers,
+                            onClick = { vm.updateRemoveToolSettings(sampleAllLayers = !state.removeSampleAllLayers) },
+                            label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
+                        )
+                        ProPill(
+                            selected = state.removeNewLayer,
+                            onClick = { vm.updateRemoveToolSettings(newLayer = !state.removeNewLayer) },
+                            label = { Text("Yeni Katman", fontSize = 11.sp) }
+                        )
+                    }
+                }
+                ActiveTool.RED_EYE -> {
                                     val dk = (10f + f * 90f).coerceIn(10f, 100f)
                                     vm.updateRedEyeParams(darken = dk)
                                     activeDragBadge = "Karartma: %${dk.roundToInt()}"
@@ -418,6 +445,9 @@ internal fun CompactRetouchBottomBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            SlimToolChip(Icons.Default.AutoFixHigh, "Kaldır", state.activeTool == ActiveTool.REMOVE_TOOL) {
+                vm.setTool(ActiveTool.REMOVE_TOOL)
+            }
             SlimToolChip(Icons.Default.Healing, "Leke", state.activeTool == ActiveTool.SPOT_HEAL) {
                 vm.setTool(ActiveTool.SPOT_HEAL)
             }
@@ -557,6 +587,7 @@ internal fun ToolSettingsPopoverCard(
                         ActiveTool.COLOR_REPLACE -> "Renk Değiştirici"
                         ActiveTool.BUCKET -> "Boya Kovası"
                         ActiveTool.PATCH -> "Yama Aracı"
+                        ActiveTool.REMOVE_TOOL -> "Kaldırma Aracı"
                         ActiveTool.RED_EYE -> "Kırmızı Göz"
                         ActiveTool.CLONE_STAMP -> "Klonlama Damgası"
                         else -> "Rötuş Ayarları"

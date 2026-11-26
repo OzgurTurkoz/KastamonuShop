@@ -7024,6 +7024,355 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+
+
+    // ==================== v1.8.0 CONTENT-AWARE & OBJECT REMOVAL ====================
+
+    pub fn update_proxy_content_aware_fill(
+        &self,
+        sampling: String,
+        color_adaptation: String,
+        rotation_adaptation: String,
+        scale: bool,
+        mirror: bool,
+        sample_all_layers: bool,
+        output: String,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let params = json!({
+            "sampling": if sampling == "rectangular" { "rectangular" } else { "auto" },
+            "colorAdaptation": match color_adaptation.as_str() {
+                "none" | "default" | "high" | "veryHigh" => color_adaptation.as_str(),
+                _ => "default",
+            },
+            "rotationAdaptation": match rotation_adaptation.as_str() {
+                "none" | "low" | "medium" | "high" | "full" => rotation_adaptation.as_str(),
+                _ => "none",
+            },
+            "scale": scale,
+            "mirror": mirror,
+            "sampleAllLayers": sample_all_layers,
+            "output": match output.as_str() {
+                "current" | "new" | "duplicate" => output.as_str(),
+                _ => "current",
+            },
+        });
+        let _ = ps.execute("edit.contentAwareFill", params);
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn apply_content_aware_fill(
+        &self,
+        sampling: String,
+        color_adaptation: String,
+        rotation_adaptation: String,
+        scale: bool,
+        mirror: bool,
+        sample_all_layers: bool,
+        output: String,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_mixer = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked, has_sel) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let has_sel = ds.doc().selection.is_some();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "İçerik duyarlı dolgu uygulanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked, has_sel)
+        };
+        if !has_sel {
+            return Err(EngineError::CommandFailed {
+                detail: "Önce doldurulacak alanı Seçim aracıyla seçin".into(),
+            });
+        }
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let params = json!({
+            "sampling": if sampling == "rectangular" { "rectangular" } else { "auto" },
+            "colorAdaptation": match color_adaptation.as_str() {
+                "none" | "default" | "high" | "veryHigh" => color_adaptation.as_str(),
+                _ => "default",
+            },
+            "rotationAdaptation": match rotation_adaptation.as_str() {
+                "none" | "low" | "medium" | "high" | "full" => rotation_adaptation.as_str(),
+                _ => "none",
+            },
+            "scale": scale,
+            "mirror": mirror,
+            "sampleAllLayers": sample_all_layers,
+            "output": match output.as_str() {
+                "current" | "new" | "duplicate" => output.as_str(),
+                _ => "current",
+            },
+        });
+        let res = guard.session.execute("edit.contentAwareFill", params);
+        if was_locked && output == "current" {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if output == "current" && prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_remove_tool(
+        &self,
+        points: Vec<StrokePoint>,
+        size: f32,
+        close_loops: bool,
+        sample_all_layers: bool,
+        new_layer: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Kaldırma fırçası noktası boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_mixer = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Nesne kaldırılacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let pts_json: Vec<Value> = points
+            .iter()
+            .map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64]))
+            .collect();
+        let res = guard.session.execute(
+            "paint.remove",
+            json!({
+                "points": pts_json,
+                "size": size.clamp(4.0, 400.0) as f64,
+                "hardness": 1.0,
+                "closeLoops": close_loops,
+                "sampleAllLayers": sample_all_layers,
+                "newLayer": new_layer
+            }),
+        );
+        if was_locked && !new_layer {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if !new_layer && prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_content_aware_move(
+        &self,
+        dx: f32,
+        dy: f32,
+        mode: String,
+        structure: u8,
+        color: u8,
+        scale_x: f32,
+        scale_y: f32,
+        rotate_deg: f32,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_mixer = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked, has_sel) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let has_sel = ds.doc().selection.is_some();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "İçerik duyarlı taşıma uygulanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked, has_sel)
+        };
+        if !has_sel {
+            return Err(EngineError::CommandFailed {
+                detail: "Önce taşınacak nesneyi Seçim aracıyla seçin".into(),
+            });
+        }
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let res = guard.session.execute(
+            "paint.contentAwareMove",
+            json!({
+                "offset": [dx.round() as i32, dy.round() as i32],
+                "mode": if mode == "extend" { "extend" } else { "move" },
+                "structure": structure.clamp(1, 7),
+                "color": color.clamp(0, 10),
+                "scaleX": scale_x.clamp(25.0, 300.0) as f64,
+                "scaleY": scale_y.clamp(25.0, 300.0) as f64,
+                "rotate": rotate_deg.clamp(-180.0, 180.0) as f64,
+                "sampleAllLayers": sample_all_layers
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn update_proxy_content_aware_scale(
+        &self,
+        scale_x: f32,
+        scale_y: f32,
+        amount: f32,
+        protect_skin_tones: bool,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+        let _ = ps.execute(
+            "edit.contentAwareScale",
+            json!({
+                "scaleX": scale_x.clamp(40.0, 200.0) as f64,
+                "scaleY": scale_y.clamp(40.0, 200.0) as f64,
+                "amount": amount.clamp(0.0, 100.0) as f64,
+                "protectSkinTones": protect_skin_tones
+            }),
+        );
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn apply_content_aware_scale(
+        &self,
+        scale_x: f32,
+        scale_y: f32,
+        amount: f32,
+        protect_skin_tones: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_mixer = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "İçerik duyarlı ölçekleme uygulanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let res = guard.session.execute(
+            "edit.contentAwareScale",
+            json!({
+                "scaleX": scale_x.clamp(40.0, 200.0) as f64,
+                "scaleY": scale_y.clamp(40.0, 200.0) as f64,
+                "amount": amount.clamp(0.0, 100.0) as f64,
+                "protectSkinTones": protect_skin_tones
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
 }
 
 impl KastamonuEngine {
@@ -8461,6 +8810,67 @@ LUT_3D_SIZE 2
         eng.begin_proxy_preview().unwrap();
         let segs = eng.get_puppet_mesh_segments(Vec::new(), "normal".into(), "normal".into(), 2.0).unwrap();
         assert!(segs.len() >= 12 && segs.len() % 4 == 0, "Expected non-empty triangle edge segments");
+    }
+
+
+    #[test]
+    fn test_v180_content_aware_fill_proxy_and_apply() {
+        let eng = test_engine();
+        let rgba = vec![90u8, 140, 200, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("caf.png".into(), 64, 64, rgba).unwrap();
+        eng.select_rect(20.0, 20.0, 16.0, 16.0).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_content_aware_fill(
+            "auto".into(), "default".into(), "low".into(), false, false, false, "current".into()
+        ).unwrap();
+        let info = eng.apply_content_aware_fill(
+            "auto".into(), "high".into(), "none".into(), false, false, false, "new".into()
+        ).unwrap();
+        assert!(info.can_undo);
+        assert!(info.layer_count >= 2, "output='new' should create a new fill layer");
+    }
+
+    #[test]
+    fn test_v180_remove_tool_stroke_and_close_loops() {
+        let eng = test_engine();
+        let rgba = vec![120u8, 160, 110, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("remove.png".into(), 64, 64, rgba).unwrap();
+        let pts = vec![
+            StrokePoint { x: 24.0, y: 24.0, pressure: 1.0 },
+            StrokePoint { x: 36.0, y: 24.0, pressure: 1.0 },
+            StrokePoint { x: 36.0, y: 36.0, pressure: 1.0 },
+            StrokePoint { x: 24.0, y: 36.0, pressure: 1.0 },
+            StrokePoint { x: 24.0, y: 24.0, pressure: 1.0 },
+        ];
+        let info = eng.apply_remove_tool(pts, 8.0, true, false, false).unwrap();
+        assert!(info.can_undo);
+    }
+
+    #[test]
+    fn test_v180_content_aware_move_and_extend() {
+        let eng = test_engine();
+        let rgba = vec![140u8, 110, 180, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("camove.png".into(), 64, 64, rgba).unwrap();
+        eng.select_rect(10.0, 10.0, 16.0, 16.0).unwrap();
+        let info = eng.apply_content_aware_move(
+            18.0, 12.0, "move".into(), 4, 2, 100.0, 100.0, 0.0, false
+        ).unwrap();
+        assert!(info.can_undo);
+        let info2 = eng.apply_content_aware_move(
+            -8.0, 6.0, "extend".into(), 5, 0, 110.0, 110.0, 15.0, false
+        ).unwrap();
+        assert!(info2.can_undo);
+    }
+
+    #[test]
+    fn test_v180_content_aware_scale_proxy_and_apply() {
+        let eng = test_engine();
+        let rgba = vec![180u8, 130, 100, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("cascale.png".into(), 64, 64, rgba).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_content_aware_scale(120.0, 100.0, 100.0, true).unwrap();
+        let info = eng.apply_content_aware_scale(120.0, 100.0, 100.0, true).unwrap();
+        assert!(info.can_undo);
     }
 
 }

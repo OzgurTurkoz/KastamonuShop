@@ -69,7 +69,8 @@ enum class ActiveTool {
     BLUR_BRUSH,
     SHARPEN_BRUSH,
     RED_EYE,
-    PATCH
+    PATCH,
+    REMOVE_TOOL
 }
 
 data class EditorUiState(
@@ -121,7 +122,10 @@ data class EditorUiState(
     val patchMode: String = "source",
     val redEyePupilSize: Float = 50f,
     val redEyeDarken: Float = 55f,
-    val hasCopiedStyle: Boolean = false
+    val hasCopiedStyle: Boolean = false,
+    val removeCloseLoops: Boolean = true,
+    val removeSampleAllLayers: Boolean = false,
+    val removeNewLayer: Boolean = false
 )
 
 class EditorViewModel : ViewModel() {
@@ -255,6 +259,21 @@ class EditorViewModel : ViewModel() {
         ) : ProxyJob()
         data class ColorLookup(val fileName: String, val lutText: String, val opacity: Float) : ProxyJob()
         data class LayerStyleStack(val effectsJson: String) : ProxyJob()
+        data class ContentAwareFill(
+            val sampling: String,
+            val colorAdaptation: String,
+            val rotationAdaptation: String,
+            val scale: Boolean,
+            val mirror: Boolean,
+            val sampleAllLayers: Boolean,
+            val output: String
+        ) : ProxyJob()
+        data class ContentAwareScale(
+            val scaleX: Float,
+            val scaleY: Float,
+            val amount: Float,
+            val protectSkinTones: Boolean
+        ) : ProxyJob()
     }
     private data class StampedProxyJob(val gen: Long, val job: ProxyJob)
     private val proxyGeneration = java.util.concurrent.atomic.AtomicLong(0L)
@@ -1347,6 +1366,13 @@ class EditorViewModel : ViewModel() {
                     )
                     is ProxyJob.ColorLookup -> engine.updateProxyColorLookup(job.fileName, job.lutText, job.opacity)
                     is ProxyJob.LayerStyleStack -> engine.updateProxyLayerStyleStack(job.effectsJson)
+                    is ProxyJob.ContentAwareFill -> engine.updateProxyContentAwareFill(
+                        job.sampling, job.colorAdaptation, job.rotationAdaptation,
+                        job.scale, job.mirror, job.sampleAllLayers, job.output
+                    )
+                    is ProxyJob.ContentAwareScale -> engine.updateProxyContentAwareScale(
+                        job.scaleX, job.scaleY, job.amount, job.protectSkinTones
+                    )
                 }
                 if (stamped.gen == proxyGeneration.get()) {
                     NativeSurfaceBridge.nativeRenderFrame()
@@ -3632,4 +3658,143 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+
+    // ==================== v1.8.0 CONTENT-AWARE & OBJECT REMOVAL ====================
+
+    fun updateRemoveToolSettings(closeLoops: Boolean? = null, sampleAllLayers: Boolean? = null, newLayer: Boolean? = null) {
+        _uiState.update {
+            it.copy(
+                removeCloseLoops = closeLoops ?: it.removeCloseLoops,
+                removeSampleAllLayers = sampleAllLayers ?: it.removeSampleAllLayers,
+                removeNewLayer = newLayer ?: it.removeNewLayer
+            )
+        }
+    }
+
+    fun applyRemoveTool(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        invalidateProxyQueue()
+        val s = _uiState.value
+        val pts = samples.map { StrokePoint(it.x, it.y, it.pressure) }
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyRemoveTool(
+                    pts, s.brushSize, s.removeCloseLoops, s.removeSampleAllLayers, s.removeNewLayer
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Nesne kaldırıldı", 1600L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Kaldırma hatası: ${err.message}", 2600L)
+            }
+        }
+    }
+
+    fun updateProxyContentAwareFill(
+        sampling: String,
+        colorAdaptation: String,
+        rotationAdaptation: String,
+        scale: Boolean,
+        mirror: Boolean,
+        sampleAllLayers: Boolean,
+        output: String
+    ) {
+        enqueueProxyJob(
+            ProxyJob.ContentAwareFill(sampling, colorAdaptation, rotationAdaptation, scale, mirror, sampleAllLayers, output)
+        )
+    }
+
+    fun applyContentAwareFill(
+        sampling: String,
+        colorAdaptation: String,
+        rotationAdaptation: String,
+        scale: Boolean,
+        mirror: Boolean,
+        sampleAllLayers: Boolean,
+        output: String
+    ) {
+        invalidateProxyQueue()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyContentAwareFill(
+                    sampling, colorAdaptation, rotationAdaptation, scale, mirror, sampleAllLayers, output
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("İçerik duyarlı dolgu uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("İçerik dolgu: ${err.message}", 2800L)
+            }
+        }
+    }
+
+    fun applyContentAwareMove(
+        dx: Float,
+        dy: Float,
+        mode: String,
+        structure: Int,
+        color: Int,
+        scalePct: Float,
+        rotateDeg: Float,
+        sampleAllLayers: Boolean
+    ) {
+        invalidateProxyQueue()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyContentAwareMove(
+                    dx, dy, mode,
+                    structure.coerceIn(1, 7).toUByte(),
+                    color.coerceIn(0, 10).toUByte(),
+                    scalePct, scalePct, rotateDeg, sampleAllLayers
+                )
+                val layers = engine.getLayers()
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                _uiState.update { it.copy(docInfo = info, layers = layers, selectionBounds = bounds, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus(if (mode == "extend") "İçerik duyarlı çoğaltıldı" else "İçerik duyarlı taşındı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Akıllı taşıma: ${err.message}", 2800L)
+            }
+        }
+    }
+
+    fun updateProxyContentAwareScale(scaleX: Float, scaleY: Float, amount: Float, protectSkinTones: Boolean) {
+        enqueueProxyJob(
+            ProxyJob.ContentAwareScale(
+                kotlin.math.round(scaleX),
+                kotlin.math.round(scaleY),
+                kotlin.math.round(amount),
+                protectSkinTones
+            )
+        )
+    }
+
+    fun applyContentAwareScale(scaleX: Float, scaleY: Float, amount: Float, protectSkinTones: Boolean) {
+        invalidateProxyQueue()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyContentAwareScale(scaleX, scaleY, amount, protectSkinTones)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("İçerik duyarlı ölçekleme uygulandı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Akıllı ölçekleme: ${err.message}", 2800L)
+            }
+        }
+    }
 }

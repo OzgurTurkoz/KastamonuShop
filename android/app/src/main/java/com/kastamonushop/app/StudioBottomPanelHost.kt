@@ -353,6 +353,21 @@ internal fun StudioBottomPanelHost(
                     vm = vm,
                     state = state,
                     selectScrollState = selectScrollState,
+                    onOpenContentAwareFill = {
+                        s.cafSampling = "auto"; s.cafColorAdaptation = "default"
+                        s.cafRotationAdaptation = "none"; s.cafScale = false
+                        s.cafMirror = false; s.cafSampleAllLayers = false; s.cafOutput = "current"
+                        vm.beginProxyPreview()
+                        vm.updateProxyContentAwareFill("auto", "default", "none", false, false, false, "current")
+                        s.activePanel = BottomPanel.CONTENT_AWARE_FILL_EDIT
+                    },
+                    onOpenContentAwareMove = {
+                        s.camMoveDx = 0f; s.camMoveDy = 0f; s.camMoveMode = "move"
+                        s.camMoveStructure = 4f; s.camMoveColor = 0f
+                        s.camMoveScale = 100f; s.camMoveRotate = 0f; s.camMoveSampleAll = false
+                        vm.setTool(ActiveTool.NONE)
+                        s.activePanel = BottomPanel.CONTENT_AWARE_MOVE_EDIT
+                    },
                     onClose = { s.activePanel = BottomPanel.DOCK }
                 )
 
@@ -979,6 +994,13 @@ private fun StudioBottomPanelHostPart2(
                                     s.activePanel = BottomPanel.IMAGE_RESIZE_EDIT
                                 }
                             )
+                            SlimToolChip(Icons.Default.AspectRatio, "Akıllı Ölçek", false, onClick = {
+                                    if (hasPendingTransform) onClearGpuPreview()
+                                    s.casScaleX = 100f; s.casScaleY = 100f; s.casAmount = 100f; s.casProtectSkinTones = true
+                                    vm.beginProxyPreview()
+                                    s.activePanel = BottomPanel.CONTENT_AWARE_SCALE_EDIT
+                                }
+                            )
                             SlimToolChip(Icons.AutoMirrored.Filled.RotateLeft, "90° Sol", false, onClick = {
                                     s.pendingQuarterTurns = (s.pendingQuarterTurns + 3) % 4
                                     onPushGpuTransformPreview(s.pendingQuarterTurns, s.pendingFlipH, s.pendingFlipV)
@@ -1167,9 +1189,9 @@ private fun StudioBottomPanelHostPart2(
                     onRemoveBg = { vm.smartRemoveBackground(); s.activePanel = BottomPanel.DOCK },
                     onPortraitBlur = { vm.smartPortraitBlur(18f); s.activePanel = BottomPanel.DOCK },
                     onObjectRemove = {
-                        vm.setTool(ActiveTool.SELECT_QUICK)
-                        s.activePanel = BottomPanel.SELECT_MENU
-                        vm.showStatus("Silmek istediğin nesnenin üstünden geçip 'Kaldır'a dokun", 3200L)
+                        vm.setTool(ActiveTool.REMOVE_TOOL)
+                        s.activePanel = BottomPanel.RETOUCH_MENU
+                        vm.showStatus("Silmek istediğin nesnenin üstünü boya veya etrafını çiz", 3000L)
                     }
                 )
                 BottomPanel.HSL_MIXER_LIVE -> HslMixerPanel(
@@ -1807,6 +1829,61 @@ private fun StudioBottomPanelHostPart2(
                         } else {
                             vm.endProxyPreview()
                         }
+                        s.activePanel = BottomPanel.DOCK
+                    }
+                )
+                BottomPanel.CONTENT_AWARE_FILL_EDIT -> ContentAwareFillPanel(
+                    s = s,
+                    onPreview = {
+                        vm.updateProxyContentAwareFill(
+                            s.cafSampling, s.cafColorAdaptation, s.cafRotationAdaptation,
+                            s.cafScale, s.cafMirror, s.cafSampleAllLayers, s.cafOutput
+                        )
+                    },
+                    onReset = {
+                        s.cafSampling = "auto"; s.cafColorAdaptation = "default"
+                        s.cafRotationAdaptation = "none"; s.cafScale = false
+                        s.cafMirror = false; s.cafSampleAllLayers = false; s.cafOutput = "current"
+                        vm.resetProxyPreview()
+                    },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
+                    onApply = {
+                        vm.applyContentAwareFill(
+                            s.cafSampling, s.cafColorAdaptation, s.cafRotationAdaptation,
+                            s.cafScale, s.cafMirror, s.cafSampleAllLayers, s.cafOutput
+                        )
+                        s.activePanel = BottomPanel.DOCK
+                    }
+                )
+                BottomPanel.CONTENT_AWARE_MOVE_EDIT -> ContentAwareMovePanel(
+                    s = s,
+                    onReset = {
+                        s.camMoveDx = 0f; s.camMoveDy = 0f; s.camMoveMode = "move"
+                        s.camMoveStructure = 4f; s.camMoveColor = 0f
+                        s.camMoveScale = 100f; s.camMoveRotate = 0f; s.camMoveSampleAll = false
+                    },
+                    onClose = { s.activePanel = BottomPanel.SELECT_MENU },
+                    onApply = {
+                        vm.applyContentAwareMove(
+                            s.camMoveDx, s.camMoveDy, s.camMoveMode,
+                            s.camMoveStructure.roundToInt(), s.camMoveColor.roundToInt(),
+                            s.camMoveScale, s.camMoveRotate, s.camMoveSampleAll
+                        )
+                        s.activePanel = BottomPanel.DOCK
+                    }
+                )
+                BottomPanel.CONTENT_AWARE_SCALE_EDIT -> ContentAwareScalePanel(
+                    s = s,
+                    onPreview = {
+                        vm.updateProxyContentAwareScale(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones)
+                    },
+                    onReset = {
+                        s.casScaleX = 100f; s.casScaleY = 100f; s.casAmount = 100f; s.casProtectSkinTones = true
+                        vm.resetProxyPreview()
+                    },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU },
+                    onApply = {
+                        vm.applyContentAwareScale(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones)
                         s.activePanel = BottomPanel.DOCK
                     }
                 )

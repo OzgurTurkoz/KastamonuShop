@@ -129,7 +129,10 @@ internal enum class BottomPanel {
     FILTER_GALLERY_EDIT,
     LIGHT_DISTORT_EDIT,
     PUPPET_WARP_EDIT,
-    IMAGE_RESIZE_EDIT
+    IMAGE_RESIZE_EDIT,
+    CONTENT_AWARE_FILL_EDIT,
+    CONTENT_AWARE_MOVE_EDIT,
+    CONTENT_AWARE_SCALE_EDIT
 }
 
 internal data class BlendModeOption(
