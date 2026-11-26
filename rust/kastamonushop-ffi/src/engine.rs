@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
-use photocraft_engine::brush_cmds::LiveStroke;
+use photocraft_engine::brush_cmds::{LiveStroke, live_color_replacement, mixer_live::LiveMixer};
 use photocraft_engine::retouch_cmds::{LiveDab, LiveRetouch};
 use photocraft_engine::Session;
 use photocraft_geom::{Rect, Size};
@@ -124,6 +124,18 @@ pub struct CameraRawPresetValues {
     pub grain_amount: f32,
 }
 
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct AbrBrushSummary {
+    pub index: u32,
+    pub name: String,
+    pub group: String,
+    pub size: f32,
+    pub hardness: f32,
+    pub spacing: f32,
+    pub has_sampled_tip: bool,
+}
+
+
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct TextLayerStyle {
@@ -199,6 +211,14 @@ struct ActiveLiveClone {
     prev_active: Option<LayerId>,
     was_locked: bool,
 }
+
+struct ActiveLiveMixer {
+    live: LiveMixer,
+    target_id: LayerId,
+    prev_active: Option<LayerId>,
+    was_locked: bool,
+}
+
 
 struct ProxyPreviewSession {
     base_doc: Arc<Document>,
@@ -279,6 +299,8 @@ pub(crate) struct EngineCore {
     live_stroke: Option<ActiveLiveStroke>,
     live_dab: Option<ActiveLiveDab>,
     live_clone: Option<ActiveLiveClone>,
+    live_mixer: Option<ActiveLiveMixer>,
+    custom_brush_spacing: bool,
     live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
     proxy_preview: Option<ProxyPreviewSession>,
@@ -319,6 +341,8 @@ impl EngineCore {
             live_stroke: None,
             live_dab: None,
             live_clone: None,
+            live_mixer: None,
+            custom_brush_spacing: false,
             live_adjustment: None,
             live_filter: None,
             proxy_preview: None,
@@ -339,6 +363,9 @@ impl EngineCore {
         }
         if let Some(active_clone) = &self.live_clone {
             return Some(Arc::clone(&active_clone.live.doc));
+        }
+        if let Some(active_mixer) = &self.live_mixer {
+            return Some(Arc::clone(&active_mixer.live.doc));
         }
         self.session.active().map(|ds| Arc::clone(ds.doc()))
     }
@@ -5353,22 +5380,17 @@ impl KastamonuEngine {
             0.10
         };
         let mut guard = self.core.lock();
-        guard
-            .session
-            .execute(
-                "tools.setBrush",
-                json!({
-                    "brush": {
-                        "size": clamped_size,
-                        "hardness": hardness.clamp(0.0, 1.0),
-                        "opacity": opacity.clamp(0.01, 1.0),
-                        "flow": flow.clamp(0.01, 1.0),
-                        "spacing": adaptive_spacing,
-                        "spacingEnabled": true
-                    }
-                }),
-            )
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let use_spacing = if guard.custom_brush_spacing {
+            guard.session.tools.brush.spacing
+        } else {
+            adaptive_spacing
+        };
+        guard.session.tools.brush.size = clamped_size;
+        guard.session.tools.brush.hardness = hardness.clamp(0.0, 1.0);
+        guard.session.tools.brush.opacity = opacity.clamp(0.01, 1.0);
+        guard.session.tools.brush.flow = flow.clamp(0.01, 1.0);
+        guard.session.tools.brush.spacing = use_spacing;
+        guard.session.tools.brush.spacing_enabled = true;
         Ok(())
     }
 
@@ -5537,6 +5559,46 @@ impl KastamonuEngine {
                     "range": "midtones",
                     "exposure": clamped_str,
                     "protectTones": true
+                }),
+            ),
+            "sponge_saturate" => (
+                "paint.sponge".to_string(),
+                json!({
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "spacing": adaptive_spacing,
+                    "mode": "saturate",
+                    "flow": clamped_str,
+                    "vibrance": true
+                }),
+            ),
+            "sponge_desaturate" => (
+                "paint.sponge".to_string(),
+                json!({
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "spacing": adaptive_spacing,
+                    "mode": "desaturate",
+                    "flow": clamped_str,
+                    "vibrance": true
+                }),
+            ),
+            "blur_brush" => (
+                "paint.blur".to_string(),
+                json!({
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "spacing": adaptive_spacing,
+                    "strength": clamped_str
+                }),
+            ),
+            "sharpen_brush" => (
+                "paint.sharpen".to_string(),
+                json!({
+                    "size": clamped_size,
+                    "hardness": clamped_hard,
+                    "spacing": adaptive_spacing,
+                    "strength": clamped_str
                 }),
             ),
             other => {
@@ -6257,6 +6319,455 @@ impl KastamonuEngine {
 }
 
 impl KastamonuEngine {
+    // ==================== v1.7.0 PRO BRUSH & RETOUCH STUDIO ====================
+
+    pub fn set_brush_dynamics(
+        &self,
+        spacing: f32,
+        scatter: f32,
+        size_jitter: f32,
+        angle_jitter: f32,
+        opacity_jitter: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let b = &mut guard.session.tools.brush;
+        let sp = spacing.clamp(0.05, 2.0);
+        b.spacing = sp;
+        b.spacing_enabled = true;
+        guard.custom_brush_spacing = (sp - 0.15).abs() > 0.01
+            || scatter > 0.001
+            || size_jitter > 0.001
+            || angle_jitter > 0.001
+            || opacity_jitter > 0.001;
+
+        let sc = scatter.clamp(0.0, 5.0);
+        b.scattering.enabled = sc > 0.001;
+        b.scattering.scatter.jitter = sc;
+        b.scattering.both_axes = true;
+        b.scattering.count = if sc > 0.001 { 2 } else { 1 };
+
+        let sj = size_jitter.clamp(0.0, 1.0);
+        let aj = angle_jitter.clamp(0.0, 1.0);
+        b.shape_dynamics.enabled = sj > 0.001 || aj > 0.001;
+        b.shape_dynamics.size.jitter = sj;
+        b.shape_dynamics.angle.jitter = aj;
+
+        let oj = opacity_jitter.clamp(0.0, 1.0);
+        b.transfer.enabled = oj > 0.001;
+        b.transfer.opacity.jitter = oj;
+        Ok(())
+    }
+
+    pub fn import_abr_bytes(
+        &self,
+        file_name: String,
+        bytes: Vec<u8>,
+    ) -> Result<Vec<AbrBrushSummary>, EngineError> {
+        let group = file_name
+            .trim_end_matches(".abr")
+            .trim_end_matches(".ABR")
+            .trim();
+        let group_name = if group.is_empty() { "İçe Aktarılan Fırçalar" } else { group };
+        let imported = photocraft_io::abr_map::read_abr(&bytes, group_name)
+            .map_err(|e| EngineError::IoFailed { detail: e })?;
+        if imported.presets.is_empty() {
+            return Err(EngineError::IoFailed {
+                detail: "ABR dosyasında okunabilir fırça bulunamadı".into(),
+            });
+        }
+        let mut guard = self.core.lock();
+        let lib = Arc::make_mut(&mut *guard.session.tools.presets);
+        for preset in imported.presets {
+            if !lib.iter().any(|p| p.name.eq_ignore_ascii_case(&preset.name)) {
+                lib.push(preset);
+            }
+        }
+        Ok(Self::summarize_presets(&guard.session.tools.presets))
+    }
+
+    pub fn get_brush_presets(&self) -> Result<Vec<AbrBrushSummary>, EngineError> {
+        let guard = self.core.lock();
+        Ok(Self::summarize_presets(&guard.session.tools.presets))
+    }
+
+    pub fn select_brush_preset(&self, name: String) -> Result<AbrBrushSummary, EngineError> {
+        let mut guard = self.core.lock();
+        let found = guard
+            .session
+            .tools
+            .presets
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.name.eq_ignore_ascii_case(&name))
+            .map(|(idx, p)| (idx, p.clone()))
+            .ok_or_else(|| EngineError::InvalidParams {
+                detail: format!("Fırça bulunamadı: {name}"),
+            })?;
+        let (idx, preset) = found;
+        let mut brush = preset.brush.clone();
+        let _ = guard.session.load_brush_tips(&mut brush);
+        let summary = AbrBrushSummary {
+            index: idx as u32,
+            name: preset.name.clone(),
+            group: preset.group.clone(),
+            size: brush.size.clamp(1.0, 1000.0),
+            hardness: brush.hardness.clamp(0.0, 1.0),
+            spacing: brush.spacing.clamp(0.05, 2.0),
+            has_sampled_tip: !matches!(brush.tip, photocraft_paint::TipShape::Round),
+        };
+        guard.session.tools.brush = brush;
+        guard.session.tools.current_preset = Some(preset.name);
+        guard.custom_brush_spacing = true;
+        Ok(summary)
+    }
+
+    pub fn reset_brush_to_round(&self) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let prev_size = guard.session.tools.brush.size;
+        let prev_hard = guard.session.tools.brush.hardness;
+        let prev_op = guard.session.tools.brush.opacity;
+        let prev_flow = guard.session.tools.brush.flow;
+        let mut b = photocraft_paint::BrushSettings::default();
+        b.size = prev_size;
+        b.hardness = prev_hard;
+        b.opacity = prev_op;
+        b.flow = prev_flow;
+        guard.session.tools.brush = b;
+        guard.session.tools.current_preset = None;
+        guard.custom_brush_spacing = false;
+        Ok(())
+    }
+
+    pub fn begin_live_mixer(
+        &self,
+        sample: StrokeSample,
+        size: f32,
+        hardness: f32,
+        wet: f32,
+        load: f32,
+        mix: f32,
+        flow: f32,
+        color_hex: String,
+        sample_all_layers: bool,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_clone = None;
+        guard.live_mixer = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Karıştırıcı fırça uygulanacak piksel katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+
+        let pt_json = sample_to_json(&sample);
+        let params = json!({
+            "points": [pt_json],
+            "size": size.clamp(1.0, 500.0),
+            "brush": {
+                "size": size.clamp(1.0, 500.0),
+                "hardness": hardness.clamp(0.0, 1.0),
+                "spacing": 0.18,
+                "spacingEnabled": true
+            },
+            "wet": wet.clamp(0.0, 100.0),
+            "load": load.clamp(0.0, 100.0),
+            "mix": mix.clamp(0.0, 100.0),
+            "flow": flow.clamp(1.0, 100.0),
+            "color": color_hex,
+            "sampleAllLayers": sample_all_layers,
+            "loadAfterStroke": true,
+            "cleanAfterStroke": false
+        });
+
+        let live = match LiveMixer::begin(&guard.session, &params) {
+            Ok(l) => l,
+            Err(e) => {
+                if was_locked {
+                    let _ = guard.session.execute("edit.undo", json!({}));
+                }
+                if prev_active.is_some() {
+                    guard.session.set_active_layer(prev_active);
+                }
+                return Err(EngineError::CommandFailed { detail: e.to_string() });
+            }
+        };
+
+        let dmg = live.bounds();
+        guard.live_mixer = Some(ActiveLiveMixer {
+            live,
+            target_id,
+            prev_active,
+            was_locked,
+        });
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
+    pub fn push_live_mixer(&self, samples: Vec<StrokeSample>) -> Result<(), EngineError> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let mut guard = self.core.lock();
+        let Some(active) = guard.live_mixer.as_mut() else {
+            return Ok(());
+        };
+        let pts: Vec<StrokePoint> = samples.iter().map(sample_to_stroke_point).collect();
+        let dmg = active
+            .live
+            .push(&pts)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
+    pub fn finish_live_mixer(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(active) = guard.live_mixer.take() else {
+            return self.info_from_locked(&guard);
+        };
+        let params = active
+            .live
+            .prepare_commit(&mut guard.session)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let res = guard.session.execute("paint.mixerBrush", params);
+        if active.was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": active.target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if active.prev_active.is_some() {
+            guard.session.set_active_layer(active.prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn begin_live_color_replacement(
+        &self,
+        sample: StrokeSample,
+        size: f32,
+        hardness: f32,
+        color_hex: String,
+        mode: String,
+        tolerance: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_clone = None;
+        guard.live_mixer = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Renk değiştirme uygulanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        let safe_mode = match mode.as_str() {
+            "hue" | "saturation" | "color" | "luminosity" => mode,
+            _ => "color".to_string(),
+        };
+        let clamped_size = size.clamp(1.0, 400.0);
+        let pt_json = sample_to_json(&sample);
+        let base_params = json!({
+            "points": [pt_json.clone()],
+            "size": clamped_size,
+            "brush": {
+                "size": clamped_size,
+                "hardness": hardness.clamp(0.0, 1.0),
+                "spacing": 0.18,
+                "spacingEnabled": true
+            },
+            "color": color_hex,
+            "mode": safe_mode,
+            "sampling": "continuous",
+            "limits": "contiguous",
+            "tolerance": tolerance.clamp(1.0, 100.0),
+            "antiAlias": true
+        });
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+
+        let live = match live_color_replacement(&guard.session, &base_params) {
+            Ok(l) => l,
+            Err(e) => {
+                if was_locked {
+                    let _ = guard.session.execute("edit.undo", json!({}));
+                }
+                if prev_active.is_some() {
+                    guard.session.set_active_layer(prev_active);
+                }
+                return Err(EngineError::CommandFailed { detail: e.to_string() });
+            }
+        };
+
+        let dmg = live.bounds();
+        guard.live_dab = Some(ActiveLiveDab {
+            live,
+            cmd: "paint.colorReplacement".to_string(),
+            base_params,
+            points_json: vec![pt_json],
+            target_id,
+            prev_active,
+            was_locked,
+        });
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
+    pub fn apply_patch_tool(
+        &self,
+        dx: i32,
+        dy: i32,
+        mode: String,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_mixer = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Yama uygulanacak fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        let safe_mode = if mode == "destination" { "destination" } else { "source" };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let res = guard.session.execute(
+            "paint.patch",
+            json!({
+                "offset": [dx, dy],
+                "mode": safe_mode
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_red_eye(
+        &self,
+        x: f32,
+        y: f32,
+        pupil_size: f32,
+        darken: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+        guard.live_mixer = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed {
+                    detail: "Kırmızı göz düzeltilecek fotoğraf katmanı bulunamadı".into(),
+                }
+            })?;
+            (prev, id, locked)
+        };
+
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+            );
+        }
+        let res = guard.session.execute(
+            "paint.redEye",
+            json!({
+                "x": x.round() as i32,
+                "y": y.round() as i32,
+                "pupilSize": pupil_size.clamp(1.0, 100.0),
+                "darken": darken.clamp(0.0, 100.0)
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute(
+                "layer.setProps",
+                json!({ "layer": target_id.0, "locks": { "pixels": true } }),
+            );
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    fn summarize_presets(presets: &[photocraft_paint::BrushPreset]) -> Vec<AbrBrushSummary> {
+        presets
+            .iter()
+            .enumerate()
+            .map(|(i, p)| AbrBrushSummary {
+                index: i as u32,
+                name: p.name.clone(),
+                group: p.group.clone(),
+                size: p.brush.size.clamp(1.0, 1000.0),
+                hardness: p.brush.hardness.clamp(0.0, 1.0),
+                spacing: p.brush.spacing.clamp(0.05, 2.0),
+                has_sampled_tip: !matches!(p.brush.tip, photocraft_paint::TipShape::Round),
+            })
+            .collect()
+    }
+
     fn info_from_locked(&self, guard: &EngineCore) -> Result<DocumentInfo, EngineError> {
         let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
         let doc = ds.doc();
@@ -7464,4 +7975,113 @@ LUT_3D_SIZE 2
         ).unwrap();
         assert!(cb_info.can_undo);
     }
+
+    #[test]
+    fn test_v170_brush_dynamics_and_preset_reset() {
+        let eng = test_engine();
+        eng.new_document("dyn.png".into(), 64, 64).unwrap();
+        eng.set_brush(16.0, 0.8, 0.9, 1.0, "#FF4422".into()).unwrap();
+        eng.set_brush_dynamics(0.35, 1.2, 0.5, 0.4, 0.3).unwrap();
+        eng.begin_live_stroke(StrokeSample { x: 10.0, y: 10.0, pressure: 1.0 }, "#FF4422".into(), false).unwrap();
+        eng.push_live_stroke(vec![StrokeSample { x: 50.0, y: 50.0, pressure: 1.0 }]).unwrap();
+        let info = eng.finish_live_stroke().unwrap();
+        assert!(info.can_undo);
+        eng.reset_brush_to_round().unwrap();
+        let presets = eng.get_brush_presets().unwrap();
+        if let Some(first) = presets.first() {
+            let sel = eng.select_brush_preset(first.name.clone()).unwrap();
+            assert_eq!(sel.name, first.name);
+        }
+    }
+
+    #[test]
+    fn test_v170_mixer_brush_live_stroke() {
+        let eng = test_engine();
+        let mut rgba = vec![0u8; 64 * 64 * 4];
+        for y in 0..64 {
+            for x in 0..64 {
+                let i = (y * 64 + x) * 4;
+                if x < 32 { rgba[i] = 220; rgba[i+1] = 40; rgba[i+2] = 40; rgba[i+3] = 255; }
+                else { rgba[i] = 40; rgba[i+1] = 80; rgba[i+2] = 220; rgba[i+3] = 255; }
+            }
+        }
+        eng.open_rgba_bytes("mix.png".into(), 64, 64, rgba).unwrap();
+        eng.begin_live_mixer(
+            StrokeSample { x: 16.0, y: 32.0, pressure: 1.0 },
+            20.0, 0.5, 60.0, 50.0, 50.0, 100.0, "#22CC66".into(), false,
+        ).unwrap();
+        eng.push_live_mixer(vec![
+            StrokeSample { x: 32.0, y: 32.0, pressure: 1.0 },
+            StrokeSample { x: 48.0, y: 32.0, pressure: 1.0 },
+        ]).unwrap();
+        let info = eng.finish_live_mixer().unwrap();
+        assert!(info.can_undo);
+    }
+
+    #[test]
+    fn test_v170_color_replacement_brush_live() {
+        let eng = test_engine();
+        let rgba = vec![220u8, 50, 50, 255].repeat(48 * 48);
+        eng.open_rgba_bytes("crepl.png".into(), 48, 48, rgba).unwrap();
+        eng.begin_live_color_replacement(
+            StrokeSample { x: 12.0, y: 24.0, pressure: 1.0 },
+            18.0, 0.8, "#22AA44".into(), "color".into(), 40.0,
+        ).unwrap();
+        eng.push_live_dab(vec![StrokeSample { x: 36.0, y: 24.0, pressure: 1.0 }]).unwrap();
+        let info = eng.finish_live_dab().unwrap();
+        assert!(info.can_undo);
+    }
+
+    #[test]
+    fn test_v170_sponge_blur_sharpen_dabs() {
+        let eng = test_engine();
+        let rgba = vec![180u8, 90, 60, 255].repeat(48 * 48);
+        eng.open_rgba_bytes("dabs.png".into(), 48, 48, rgba).unwrap();
+        for tool in ["sponge_saturate", "sponge_desaturate", "blur_brush", "sharpen_brush"] {
+            eng.begin_live_dab(
+                tool.into(),
+                StrokeSample { x: 16.0, y: 24.0, pressure: 1.0 },
+                16.0, 0.5, 50.0,
+            ).unwrap();
+            eng.push_live_dab(vec![StrokeSample { x: 32.0, y: 24.0, pressure: 1.0 }]).unwrap();
+            let info = eng.finish_live_dab().unwrap();
+            assert!(info.can_undo, "tool {tool} should commit undoable edit");
+        }
+    }
+
+    #[test]
+    fn test_v170_patch_tool_source_mode() {
+        let eng = test_engine();
+        let mut rgba = vec![120u8, 130, 140, 255].repeat(64 * 64);
+        for y in 10..20 {
+            for x in 10..20 {
+                let i = (y * 64 + x) * 4;
+                rgba[i] = 250; rgba[i+1] = 20; rgba[i+2] = 20;
+            }
+        }
+        eng.open_rgba_bytes("patch.png".into(), 64, 64, rgba).unwrap();
+        eng.select_rect(10.0, 10.0, 10.0, 10.0, "replace".into()).unwrap();
+        let info = eng.apply_patch_tool(24, 24, "source".into()).unwrap();
+        assert!(info.can_undo);
+    }
+
+    #[test]
+    fn test_v170_red_eye_removal_click() {
+        let eng = test_engine();
+        let mut rgba = vec![200u8, 170, 150, 255].repeat(64 * 64);
+        for y in 26..38 {
+            for x in 26..38 {
+                let dx = x as i32 - 32;
+                let dy = y as i32 - 32;
+                if dx * dx + dy * dy <= 25 {
+                    let i = (y * 64 + x) * 4;
+                    rgba[i] = 230; rgba[i+1] = 20; rgba[i+2] = 20;
+                }
+            }
+        }
+        eng.open_rgba_bytes("redeye.png".into(), 64, 64, rgba).unwrap();
+        let info = eng.apply_red_eye(32.0, 32.0, 50.0, 60.0).unwrap();
+        assert!(info.can_undo);
+    }
+
 }

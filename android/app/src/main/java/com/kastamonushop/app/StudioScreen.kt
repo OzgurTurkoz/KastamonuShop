@@ -185,6 +185,11 @@ fun StonebridgeStudioScreen(
                 s.lutText = text
                 vm.updateProxyColorLookup(name, text, s.lutOpacity)
             }
+    val importAbrLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            vm.importAbrFromUri(context.contentResolver, uri)
+        }
+    }
         }
     }
 
@@ -484,12 +489,16 @@ fun StonebridgeStudioScreen(
                         val st = vm.uiState.value
                         val t = st.activeTool
                         t == ActiveTool.BRUSH || t == ActiveTool.ERASER ||
+                            t == ActiveTool.MIXER_BRUSH || t == ActiveTool.COLOR_REPLACE ||
                             t == ActiveTool.SMUDGE || t == ActiveTool.DODGE || t == ActiveTool.BURN ||
+                            t == ActiveTool.SPONGE_SAT || t == ActiveTool.SPONGE_DESAT ||
+                            t == ActiveTool.BLUR_BRUSH || t == ActiveTool.SHARPEN_BRUSH ||
                             (t == ActiveTool.CLONE_STAMP && !st.pickingCloneSource)
                     },
                     isRetouchActive = {
                         val t = vm.uiState.value.activeTool
                         t == ActiveTool.SPOT_HEAL ||
+                            t == ActiveTool.PATCH ||
                             t == ActiveTool.SELECT_QUICK ||
                             t == ActiveTool.SELECT_BRUSH_ADD ||
                             t == ActiveTool.SELECT_BRUSH_SUB
@@ -501,7 +510,7 @@ fun StonebridgeStudioScreen(
                     isTextDragActive = { currentPanelState == BottomPanel.TEXT_EDIT },
                     isSelectRectActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_RECT },
                     isSelectWandActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_WAND },
-                    isBucketActive = { vm.uiState.value.activeTool == ActiveTool.BUCKET },
+                    isBucketActive = { val t = vm.uiState.value.activeTool; t == ActiveTool.BUCKET || t == ActiveTool.RED_EYE },
                     isCloneSourcePickActive = {
                         val st = vm.uiState.value
                         st.activeTool == ActiveTool.CLONE_STAMP && st.pickingCloneSource
@@ -519,6 +528,10 @@ fun StonebridgeStudioScreen(
                         val t = vm.uiState.value.activeTool
                         if (t == ActiveTool.SELECT_QUICK || t == ActiveTool.SELECT_BRUSH_ADD || t == ActiveTool.SELECT_BRUSH_SUB) {
                             vm.applySelectionStroke(samples)
+                        } else if (t == ActiveTool.PATCH && samples.size >= 2) {
+                            val dx = (samples.last().x - samples.first().x).roundToInt()
+                            val dy = (samples.last().y - samples.first().y).roundToInt()
+                            vm.applyPatchTool(dx, dy)
                         } else {
                             vm.applyRetouchStroke(samples)
                         }
@@ -537,7 +550,13 @@ fun StonebridgeStudioScreen(
                     onSelectRectPreview = { arr -> s.selectPreviewRect = arr },
                     onSelectRectCommit = { rx, ry, rw, rh -> vm.selectRect(rx, ry, rw, rh) },
                     onSelectWandTap = { dx, dy -> vm.selectMagicWand(dx, dy) },
-                    onBucketTap = { dx, dy -> vm.applyPaintBucket(dx, dy, s.bucketTolerance.roundToInt(), s.bucketContiguous) },
+                    onBucketTap = { dx, dy ->
+                        if (vm.uiState.value.activeTool == ActiveTool.RED_EYE) {
+                            vm.applyRedEye(dx, dy)
+                        } else {
+                            vm.applyPaintBucket(dx, dy, s.bucketTolerance.roundToInt(), s.bucketContiguous)
+                        }
+                    },
                     onCloneSourcePick = { dx, dy -> vm.setCloneSource(dx, dy) },
                     onLoupePointer = { sx, sy, dx, dy, active ->
                         val tool = vm.uiState.value.activeTool
@@ -2384,6 +2403,7 @@ fun StonebridgeStudioScreen(
                 onImportFont = { importFontLauncher.launch(arrayOf("*/*")) },
                 onImportXmp = { importXmpLauncher.launch(arrayOf("*/*")) },
                 onImportLut = { importLutLauncher.launch(arrayOf("*/*")) },
+                onImportAbr = { importAbrLauncher.launch(arrayOf("*/*")) },
                 onPushCurveGpu = { y0, y1, y2, y3, y4 -> pushCurveGpu(y0, y1, y2, y3, y4) },
                 onPushGpuMirrorPreview = { mode, ratio -> pushGpuMirrorPreview(mode, ratio) },
                 onFitToSafeArea = { turns, panel -> fitToSafeArea(turns, panel) },

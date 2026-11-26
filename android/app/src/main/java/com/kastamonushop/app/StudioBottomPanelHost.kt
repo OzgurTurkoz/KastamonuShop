@@ -106,6 +106,7 @@ internal fun StudioBottomPanelHost(
     onImportFont: () -> Unit,
     onImportXmp: () -> Unit,
     onImportLut: () -> Unit,
+    onImportAbr: () -> Unit,
     onPushCurveGpu: (Float, Float, Float, Float, Float) -> Unit,
     onPushGpuMirrorPreview: (MirrorModeOption, Float) -> Unit,
     onFitToSafeArea: (Int, BottomPanel) -> Unit,
@@ -300,6 +301,7 @@ internal fun StudioBottomPanelHost(
                     bucketContiguous = s.bucketContiguous,
                     onBucketContiguous = { s.bucketContiguous = it },
                     onBrushSizePreview = { s.brushSizePreviewTick++ },
+                    onImportAbr = onImportAbr,
                     onClose = { s.activePanel = BottomPanel.DOCK }
                 )
 

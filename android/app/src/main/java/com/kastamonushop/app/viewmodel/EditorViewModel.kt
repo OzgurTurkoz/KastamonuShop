@@ -36,6 +36,7 @@ import uniffi.kastamonushop_ffi.LayerSummary
 import uniffi.kastamonushop_ffi.SelectionBounds
 import uniffi.kastamonushop_ffi.StrokeSample
 import uniffi.kastamonushop_ffi.TextLayerStyle
+import uniffi.kastamonushop_ffi.AbrBrushSummary
 import uniffi.kastamonushop_ffi.PuppetPinPoint
 import uniffi.kastamonushop_ffi.createKastamonuEngine
 import uniffi.kastamonushop_ffi.engineVersionInfo
@@ -60,7 +61,15 @@ enum class ActiveTool {
     SELECT_QUICK,
     SELECT_BRUSH_ADD,
     SELECT_BRUSH_SUB,
-    BUCKET
+    BUCKET,
+    MIXER_BRUSH,
+    COLOR_REPLACE,
+    SPONGE_SAT,
+    SPONGE_DESAT,
+    BLUR_BRUSH,
+    SHARPEN_BRUSH,
+    RED_EYE,
+    PATCH
 }
 
 data class EditorUiState(
@@ -94,7 +103,24 @@ data class EditorUiState(
     val maskPaintMode: Boolean = false,
     val statusMessage: String? = null,
     val isBusy: Boolean = false,
-    val fitCameraSignal: Int = 0
+    val fitCameraSignal: Int = 0,
+    val brushSpacing: Float = 0.15f,
+    val brushScatter: Float = 0f,
+    val brushSizeJitter: Float = 0f,
+    val brushAngleJitter: Float = 0f,
+    val brushOpacityJitter: Float = 0f,
+    val brushPresets: List<AbrBrushSummary> = emptyList(),
+    val activeBrushPresetName: String? = null,
+    val mixerWet: Float = 55f,
+    val mixerLoad: Float = 50f,
+    val mixerMix: Float = 50f,
+    val mixerFlow: Float = 100f,
+    val mixerSampleAll: Boolean = false,
+    val colorReplaceMode: String = "color",
+    val colorReplaceTolerance: Float = 32f,
+    val patchMode: String = "source",
+    val redEyePupilSize: Float = 50f,
+    val redEyeDarken: Float = 55f
 )
 
 class EditorViewModel : ViewModel() {
@@ -1890,21 +1916,34 @@ class EditorViewModel : ViewModel() {
     }
 
     private fun isLiveDabTool(tool: ActiveTool): Boolean =
-        tool == ActiveTool.SMUDGE || tool == ActiveTool.DODGE || tool == ActiveTool.BURN
+        tool == ActiveTool.SMUDGE ||
+            tool == ActiveTool.DODGE ||
+            tool == ActiveTool.BURN ||
+            tool == ActiveTool.SPONGE_SAT ||
+            tool == ActiveTool.SPONGE_DESAT ||
+            tool == ActiveTool.BLUR_BRUSH ||
+            tool == ActiveTool.SHARPEN_BRUSH ||
+            tool == ActiveTool.COLOR_REPLACE
 
     private fun dabToolKey(tool: ActiveTool): String = when (tool) {
         ActiveTool.SMUDGE -> "smudge"
         ActiveTool.DODGE -> "dodge"
         ActiveTool.BURN -> "burn"
+        ActiveTool.SPONGE_SAT -> "sponge_saturate"
+        ActiveTool.SPONGE_DESAT -> "sponge_desaturate"
+        ActiveTool.BLUR_BRUSH -> "blur_brush"
+        ActiveTool.SHARPEN_BRUSH -> "sharpen_brush"
         else -> ""
     }
 
     fun beginLiveStroke(sample: StrokeSample) {
         val s = _uiState.value
         val isBrushOrEraser = s.activeTool == ActiveTool.BRUSH || s.activeTool == ActiveTool.ERASER
+        val isMixer = s.activeTool == ActiveTool.MIXER_BRUSH
+        val isColorReplace = s.activeTool == ActiveTool.COLOR_REPLACE
         val isDab = isLiveDabTool(s.activeTool)
         val isClone = s.activeTool == ActiveTool.CLONE_STAMP && !s.pickingCloneSource
-        if (!isBrushOrEraser && !isDab && !isClone) return
+        if (!isBrushOrEraser && !isMixer && !isDab && !isClone) return
 
         if (isBrushOrEraser) {
             val activeLayer = s.layers.firstOrNull { it.isActive }
@@ -1917,13 +1956,30 @@ class EditorViewModel : ViewModel() {
         synchronized(pendingLock) { pendingSamples.clear() }
         paintExecutor.execute {
             runCatching {
-                if (isClone) {
-                    val src = s.cloneSourceDoc ?: (sample.x to sample.y)
-                    engine.beginLiveClone(sample, src.first, src.second, s.brushSize, s.brushHardness, s.brushOpacity)
-                } else if (isDab) {
-                    engine.beginLiveDab(dabToolKey(s.activeTool), sample, s.brushSize, s.brushHardness, s.retouchStrength)
-                } else {
-                    engine.beginLiveStroke(sample, s.colorHex, s.activeTool == ActiveTool.ERASER)
+                when {
+                    isClone -> {
+                        val src = s.cloneSourceDoc ?: (sample.x to sample.y)
+                        engine.beginLiveClone(sample, src.first, src.second, s.brushSize, s.brushHardness, s.brushOpacity)
+                    }
+                    isMixer -> {
+                        engine.beginLiveMixer(
+                            sample, s.brushSize, s.brushHardness,
+                            s.mixerWet, s.mixerLoad, s.mixerMix, s.mixerFlow,
+                            s.colorHex, s.mixerSampleAll
+                        )
+                    }
+                    isColorReplace -> {
+                        engine.beginLiveColorReplacement(
+                            sample, s.brushSize, s.brushHardness,
+                            s.colorHex, s.colorReplaceMode, s.colorReplaceTolerance
+                        )
+                    }
+                    isDab -> {
+                        engine.beginLiveDab(dabToolKey(s.activeTool), sample, s.brushSize, s.brushHardness, s.retouchStrength)
+                    }
+                    else -> {
+                        engine.beginLiveStroke(sample, s.colorHex, s.activeTool == ActiveTool.ERASER)
+                    }
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }.onFailure { err ->
@@ -1934,7 +1990,8 @@ class EditorViewModel : ViewModel() {
 
     fun pushLiveStroke(samples: List<StrokeSample>) {
         val tool = _uiState.value.activeTool
-        val ok = tool == ActiveTool.BRUSH || tool == ActiveTool.ERASER || isLiveDabTool(tool) || (tool == ActiveTool.CLONE_STAMP && !_uiState.value.pickingCloneSource)
+        val ok = tool == ActiveTool.BRUSH || tool == ActiveTool.ERASER || tool == ActiveTool.MIXER_BRUSH ||
+            isLiveDabTool(tool) || (tool == ActiveTool.CLONE_STAMP && !_uiState.value.pickingCloneSource)
         if (!ok || samples.isEmpty()) return
         synchronized(pendingLock) {
             pendingSamples.addAll(samples)
@@ -1958,9 +2015,11 @@ class EditorViewModel : ViewModel() {
             val curTool = _uiState.value.activeTool
             val isDab = isLiveDabTool(curTool)
             val isClone = curTool == ActiveTool.CLONE_STAMP
+            val isMixer = curTool == ActiveTool.MIXER_BRUSH
             runCatching {
                 when {
                     isClone -> engine.pushLiveClone(batch)
+                    isMixer -> engine.pushLiveMixer(batch)
                     isDab -> engine.pushLiveDab(batch)
                     else -> engine.pushLiveStroke(batch)
                 }
@@ -1973,12 +2032,14 @@ class EditorViewModel : ViewModel() {
         val tool = _uiState.value.activeTool
         val isDab = isLiveDabTool(tool)
         val isClone = tool == ActiveTool.CLONE_STAMP && !_uiState.value.pickingCloneSource
-        if (tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER && !isDab && !isClone) return
+        val isMixer = tool == ActiveTool.MIXER_BRUSH
+        if (tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER && !isDab && !isClone && !isMixer) return
         paintExecutor.execute {
             drainPendingSamples()
             runCatching {
                 val info = when {
                     isClone -> engine.finishLiveClone()
+                    isMixer -> engine.finishLiveMixer()
                     isDab -> engine.finishLiveDab()
                     else -> engine.finishLiveStroke()
                 }
@@ -3294,4 +3355,173 @@ class EditorViewModel : ViewModel() {
             }
         }
     }
+
+    // ==================== v1.7.0 PRO BRUSH & RETOUCH STUDIO ====================
+
+    fun updateBrushDynamics(
+        spacing: Float = _uiState.value.brushSpacing,
+        scatter: Float = _uiState.value.brushScatter,
+        sizeJitter: Float = _uiState.value.brushSizeJitter,
+        angleJitter: Float = _uiState.value.brushAngleJitter,
+        opacityJitter: Float = _uiState.value.brushOpacityJitter
+    ) {
+        _uiState.update {
+            it.copy(
+                brushSpacing = spacing,
+                brushScatter = scatter,
+                brushSizeJitter = sizeJitter,
+                brushAngleJitter = angleJitter,
+                brushOpacityJitter = opacityJitter
+            )
+        }
+        paintExecutor.execute {
+            runCatching {
+                engine.setBrushDynamics(spacing, scatter, sizeJitter, angleJitter, opacityJitter)
+            }
+        }
+    }
+
+    fun loadBrushPresets() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { engine.getBrushPresets() }.onSuccess { list ->
+                _uiState.update { it.copy(brushPresets = list) }
+            }
+        }
+    }
+
+    fun importAbrFromUri(resolver: ContentResolver, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isBusy = true) }
+            runCatching {
+                val name = queryDisplayName(resolver, uri) ?: "FırçaPaketi.abr"
+                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("ABR dosyası okunamadı")
+                val list = engine.importAbrBytes(name, bytes)
+                _uiState.update { it.copy(brushPresets = list, isBusy = false) }
+                showStatus("${list.size} fırça yüklendi ($name)")
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("ABR içe aktarma hatası: ${err.message}")
+            }
+        }
+    }
+
+    fun selectBrushPreset(name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { engine.selectBrushPreset(name) }.onSuccess { summary ->
+                _uiState.update {
+                    it.copy(
+                        activeBrushPresetName = summary.name,
+                        brushSize = summary.size.coerceIn(1f, 250f),
+                        brushHardness = summary.hardness.coerceIn(0f, 1f),
+                        brushSpacing = summary.spacing.coerceIn(0.05f, 2f)
+                    )
+                }
+                showStatus("Fırça seçildi: ${summary.name}")
+            }.onFailure { err ->
+                showStatus("Fırça seçilemedi: ${err.message}")
+            }
+        }
+    }
+
+    fun resetBrushToRound() {
+        paintExecutor.execute {
+            runCatching { engine.resetBrushToRound() }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        activeBrushPresetName = null,
+                        brushSpacing = 0.15f,
+                        brushScatter = 0f,
+                        brushSizeJitter = 0f,
+                        brushAngleJitter = 0f,
+                        brushOpacityJitter = 0f
+                    )
+                }
+                showStatus("Yuvarlak fırçaya dönüldü")
+            }
+        }
+    }
+
+    fun updateMixerParams(
+        wet: Float = _uiState.value.mixerWet,
+        load: Float = _uiState.value.mixerLoad,
+        mix: Float = _uiState.value.mixerMix,
+        flow: Float = _uiState.value.mixerFlow,
+        sampleAll: Boolean = _uiState.value.mixerSampleAll
+    ) {
+        _uiState.update {
+            it.copy(
+                mixerWet = wet,
+                mixerLoad = load,
+                mixerMix = mix,
+                mixerFlow = flow,
+                mixerSampleAll = sampleAll
+            )
+        }
+    }
+
+    fun updateColorReplaceParams(
+        mode: String = _uiState.value.colorReplaceMode,
+        tolerance: Float = _uiState.value.colorReplaceTolerance
+    ) {
+        _uiState.update {
+            it.copy(
+                colorReplaceMode = mode,
+                colorReplaceTolerance = tolerance
+            )
+        }
+    }
+
+    fun updatePatchMode(mode: String) {
+        _uiState.update { it.copy(patchMode = mode) }
+    }
+
+    fun updateRedEyeParams(
+        pupilSize: Float = _uiState.value.redEyePupilSize,
+        darken: Float = _uiState.value.redEyeDarken
+    ) {
+        _uiState.update {
+            it.copy(
+                redEyePupilSize = pupilSize,
+                redEyeDarken = darken
+            )
+        }
+    }
+
+    fun applyPatchTool(dx: Int, dy: Int) {
+        val s = _uiState.value
+        if (s.selectionBounds == null) {
+            showStatus("Önce Seçim aracıyla yamalanacak alanı seç, sonra Yama ile kaynak dokuya sürükle", 3400L)
+            return
+        }
+        if (dx == 0 && dy == 0) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isBusy = true) }
+            runCatching {
+                val info = engine.applyPatchTool(dx, dy, s.patchMode)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Yama uygulandı")
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Yama hatası: ${err.message}")
+            }
+        }
+    }
+
+    fun applyRedEye(docX: Float, docY: Float) {
+        val s = _uiState.value
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val info = engine.applyRedEye(docX, docY, s.redEyePupilSize, s.redEyeDarken)
+                _uiState.update { it.copy(docInfo = info) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Kırmızı göz giderildi")
+            }.onFailure { err ->
+                showStatus("Kırmızı göz: ${err.message}")
+            }
+        }
+    }
+
 }
