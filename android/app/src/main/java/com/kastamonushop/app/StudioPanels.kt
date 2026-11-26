@@ -133,26 +133,41 @@ internal fun GradientEditPanel(
     onApply: () -> Unit
 ) {
     val swatches = listOf("#4F9CFF", "#FF4D4F", "#FAAD14", "#52C41A", "#A855F7", "#FFFFFF", "#000000")
+    var gradWheelTarget by remember { mutableIntStateOf(0) } // 1 = start, 2 = end
+    if (gradWheelTarget != 0) {
+        ProColorWheelDialog(
+            initialHex = if (gradWheelTarget == 1) startHex else endHex,
+            showOpacity = false,
+            onDismiss = { gradWheelTarget = 0 },
+            onConfirm = { picked, _ ->
+                if (gradWheelTarget == 1) onStartHex(picked) else onEndHex(picked)
+                gradWheelTarget = 0
+                onPreview()
+            }
+        )
+    }
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("Degrade Katmanı", "Tuvalde sürükleyerek yönü ayarla — 60 FPS canlı önizleme", "Uygula", onClose, onApply)
+        BottomEditorHeader("Degrade Katmanı", "Tuvalde sürükleyerek yönü ayarla", "Uygula", onClose, onApply)
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("linear" to "Doğrusal", "radial" to "Dairesel", "reflected" to "Yansımalı", "diamond" to "Elmas").forEach { (st, lbl) ->
                 FilterChip(selected = style == st, onClick = { onStyle(st); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
             }
         }
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Başlangıç", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(62.dp))
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Başlangıç", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(58.dp))
             swatches.forEach { hex ->
                 val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
-                Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(c).border(if (startHex == hex) 2.dp else 1.dp, if (startHex == hex) Color.White else Color(0xFF444858), CircleShape).clickable { onStartHex(hex); onPreview() })
+                Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(c).border(if (startHex.equals(hex, true)) 2.dp else 1.dp, if (startHex.equals(hex, true)) Color.White else Color(0xFF444858), CircleShape).clickable { onStartHex(hex); onPreview() })
             }
+            Box(modifier = Modifier.size(26.dp).clip(CircleShape).background(Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red))).border(1.5.dp, Color.White, CircleShape).clickable { gradWheelTarget = 1 })
         }
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Bitiş", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(62.dp))
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Bitiş", fontSize = 11.sp, color = Color(0xFFDCE0EC), modifier = Modifier.width(58.dp))
             swatches.forEach { hex ->
                 val c = remember(hex) { Color(AndroidColor.parseColor(hex)) }
-                Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(c).border(if (endHex == hex) 2.dp else 1.dp, if (endHex == hex) Color.White else Color(0xFF444858), CircleShape).clickable { onEndHex(hex); onPreview() })
+                Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(c).border(if (endHex.equals(hex, true)) 2.dp else 1.dp, if (endHex.equals(hex, true)) Color.White else Color(0xFF444858), CircleShape).clickable { onEndHex(hex); onPreview() })
             }
+            Box(modifier = Modifier.size(26.dp).clip(CircleShape).background(Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red))).border(1.5.dp, Color.White, CircleShape).clickable { gradWheelTarget = 2 })
         }
         CompactSliderRow("Opaklık", "%${opacity.roundToInt()}", opacity, 10f..100f, 85f) { onOpacity(it); onPreview() }
     }
@@ -189,6 +204,25 @@ internal fun ShapeEditPanel(
                         .clickable { onFillHex(hex); onPreview() },
                     contentAlignment = Alignment.Center
                 ) { if (hex.isEmpty()) Text("×", color = Color(0xFFFF6B6B), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+            }
+            var showShapeWheel by remember { mutableStateOf(false) }
+            Box(
+                modifier = Modifier.size(26.dp).clip(CircleShape)
+                    .background(Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)))
+                    .border(1.5.dp, Color.White, CircleShape)
+                    .clickable { showShapeWheel = true }
+            )
+            if (showShapeWheel) {
+                ProColorWheelDialog(
+                    initialHex = fillHex.ifBlank { "#4F9CFF" },
+                    showOpacity = false,
+                    onDismiss = { showShapeWheel = false },
+                    onConfirm = { picked, _ ->
+                        onFillHex(picked)
+                        showShapeWheel = false
+                        onPreview()
+                    }
+                )
             }
             FilterChip(selected = showFine, onClick = onToggleFine, label = { Text(if (showFine) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) })
         }
@@ -929,18 +963,25 @@ internal fun FilterMenuPanel(
     onGallery: () -> Unit,
     onLightDistort: () -> Unit
 ) {
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("Filtreler", "Kaydırdıkça anlık önizleme ile uygulanır", onClose = onClose)
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(20.dp))
+        }
         Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            CircularDockButton(icon = Icons.Default.BlurOn, label = "Bulanık", onClick = onBlur)
-            CircularDockButton(icon = Icons.Default.Details, label = "Keskin", onClick = onSharpen)
-            CircularDockButton(icon = Icons.Default.FastForward, label = "Hareket", onClick = onMotion)
-            CircularDockButton(icon = Icons.Default.BlurCircular, label = "Radyal", onClick = onRadial)
-            CircularDockButton(icon = Icons.Default.AutoAwesome, label = "Galeri", onClick = onGallery)
-            CircularDockButton(icon = Icons.Default.WbSunny, label = "Işık/Bük", onClick = onLightDistort)
+            SlimToolChip(Icons.Default.BlurOn, "Bulanık", false, onBlur)
+            SlimToolChip(Icons.Default.Details, "Keskin", false, onSharpen)
+            SlimToolChip(Icons.Default.FastForward, "Hareket", false, onMotion)
+            SlimToolChip(Icons.Default.BlurCircular, "Radyal", false, onRadial)
+            SlimToolChip(Icons.Default.AutoAwesome, "Galeri", false, onGallery)
+            SlimToolChip(Icons.Default.WbSunny, "Işık/Bük", false, onLightDistort)
         }
     }
 }
@@ -1541,166 +1582,61 @@ internal fun SelectMenuPanel(
     selectScrollState: androidx.compose.foundation.ScrollState,
     onClose: () -> Unit
 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Seçim Araçları",
-                            subtitle = when (state.activeTool) {
-                                ActiveTool.SELECT_QUICK -> if (state.selectSubtractMode) "Akıllı Fırça (-) · kenar algılayarak çıkar" else "Akıllı Fırça (+) · nesne üzerinden parmağınla geç"
-                                ActiveTool.SELECT_BRUSH_ADD -> "Elle Ekle (+) · parmağınla boyayarak seçime ekle"
-                                ActiveTool.SELECT_BRUSH_SUB -> "Elle Sil (-) · yanlış seçilen yerleri parmağınla sil"
-                                ActiveTool.SELECT_WAND -> if (state.wandSmartMode) "Akıllı Değnek · seçmek istediğin nesneye dokun" else "Renk Değneği · dokun ve Tolerans ile ayarla (${state.wandTolerance.roundToInt()})"
-                                else -> "Parmağınla sürükleyerek alan seç"
-                            },
-                            onClose = {
-                                vm.setTool(ActiveTool.NONE)
-                                onClose()
-                            }
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(selectScrollState),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            CircularDockButton(
-                                icon = Icons.Default.AutoAwesome,
-                                label = "Konu Seç",
-                                onClick = { vm.selectSubject() }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.Gesture,
-                                label = "Akıllı",
-                                selected = state.activeTool == ActiveTool.SELECT_QUICK,
-                                onClick = { vm.setTool(ActiveTool.SELECT_QUICK) }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.AddCircleOutline,
-                                label = "Elle (+)",
-                                selected = state.activeTool == ActiveTool.SELECT_BRUSH_ADD,
-                                onClick = { vm.setTool(ActiveTool.SELECT_BRUSH_ADD) }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.RemoveCircleOutline,
-                                label = "Elle (-)",
-                                selected = state.activeTool == ActiveTool.SELECT_BRUSH_SUB,
-                                onClick = { vm.setTool(ActiveTool.SELECT_BRUSH_SUB) }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.AutoFixHigh,
-                                label = "Değnek",
-                                selected = state.activeTool == ActiveTool.SELECT_WAND,
-                                onClick = { vm.setTool(ActiveTool.SELECT_WAND) }
-                            )
-                            CircularDockButton(
-                                icon = Icons.Default.CropFree,
-                                label = if (state.selectEllipse) "Elips" else "Kutu",
-                                selected = state.activeTool == ActiveTool.SELECT_RECT,
-                                onClick = {
-                                    if (state.activeTool == ActiveTool.SELECT_RECT) {
-                                        vm.toggleSelectEllipse()
-                                    } else {
-                                        vm.setTool(ActiveTool.SELECT_RECT)
-                                    }
-                                }
-                            )
-                            if (state.selectionBounds != null) {
-                                CircularDockButton(
-                                    icon = Icons.Default.ContentCopy,
-                                    label = "Katmana Al",
-                                    onClick = { vm.layerViaCopy() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.BlurOn,
-                                    label = "Yumuşat",
-                                    onClick = { vm.featherSelection(6f) }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.CleaningServices,
-                                    label = "Nesne Sil",
-                                    onClick = { vm.contentAwareRemove() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.SwapHoriz,
-                                    label = "Tersine",
-                                    onClick = { vm.selectInverse() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.Layers,
-                                    label = "Maskele",
-                                    onClick = { vm.revealSelectionMask() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.FormatColorFill,
-                                    label = "Doldur",
-                                    onClick = { vm.fillSelection() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.DeleteOutline,
-                                    label = "Sil",
-                                    onClick = { vm.clearSelection() }
-                                )
-                                CircularDockButton(
-                                    icon = Icons.Default.Close,
-                                    label = "Kaldır",
-                                    onClick = { vm.deselect() }
-                                )
-                            }
-                        }
-                        if (state.activeTool == ActiveTool.SELECT_WAND || state.activeTool == ActiveTool.SELECT_RECT || state.activeTool == ActiveTool.SELECT_QUICK) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (state.activeTool != ActiveTool.SELECT_QUICK) {
-                                    FilterChip(
-                                        selected = state.selectAddMode,
-                                        onClick = { vm.toggleSelectAddMode() },
-                                        label = { Text(if (state.selectAddMode) "Ekle (+) ✓" else "Ekle (+)", fontSize = 11.sp) }
-                                    )
-                                }
-                                FilterChip(
-                                    selected = state.selectSubtractMode,
-                                    onClick = { vm.toggleSelectSubtractMode() },
-                                    label = { Text(if (state.selectSubtractMode) "Çıkar (-) ✓" else "Çıkar (-)", fontSize = 11.sp) }
-                                )
-                                if (state.activeTool == ActiveTool.SELECT_WAND) {
-                                    FilterChip(
-                                        selected = state.wandSmartMode,
-                                        onClick = { vm.toggleWandSmartMode() },
-                                        label = { Text(if (state.wandSmartMode) "Akıllı Nesne ✓" else "Renk Modu", fontSize = 11.sp) }
-                                    )
-                                    if (!state.wandSmartMode) {
-                                        FilterChip(
-                                            selected = state.wandContiguous,
-                                            onClick = { vm.toggleWandContiguous() },
-                                            label = { Text(if (state.wandContiguous) "Bitişik ✓" else "Tüm Renk", fontSize = 11.sp) }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if (state.activeTool == ActiveTool.SELECT_WAND && !state.wandSmartMode) {
-                            CompactSliderRow("Tolerans", "${state.wandTolerance.roundToInt()}", state.wandTolerance, 0f..120f, defaultValue = 32f) {
-                                vm.updateWandTolerance(it)
-                            }
-                        } else if (
-                            state.activeTool == ActiveTool.SELECT_QUICK ||
-                            state.activeTool == ActiveTool.SELECT_BRUSH_ADD ||
-                            state.activeTool == ActiveTool.SELECT_BRUSH_SUB
-                        ) {
-                            BrushSizeSliderRow("Fırça", state.brushSize, minPx = 1f, maxPx = 250f, defaultPx = 48f) {
-                                vm.updateBrush(size = it)
-                            }
-                        }
-                    }
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(selectScrollState),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SlimToolChip(Icons.Default.AutoFixHigh, "Akıllı", state.activeTool == ActiveTool.SELECT_QUICK) {
+                    vm.setTool(ActiveTool.SELECT_QUICK)
+                }
+                SlimToolChip(Icons.Default.AddCircleOutline, "Ekle+", state.activeTool == ActiveTool.SELECT_BRUSH_ADD) {
+                    vm.setTool(ActiveTool.SELECT_BRUSH_ADD)
+                }
+                SlimToolChip(Icons.Default.RemoveCircleOutline, "Sil-", state.activeTool == ActiveTool.SELECT_BRUSH_SUB) {
+                    vm.setTool(ActiveTool.SELECT_BRUSH_SUB)
+                }
+                SlimToolChip(Icons.Default.AutoAwesome, "Değnek", state.activeTool == ActiveTool.SELECT_WAND) {
+                    vm.setTool(ActiveTool.SELECT_WAND)
+                }
+                SlimToolChip(Icons.Default.CropSquare, if (state.selectEllipse) "Elips" else "Kutu", state.activeTool == ActiveTool.SELECT_RECT) {
+                    if (state.activeTool == ActiveTool.SELECT_RECT) vm.toggleSelectEllipse()
+                    else vm.setTool(ActiveTool.SELECT_RECT)
+                }
+                SlimToolChip(Icons.Default.PersonSearch, "Konuyu Seç", false) {
+                    vm.selectSubject()
+                }
+            }
+        }
+        if (state.selectionBounds != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(selected = false, onClick = { vm.layerViaCopy() }, label = { Text("Katmana Kopyala", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = { vm.selectInverse() }, label = { Text("Ters Çevir", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = { vm.featherSelection(6f) }, label = { Text("Yumuşat", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = { vm.contentAwareRemove() }, label = { Text("Nesneyi Sil", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = { vm.clearSelectionPixels() }, label = { Text("Temizle", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = { vm.revealSelectionMask() }, label = { Text("Maskele", fontSize = 10.sp) })
+                FilterChip(selected = false, onClick = { vm.deselectAll() }, label = { Text("Bırak", fontSize = 10.sp) })
+            }
+        }
+    }
 }
-
-
-
 
 @Composable
 internal fun LayerMaskPanel(

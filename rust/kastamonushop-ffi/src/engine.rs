@@ -58,6 +58,8 @@ pub struct LayerSummary {
     pub mask_enabled: bool,
     pub clipped: bool,
     pub depth: u32,
+    pub is_text: bool,
+    pub fx_badges: Vec<String>,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -301,6 +303,7 @@ pub(crate) struct EngineCore {
     live_clone: Option<ActiveLiveClone>,
     live_mixer: Option<ActiveLiveMixer>,
     custom_brush_spacing: bool,
+    copied_layer_effects: Vec<photocraft_doc::Effect>,
     live_adjustment: Option<LiveAdjustmentSession>,
     live_filter: Option<LiveFilterSession>,
     proxy_preview: Option<ProxyPreviewSession>,
@@ -343,6 +346,7 @@ impl EngineCore {
             live_clone: None,
             live_mixer: None,
             custom_brush_spacing: false,
+            copied_layer_effects: Vec::new(),
             live_adjustment: None,
             live_filter: None,
             proxy_preview: None,
@@ -4568,6 +4572,8 @@ impl KastamonuEngine {
                 mask_enabled,
                 clipped: layer.clipped,
                 depth: depth as u32,
+                is_text: matches!(layer.content, LayerContent::Text(_)),
+                fx_badges: Self::effect_badges(&layer.effects),
             });
         }
         Ok(layers)
@@ -6785,9 +6791,157 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+
+    // ==================== v1.7.3 MULTI-FX LAYER STYLE STUDIO ====================
+
+    pub fn update_proxy_layer_style_stack(&self, effects_json: String) -> Result<(), EngineError> {
+        let mut effects: Vec<Value> = serde_json::from_str(&effects_json)
+            .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?;
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(aid) = active_id else {
+            return Ok(());
+        };
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let scale = proxy.scale as f64;
+        for item in &mut effects {
+            if let Some(p) = item.get_mut("params").and_then(|v| v.as_object_mut()) {
+                if let Some(sz) = p.get("size").and_then(|v| v.as_f64()) {
+                    p.insert("size".into(), json!((sz * scale).clamp(1.0, 150.0)));
+                }
+                if let Some(dist) = p.get("distance").and_then(|v| v.as_f64()) {
+                    p.insert("distance".into(), json!((dist * scale).clamp(0.0, 150.0)));
+                }
+            }
+        }
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        ps.set_active_layer(Some(aid));
+        if effects.is_empty() {
+            let _ = ps.execute("layer.layerStyle.clear", json!({ "layer": aid.0 }));
+        } else {
+            let _ = ps.execute(
+                "layer.layerStyle.replace",
+                json!({ "layer": aid.0, "effects": effects }),
+            );
+        }
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn apply_layer_style_stack(&self, effects_json: String) -> Result<DocumentInfo, EngineError> {
+        let effects: Vec<Value> = serde_json::from_str(&effects_json)
+            .map_err(|e| EngineError::InvalidParams { detail: e.to_string() })?;
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let aid = guard
+            .session
+            .active()
+            .and_then(|ds| ds.active_layer())
+            .ok_or_else(|| EngineError::CommandFailed {
+                detail: "Efekt uygulanacak aktif katman yok".into(),
+            })?;
+        if effects.is_empty() {
+            guard
+                .session
+                .execute("layer.layerStyle.clear", json!({ "layer": aid.0 }))
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        } else {
+            guard
+                .session
+                .execute(
+                    "layer.layerStyle.replace",
+                    json!({ "layer": aid.0, "effects": effects }),
+                )
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        }
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn copy_active_layer_style(&self) -> Result<u32, EngineError> {
+        let mut guard = self.core.lock();
+        let effects = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let aid = ds.active_layer().ok_or_else(|| EngineError::CommandFailed {
+                detail: "Aktif katman seçili değil".into(),
+            })?;
+            let layer = ds.doc().layer(aid).ok_or_else(|| EngineError::CommandFailed {
+                detail: "Katman bulunamadı".into(),
+            })?;
+            layer.effects.clone()
+        };
+        let count = effects.len() as u32;
+        if count == 0 {
+            return Err(EngineError::CommandFailed {
+                detail: "Bu katmanda kopyalanacak fx stili yok".into(),
+            });
+        }
+        guard.copied_layer_effects = effects;
+        Ok(count)
+    }
+
+    pub fn paste_layer_style_to_active(&self) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        if guard.copied_layer_effects.is_empty() {
+            return Err(EngineError::CommandFailed {
+                detail: "Önce bir katmandan stil kopyalamalısın".into(),
+            });
+        }
+        let copied = guard.copied_layer_effects.clone();
+        guard
+            .session
+            .edit("Katman Stili Yapıştır", |doc, active| {
+                let id = active.ok_or_else(|| photocraft_engine::EngineError::BadParams {
+                    cmd: "layer.layerStyle.paste".into(),
+                    msg: "Aktif katman seçili değil".into(),
+                })?;
+                let layer = doc
+                    .layer_mut(id)
+                    .ok_or(photocraft_engine::EngineError::NoLayer(id))?;
+                layer.effects = copied.clone();
+                Ok(())
+            })
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
 }
 
 impl KastamonuEngine {
+    fn effect_badges(effects: &[photocraft_doc::Effect]) -> Vec<String> {
+        let mut out = Vec::new();
+        for fx in effects {
+            let label = match fx {
+                photocraft_doc::Effect::DropShadow(_) => "Gölge",
+                photocraft_doc::Effect::InnerShadow(_) => "İç Gölge",
+                photocraft_doc::Effect::OuterGlow(_) => "Dış Işıma",
+                photocraft_doc::Effect::InnerGlow(_) => "İç Işıma",
+                photocraft_doc::Effect::Stroke(_) => "Kontur",
+                photocraft_doc::Effect::ColorOverlay(_) => "Renk",
+                photocraft_doc::Effect::GradientOverlay(_) => "Degrade",
+                photocraft_doc::Effect::BevelEmboss(_) => "Kabartma",
+                _ => "fx",
+            };
+            if !out.iter().any(|s: &String| s == label) {
+                out.push(label.to_string());
+            }
+        }
+        out
+    }
+
     fn summarize_presets(presets: &[photocraft_paint::BrushPreset]) -> Vec<AbrBrushSummary> {
         presets
             .iter()
@@ -8118,6 +8272,63 @@ LUT_3D_SIZE 2
         eng.open_rgba_bytes("redeye.png".into(), 64, 64, rgba).unwrap();
         let info = eng.apply_red_eye(32.0, 32.0, 50.0, 60.0).unwrap();
         assert!(info.can_undo);
+    }
+
+
+    #[test]
+    fn test_v173_multi_fx_stack_and_layer_badges() {
+        let eng = test_engine();
+        eng.new_document("fxstack.png".into(), 96, 96).unwrap();
+        eng.add_layer("Başlık".into()).unwrap();
+        let stack = serde_json::json!([
+            {"kind": "stroke", "params": {"color": "#8A2BE2", "size": 6.0, "opacity": 100.0, "position": "outside", "blend": "Normal"}},
+            {"kind": "outerGlow", "params": {"color": "#A855F7", "size": 10.0, "opacity": 85.0, "blend": "Screen"}},
+            {"kind": "gradientOverlay", "params": {"from": "#FF2A5F", "to": "#7B2CFF", "opacity": 100.0, "angle": 90.0, "style": "linear", "blend": "Normal"}},
+            {"kind": "dropShadow", "params": {"color": "#000000", "size": 8.0, "distance": 4.0, "angle": 120.0, "opacity": 80.0, "blend": "Multiply"}},
+            {"kind": "bevelEmboss", "params": {"depth": 100.0, "size": 4.0, "angle": 120.0, "opacity": 75.0}}
+        ]).to_string();
+        let info = eng.apply_layer_style_stack(stack).unwrap();
+        assert!(info.can_undo);
+        let layers = eng.get_layers().unwrap();
+        let active = layers.iter().find(|l| l.is_active).unwrap();
+        assert!(active.fx_badges.contains(&"Kontur".to_string()));
+        assert!(active.fx_badges.contains(&"Dış Işıma".to_string()));
+        assert!(active.fx_badges.contains(&"Degrade".to_string()));
+        assert!(active.fx_badges.contains(&"Gölge".to_string()));
+        assert!(active.fx_badges.contains(&"Kabartma".to_string()));
+    }
+
+    #[test]
+    fn test_v173_copy_and_paste_layer_style() {
+        let eng = test_engine();
+        eng.new_document("fxcp.png".into(), 64, 64).unwrap();
+        eng.add_layer("Kaynak".into()).unwrap();
+        let stack = serde_json::json!([
+            {"kind": "stroke", "params": {"color": "#FF0000", "size": 4.0, "opacity": 100.0, "position": "outside"}},
+            {"kind": "outerGlow", "params": {"color": "#FFFF00", "size": 8.0, "opacity": 90.0}}
+        ]).to_string();
+        eng.apply_layer_style_stack(stack).unwrap();
+        let copied = eng.copy_active_layer_style().unwrap();
+        assert_eq!(copied, 2);
+        eng.add_layer("Hedef".into()).unwrap();
+        let info = eng.paste_layer_style_to_active().unwrap();
+        assert!(info.can_undo);
+        let layers = eng.get_layers().unwrap();
+        let target = layers.iter().find(|l| l.is_active).unwrap();
+        assert_eq!(target.fx_badges.len(), 2);
+    }
+
+    #[test]
+    fn test_v173_proxy_multi_fx_stack() {
+        let eng = test_engine();
+        eng.new_document("fxproxy.png".into(), 64, 64).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        let stack = serde_json::json!([
+            {"kind": "colorOverlay", "params": {"color": "#3366FF", "opacity": 80.0}},
+            {"kind": "innerGlow", "params": {"color": "#FFFFFF", "size": 6.0, "opacity": 70.0, "source": "edge", "blend": "Screen"}}
+        ]).to_string();
+        eng.update_proxy_layer_style_stack(stack).unwrap();
+        eng.end_proxy_preview();
     }
 
 }

@@ -1835,10 +1835,9 @@ fun StonebridgeStudioScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 TopBarButton(
                     icon = Icons.Default.Home,
@@ -1848,88 +1847,6 @@ fun StonebridgeStudioScreen(
                         s.showExitSaveDialog = true
                     }
                 )
-
-                Box {
-                    TopBarButton(
-                        icon = Icons.Default.AddPhotoAlternate,
-                        label = "Aç / Ekle",
-                        onClick = { s.showOpenMenu = true }
-                    )
-                    DropdownMenu(
-                        expanded = s.showOpenMenu,
-                        onDismissRequest = { s.showOpenMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Fotoğraf Aç (Galeri / Uygulamalar)") },
-                            onClick = {
-                                s.showOpenMenu = false
-                                s.openAsLayer = false
-                                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
-                                    type = "image/*"
-                                    addCategory(Intent.CATEGORY_OPENABLE)
-                                }
-                                imageChooserLauncher.launch(Intent.createChooser(pick, "Fotoğraf Seç"))
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Fotoğrafı Katman Olarak Ekle") },
-                            onClick = {
-                                s.showOpenMenu = false
-                                s.openAsLayer = true
-                                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
-                                    type = "image/*"
-                                    addCategory(Intent.CATEGORY_OPENABLE)
-                                }
-                                imageChooserLauncher.launch(Intent.createChooser(pick, "Katman İçin Fotoğraf Seç"))
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Proje Aç (.psd / .pcraft)") },
-                            onClick = {
-                                s.showOpenMenu = false
-                                s.openAsLayer = false
-                                openDocLauncher.launch(arrayOf("*/*"))
-                            }
-                        )
-                    }
-                }
-
-                Box {
-                    TopBarButton(
-                        icon = Icons.Default.Save,
-                        label = "Kaydet",
-                        onClick = { s.showExportMenu = true }
-                    )
-                    DropdownMenu(
-                        expanded = s.showExportMenu,
-                        onDismissRequest = { s.showExportMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Cihaz Galerisine Kaydet (PNG)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) },
-                            onClick = {
-                                s.showExportMenu = false
-                                vm.saveToDeviceGallery(context)
-                            }
-                        )
-                        HorizontalDivider()
-                        listOf(
-                            "png" to "PNG Dosya Olarak Kaydet (.png)",
-                            "jpg" to "JPEG Resim (.jpg)",
-                            "psd" to "Photoshop Katmanlı (.psd)",
-                            "pcraft" to "StonebridgeCraft Proje (.pcraft)",
-                            "webp" to "WebP (.webp)"
-                        ).forEach { (ext, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    s.showExportMenu = false
-                                    s.pendingExportFormat = ext
-                                    exportDocLauncher.launch("stonebridgecraft.$ext")
-                                }
-                            )
-                        }
-                    }
-                }
 
                 TopBarButton(
                     icon = Icons.AutoMirrored.Filled.Undo,
@@ -2001,26 +1918,109 @@ fun StonebridgeStudioScreen(
                 )
 
                 TopBarButton(
-                    icon = Icons.Default.OpenWith,
-                    label = "Kaydır",
-                    selected = s.singleFingerPanMode,
-                    onClick = {
-                        s.singleFingerPanMode = !s.singleFingerPanMode
-                    }
-                )
-
-                TopBarButton(
-                    icon = Icons.Default.CenterFocusStrong,
-                    label = "Ortala",
-                    onClick = { fitToSafeArea(s.pendingQuarterTurns, s.activePanel) }
-                )
-
-                TopBarButton(
                     icon = Icons.Default.Layers,
                     label = "Katman",
                     selected = s.showLayers,
                     onClick = { s.showLayers = !s.showLayers }
                 )
+
+                Box {
+                    TopBarButton(
+                        icon = Icons.Default.Save,
+                        label = "Kaydet",
+                        onClick = { s.showExportMenu = true }
+                    )
+                    DropdownMenu(
+                        expanded = s.showExportMenu,
+                        onDismissRequest = { s.showExportMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Cihaz Galerisine Kaydet (PNG)", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary) },
+                            onClick = {
+                                s.showExportMenu = false
+                                vm.saveToDeviceGallery(context)
+                            }
+                        )
+                        HorizontalDivider()
+                        listOf(
+                            "png" to "PNG Dosya Olarak Kaydet (.png)",
+                            "jpg" to "JPEG Resim (.jpg)",
+                            "psd" to "Photoshop Katmanlı (.psd)",
+                            "pcraft" to "StonebridgeCraft Proje (.pcraft)",
+                            "webp" to "WebP (.webp)"
+                        ).forEach { (ext, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    s.showExportMenu = false
+                                    s.pendingExportFormat = ext
+                                    exportDocLauncher.launch("stonebridgecraft.$ext")
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Box {
+                    TopBarButton(
+                        icon = Icons.Default.MoreVert,
+                        label = "Diğer",
+                        selected = s.singleFingerPanMode,
+                        onClick = { s.showOpenMenu = true }
+                    )
+                    DropdownMenu(
+                        expanded = s.showOpenMenu,
+                        onDismissRequest = { s.showOpenMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Fotoğraf Aç (Galeri)") },
+                            onClick = {
+                                s.showOpenMenu = false
+                                s.openAsLayer = false
+                                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
+                                    type = "image/*"
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                }
+                                imageChooserLauncher.launch(Intent.createChooser(pick, "Fotoğraf Seç"))
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Fotoğrafı Katman Olarak Ekle") },
+                            onClick = {
+                                s.showOpenMenu = false
+                                s.openAsLayer = true
+                                val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
+                                    type = "image/*"
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                }
+                                imageChooserLauncher.launch(Intent.createChooser(pick, "Katman İçin Fotoğraf Seç"))
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Proje Aç (.psd / .pcraft)") },
+                            onClick = {
+                                s.showOpenMenu = false
+                                s.openAsLayer = false
+                                openDocLauncher.launch(arrayOf("*/*"))
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(if (s.singleFingerPanMode) "Tek Parmak Kaydır: AÇIK ✓" else "Tek Parmak Kaydır Modu") },
+                            onClick = {
+                                s.showOpenMenu = false
+                                s.singleFingerPanMode = !s.singleFingerPanMode
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Fotoğrafı Ekrana Ortala") },
+                            onClick = {
+                                s.showOpenMenu = false
+                                fitToSafeArea(s.pendingQuarterTurns, s.activePanel)
+                            }
+                        )
+                    }
+                }
             }
         }
 
@@ -2146,7 +2146,6 @@ fun StonebridgeStudioScreen(
                                 vm.setTool(ActiveTool.NONE)
                                 s.showFxFineTune = false
                                 vm.beginLayerProxyPreview()
-                                vm.updateProxyLayerEffect(s.fxKind, s.fxColorHex, s.fxSizeVal, s.fxOpacityVal, s.fxDistanceVal)
                                 s.activePanel = BottomPanel.LAYER_FX_EDIT
                             },
                             modifier = Modifier.size(34.dp)
@@ -2209,6 +2208,32 @@ fun StonebridgeStudioScreen(
                             },
                             label = { Text("Blend If", fontSize = 10.sp) }
                         )
+                        FilterChip(
+                            selected = false,
+                            onClick = { vm.copyActiveLayerStyle() },
+                            label = { Text("Stil Kopyala", fontSize = 10.sp) }
+                        )
+                        if (state.hasCopiedStyle) {
+                            FilterChip(
+                                selected = true,
+                                onClick = { vm.pasteLayerStyleToActive() },
+                                label = { Text("Stil Yapıştır", fontSize = 10.sp) }
+                            )
+                        }
+                        if (activeLayer?.isText == true) {
+                            FilterChip(
+                                selected = false,
+                                onClick = { vm.rasterizeActiveTextLayer() },
+                                label = { Text("Rasterleştir", fontSize = 10.sp) }
+                            )
+                        }
+                        if (state.selectionBounds != null) {
+                            FilterChip(
+                                selected = false,
+                                onClick = { vm.layerViaCopy() },
+                                label = { Text("Seçimden Katman", fontSize = 10.sp) }
+                            )
+                        }
                     }
                     if (activeLayer != null) {
                         Spacer(modifier = Modifier.height(4.dp))
@@ -2301,6 +2326,15 @@ fun StonebridgeStudioScreen(
                                             Icon(Icons.Default.Folder, contentDescription = null, tint = Color(0xFFFFD54F), modifier = Modifier.size(14.dp))
                                         }
                                         Text(layer.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (layer.fxBadges.isNotEmpty()) {
+                                            Text(
+                                                text = "fx: " + layer.fxBadges.joinToString(" · "),
+                                                fontSize = 9.sp,
+                                                color = Color(0xFFFFD54F),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                                         Text(
@@ -2402,7 +2436,7 @@ fun StonebridgeStudioScreen(
         }
 
         // v1.7.2 PROCREATE-STYLE LEFT EDGE VERTICAL SIZE & OPACITY SIDEBAR
-        if (s.activePanel == BottomPanel.DRAW_MENU || s.activePanel == BottomPanel.RETOUCH_MENU) {
+        if (s.activePanel == BottomPanel.DRAW_MENU || s.activePanel == BottomPanel.RETOUCH_MENU || s.activePanel == BottomPanel.SELECT_MENU) {
             LeftBrushSidebar(
                 vm = vm,
                 state = state,

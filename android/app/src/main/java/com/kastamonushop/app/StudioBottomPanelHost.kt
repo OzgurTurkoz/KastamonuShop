@@ -416,20 +416,20 @@ internal fun StudioBottomPanelHost(
                     )
                 }
                 BottomPanel.ADJUST_MENU -> {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        BottomEditorHeader(
-                            title = "Ayarlar",
-                            subtitle = "Canlı önizlemeli ışık ve renk ayarları",
-                            onClose = { s.activePanel = BottomPanel.DOCK }
-                        )
+                        IconButton(onClick = { s.activePanel = BottomPanel.DOCK }, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri", tint = Color.White, modifier = Modifier.size(20.dp))
+                        }
                         Row(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .weight(1f)
                                 .horizontalScroll(adjustScrollState),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             CircularDockButton(
                                 icon = Icons.Default.AutoFixHigh,
@@ -547,7 +547,7 @@ internal fun StudioBottomPanelHost(
                                 }
                             )
                         }
-                    }
+
                 }
 
                 BottomPanel.CAMERA_LIGHT_LIVE -> CameraRawProPanel(
@@ -1694,124 +1694,26 @@ private fun StudioBottomPanelHostPart2(
                 }
 
                 BottomPanel.LAYER_FX_EDIT -> {
-                    val activeName = state.layers.firstOrNull { it.isActive }?.name ?: "Katman"
-                    fun pushFxLive() {
-                        vm.updateProxyLayerEffect(s.fxKind, s.fxColorHex, s.fxSizeVal, s.fxOpacityVal, s.fxDistanceVal)
-                    }
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        BottomEditorHeader(
-                            title = "Katman Efektleri (fx): $activeName",
-                            subtitle = "60 FPS canlı önizleme — beğenirsen Uygula de",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                vm.endProxyPreview()
-                                s.activePanel = BottomPanel.DOCK
-                            },
-                            onApply = {
-                                vm.applyLayerEffect(s.fxKind, s.fxColorHex, s.fxSizeVal, s.fxOpacityVal, s.fxDistanceVal)
-                                s.activePanel = BottomPanel.DOCK
-                            }
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                "dropShadow" to "Dış Gölge",
-                                "innerShadow" to "İç Gölge",
-                                "stroke" to "Kontur",
-                                "outerGlow" to "Dış Işıma",
-                                "innerGlow" to "İç Işıma",
-                                "colorOverlay" to "Renk",
-                                "gradientOverlay" to "Degrade"
-                            ).forEach { (id, lbl) ->
-                                FilterChip(
-                                    selected = s.fxKind == id,
-                                    onClick = {
-                                        s.fxKind = id
-                                        when (id) {
-                                            "dropShadow", "innerShadow" -> s.fxColorHex = "#000000"
-                                            "stroke" -> s.fxColorHex = "#FFFFFF"
-                                            "outerGlow", "innerGlow" -> s.fxColorHex = "#4F9CFF"
-                                            "gradientOverlay" -> { s.fxColorHex = "#4F9CFF"; s.fxDistanceVal = 90f }
-                                        }
-                                        pushFxLive()
-                                    },
-                                    label = { Text(lbl, fontSize = 11.sp) }
-                                )
-                            }
-                            FilterChip(
-                                selected = s.showFxFineTune,
-                                onClick = { s.showFxFineTune = !s.showFxFineTune },
-                                label = { Text(if (s.showFxFineTune) "İnce ▲" else "İnce ▼", fontSize = 11.sp) }
-                            )
-                            OutlinedButton(
-                                onClick = {
-                                    vm.endProxyPreview()
-                                    vm.clearLayerEffects()
-                                    s.activePanel = BottomPanel.DOCK
-                                },
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                                modifier = Modifier.height(32.dp)
-                            ) {
-                                Text("Temizle", fontSize = 10.sp)
-                            }
+                    val fxSlots = remember { createDefaultMultiFxSlots() }
+                    MultiFxLayerStyleStudioPanel(
+                        slots = fxSlots,
+                        onPreviewStack = { json -> vm.updateProxyLayerStyleStack(json) },
+                        onClearAll = {
+                            vm.clearLayerEffects()
+                            vm.endProxyPreview()
+                            s.activePanel = BottomPanel.DOCK
+                        },
+                        onClose = {
+                            vm.endProxyPreview()
+                            s.activePanel = BottomPanel.DOCK
+                        },
+                        onApply = { json ->
+                            vm.applyLayerStyleStack(json)
+                            s.activePanel = BottomPanel.DOCK
                         }
-                        // Temel: Renk + Boyut (60 FPS live preview!)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            listOf("#000000", "#FFFFFF", "#FF4D4F", "#FFEC3D", "#2ED573", "#4F9CFF", "#B37FEB").forEach { hex ->
-                                val c = Color(AndroidColor.parseColor(hex))
-                                Box(
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(c)
-                                        .border(
-                                            width = if (s.fxColorHex.equals(hex, true)) 2.5.dp else 1.dp,
-                                            color = if (s.fxColorHex.equals(hex, true)) MaterialTheme.colorScheme.primary else Color.Gray,
-                                            shape = CircleShape
-                                        )
-                                        .clickable {
-                                            s.fxColorHex = hex
-                                            pushFxLive()
-                                        }
-                                )
-                            }
-                        }
-                        if (s.fxKind != "colorOverlay") {
-                            CompactSliderRow("Boyut", "${s.fxSizeVal.roundToInt()}px", s.fxSizeVal, 1f..80f, defaultValue = 16f) {
-                                s.fxSizeVal = it
-                                pushFxLive()
-                            }
-                        }
-                        if (s.showFxFineTune) {
-                            CompactSliderRow("Opaklık", "%${s.fxOpacityVal.roundToInt()}", s.fxOpacityVal, 5f..100f, defaultValue = 75f) {
-                                s.fxOpacityVal = it
-                                pushFxLive()
-                            }
-                            if (s.fxKind == "gradientOverlay") {
-                                CompactSliderRow("Açı", "${s.fxDistanceVal.roundToInt()}°", s.fxDistanceVal, 0f..360f, defaultValue = 90f) {
-                                    s.fxDistanceVal = it
-                                    pushFxLive()
-                                }
-                            } else if (s.fxKind == "dropShadow" || s.fxKind == "innerShadow") {
-                                CompactSliderRow("Uzaklık", "${s.fxDistanceVal.roundToInt()}px", s.fxDistanceVal, 0f..80f, defaultValue = 12f) {
-                                    s.fxDistanceVal = it
-                                    pushFxLive()
-                                }
-                            }
-                        }
-                    }
+                    )
                 }
+
                 BottomPanel.LAYER_MASK_EDIT -> {
                     val activeL = state.layers.firstOrNull { it.isActive }
                     LayerMaskPanel(

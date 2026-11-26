@@ -120,7 +120,8 @@ data class EditorUiState(
     val colorReplaceTolerance: Float = 32f,
     val patchMode: String = "source",
     val redEyePupilSize: Float = 50f,
-    val redEyeDarken: Float = 55f
+    val redEyeDarken: Float = 55f,
+    val hasCopiedStyle: Boolean = false
 )
 
 class EditorViewModel : ViewModel() {
@@ -3551,6 +3552,58 @@ class EditorViewModel : ViewModel() {
                 showStatus("Kırmızı göz giderildi")
             }.onFailure { err ->
                 showStatus("Kırmızı göz: ${err.message}")
+            }
+        }
+    }
+
+
+    // ==================== v1.7.3 MULTI-FX LAYER STYLE STUDIO ====================
+
+    fun updateProxyLayerStyleStack(effectsJson: String) {
+        enqueueProxyOp {
+            engine.updateProxyLayerStyleStack(effectsJson)
+        }
+    }
+
+    fun applyLayerStyleStack(effectsJson: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isBusy = true) }
+            runCatching {
+                val info = engine.applyLayerStyleStack(effectsJson)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman stilleri uygulandı")
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Stil hatası: ${err.message}")
+            }
+        }
+    }
+
+    fun copyActiveLayerStyle() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { engine.copyActiveLayerStyle() }.onSuccess { count ->
+                _uiState.update { it.copy(hasCopiedStyle = true) }
+                showStatus("$count katman efekti kopyalandı")
+            }.onFailure { err ->
+                showStatus(err.message ?: "Kopyalanacak stil yok")
+            }
+        }
+    }
+
+    fun pasteLayerStyleToActive() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isBusy = true) }
+            runCatching {
+                val info = engine.pasteLayerStyleToActive()
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Katman stili yapıştırıldı")
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus(err.message ?: "Stil yapıştırılamadı")
             }
         }
     }

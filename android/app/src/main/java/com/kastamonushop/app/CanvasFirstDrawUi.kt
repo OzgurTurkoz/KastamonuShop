@@ -62,7 +62,9 @@ internal fun LeftBrushSidebar(
         tool != ActiveTool.EYEDROPPER &&
         tool != ActiveTool.BUCKET &&
         tool != ActiveTool.PATCH &&
-        tool != ActiveTool.RED_EYE
+        tool != ActiveTool.RED_EYE &&
+        tool != ActiveTool.SELECT_RECT &&
+        tool != ActiveTool.SELECT_WAND
 
     val (secondaryLabel, secondaryNorm, secondaryReadout) = when (tool) {
         ActiveTool.BRUSH, ActiveTool.ERASER, ActiveTool.CLONE_STAMP ->
@@ -73,6 +75,8 @@ internal fun LeftBrushSidebar(
             Triple("Tolerans", ((state.colorReplaceTolerance - 1f) / 99f).coerceIn(0f, 1f), "%${state.colorReplaceTolerance.roundToInt()}")
         ActiveTool.BUCKET ->
             Triple("Tolerans", (bucketTolerance / 200f).coerceIn(0f, 1f), "${bucketTolerance.roundToInt()}")
+        ActiveTool.SELECT_WAND ->
+            Triple("Tolerans", (state.wandTolerance / 120f).coerceIn(0f, 1f), "${state.wandTolerance.roundToInt()}")
         ActiveTool.RED_EYE ->
             Triple("Karartma", ((state.redEyeDarken - 10f) / 90f).coerceIn(0f, 1f), "%${state.redEyeDarken.roundToInt()}")
         ActiveTool.SMUDGE, ActiveTool.DODGE, ActiveTool.BURN,
@@ -167,6 +171,11 @@ internal fun LeftBrushSidebar(
                                 ActiveTool.BUCKET -> {
                                     val tol = (f * 200f).coerceIn(0f, 200f)
                                     onBucketTolerance(tol)
+                                    activeDragBadge = "Tolerans: ${tol.roundToInt()}"
+                                }
+                                ActiveTool.SELECT_WAND -> {
+                                    val tol = (f * 120f).coerceIn(1f, 120f)
+                                    vm.updateWandSettings(tolerance = tol)
                                     activeDragBadge = "Tolerans: ${tol.roundToInt()}"
                                 }
                                 ActiveTool.RED_EYE -> {
@@ -464,7 +473,7 @@ internal fun CompactRetouchBottomBar(
 }
 
 @Composable
-private fun SlimToolChip(
+internal fun SlimToolChip(
     icon: ImageVector,
     label: String,
     selected: Boolean,
