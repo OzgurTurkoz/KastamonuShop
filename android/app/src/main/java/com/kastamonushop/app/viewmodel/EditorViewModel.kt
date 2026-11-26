@@ -3444,7 +3444,6 @@ class EditorViewModel : ViewModel() {
                 _uiState.update {
                     it.copy(
                         activeBrushPresetName = summary.name,
-                        brushSize = summary.size.coerceIn(1f, 250f),
                         brushHardness = summary.hardness.coerceIn(0f, 1f),
                         brushSpacing = summary.spacing.coerceIn(0.05f, 2f)
                     )

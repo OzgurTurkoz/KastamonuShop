@@ -63,6 +63,8 @@ class VulkanCanvasView(
     private val onSelectRectCommit: (Int, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     private val onSelectWandTap: (Float, Float) -> Unit = { _, _ -> },
     private val onBucketTap: (Float, Float) -> Unit = { _, _ -> },
+    private val onTwoFingerUndo: () -> Unit = {},
+    private val onThreeFingerRedo: () -> Unit = {},
     private val onCloneSourcePick: (Float, Float) -> Unit = { _, _ -> },
     private val onLoupePointer: (Float, Float, Float, Float, Boolean) -> Unit = { _, _, _, _, _ -> },
     private val onCameraChanged: () -> Unit = {}
@@ -74,6 +76,9 @@ class VulkanCanvasView(
     private var rotationRad = 0f
 
     private var isMultiTouch = false
+    private var multiTouchStartMs = 0L
+    private var multiTouchMaxPointers = 0
+    private var multiTouchTotalMovePx = 0f
     private var singlePanActive = false
     private var lastSinglePanX = 0f
     private var lastSinglePanY = 0f
@@ -286,6 +291,13 @@ class VulkanCanvasView(
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_POINTER_DOWN -> {
+                    if (!isMultiTouch) {
+                        multiTouchStartMs = System.currentTimeMillis()
+                        multiTouchTotalMovePx = 0f
+                        multiTouchMaxPointers = event.pointerCount
+                    } else if (event.pointerCount > multiTouchMaxPointers) {
+                        multiTouchMaxPointers = event.pointerCount
+                    }
                     isMultiTouch = true
                     singlePanActive = false
                     eyedropperActive = false
@@ -328,6 +340,7 @@ class VulkanCanvasView(
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (isMultiTouch) {
+                        multiTouchTotalMovePx += hypot((midX - prevMidX).toDouble(), (midY - prevMidY).toDouble()).toFloat() + abs(dist - prevDist)
                         panX += (midX - prevMidX)
                         panY += (midY - prevMidY)
                         zoom = (zoom * (dist / prevDist)).coerceIn(0.05f, 32f)
@@ -349,7 +362,19 @@ class VulkanCanvasView(
 
         if (isMultiTouch) {
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                if (event.actionMasked == MotionEvent.ACTION_UP &&
+                    (System.currentTimeMillis() - multiTouchStartMs) < 300L &&
+                    multiTouchTotalMovePx < 32f
+                ) {
+                    if (multiTouchMaxPointers >= 3) {
+                        onThreeFingerRedo()
+                    } else if (multiTouchMaxPointers == 2) {
+                        onTwoFingerUndo()
+                    }
+                }
                 isMultiTouch = false
+                multiTouchMaxPointers = 0
+                multiTouchTotalMovePx = 0f
             }
             return true
         }

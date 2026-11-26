@@ -142,12 +142,43 @@ internal fun StudioBottomPanelHost(
                                 s.activePanel = BottomPanel.QUICK_ACTIONS_MENU
                             }
                         )
+                        val isDrawTool = state.activeTool == ActiveTool.BRUSH ||
+                            state.activeTool == ActiveTool.ERASER ||
+                            state.activeTool == ActiveTool.MIXER_BRUSH ||
+                            state.activeTool == ActiveTool.COLOR_REPLACE ||
+                            state.activeTool == ActiveTool.BUCKET ||
+                            state.activeTool == ActiveTool.EYEDROPPER
+                        val isRetouchTool = state.activeTool == ActiveTool.SPOT_HEAL ||
+                            state.activeTool == ActiveTool.PATCH ||
+                            state.activeTool == ActiveTool.RED_EYE ||
+                            state.activeTool == ActiveTool.SMUDGE ||
+                            state.activeTool == ActiveTool.DODGE ||
+                            state.activeTool == ActiveTool.BURN ||
+                            state.activeTool == ActiveTool.SPONGE_SAT ||
+                            state.activeTool == ActiveTool.SPONGE_DESAT ||
+                            state.activeTool == ActiveTool.BLUR_BRUSH ||
+                            state.activeTool == ActiveTool.SHARPEN_BRUSH ||
+                            state.activeTool == ActiveTool.CLONE_STAMP
                         CircularDockButton(
                             icon = Icons.Default.Brush,
                             label = "Çizim",
-                            selected = state.activeTool != ActiveTool.NONE && !isSelectTool,
-                            accentDot = if (state.activeTool == ActiveTool.BRUSH || state.activeTool == ActiveTool.EYEDROPPER) activeColor else null,
-                            onClick = { s.activePanel = BottomPanel.DRAW_MENU }
+                            selected = isDrawTool,
+                            accentDot = if (isDrawTool) activeColor else null,
+                            onClick = {
+                                if (!isDrawTool) vm.setTool(ActiveTool.BRUSH)
+                                s.showToolPopover = false
+                                s.activePanel = BottomPanel.DRAW_MENU
+                            }
+                        )
+                        CircularDockButton(
+                            icon = Icons.Default.Healing,
+                            label = "Rötuş",
+                            selected = isRetouchTool,
+                            onClick = {
+                                if (!isRetouchTool) vm.setTool(ActiveTool.SPOT_HEAL)
+                                s.showToolPopover = false
+                                s.activePanel = BottomPanel.RETOUCH_MENU
+                            }
                         )
                         CircularDockButton(
                             icon = Icons.Default.SelectAll,
@@ -292,17 +323,30 @@ internal fun StudioBottomPanelHost(
                     }
                 }
 
-                BottomPanel.DRAW_MENU -> DrawMenuPanel(
+                BottomPanel.DRAW_MENU -> CompactDrawBottomBar(
                     vm = vm,
                     state = state,
-                    drawScrollState = drawScrollState,
-                    bucketTolerance = s.bucketTolerance,
-                    onBucketTolerance = { s.bucketTolerance = it },
-                    bucketContiguous = s.bucketContiguous,
-                    onBucketContiguous = { s.bucketContiguous = it },
-                    onBrushSizePreview = { s.brushSizePreviewTick++ },
-                    onImportAbr = onImportAbr,
-                    onClose = { s.activePanel = BottomPanel.DOCK }
+                    popoverOpen = s.showToolPopover,
+                    onTogglePopover = { s.showToolPopover = !s.showToolPopover },
+                    onOpenColorWheel = {
+                        s.showToolPopover = false
+                        s.showQuickColorWheel = true
+                    },
+                    onClose = {
+                        s.showToolPopover = false
+                        s.activePanel = BottomPanel.DOCK
+                    }
+                )
+
+                BottomPanel.RETOUCH_MENU -> CompactRetouchBottomBar(
+                    vm = vm,
+                    state = state,
+                    popoverOpen = s.showToolPopover,
+                    onTogglePopover = { s.showToolPopover = !s.showToolPopover },
+                    onClose = {
+                        s.showToolPopover = false
+                        s.activePanel = BottomPanel.DOCK
+                    }
                 )
 
                 BottomPanel.SELECT_MENU -> SelectMenuPanel(

@@ -6414,8 +6414,12 @@ impl KastamonuEngine {
                 detail: format!("Fırça bulunamadı: {name}"),
             })?;
         let (idx, preset) = found;
+        let prev_size = guard.session.tools.brush.size.clamp(1.0, 1000.0);
+        let prev_opacity = guard.session.tools.brush.opacity.clamp(0.01, 1.0);
         let mut brush = preset.brush.clone();
         let _ = guard.session.load_brush_tips(&mut brush);
+        brush.size = prev_size;
+        brush.opacity = prev_opacity;
         let summary = AbrBrushSummary {
             index: idx as u32,
             name: preset.name.clone(),

@@ -90,6 +90,7 @@ import kotlin.math.roundToInt
 internal enum class BottomPanel {
     DOCK,
     DRAW_MENU,
+    RETOUCH_MENU,
     SELECT_MENU,
     TEXT_EDIT,
     ADJUST_MENU,

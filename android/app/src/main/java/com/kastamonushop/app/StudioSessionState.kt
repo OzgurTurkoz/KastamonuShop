@@ -290,6 +290,8 @@ internal class StudioSessionState {
     var textWarpVDist by mutableFloatStateOf(0f)
     var cameraTick by mutableIntStateOf(0)
     var measuredBottomBarPx by mutableFloatStateOf(0f)
+    var showToolPopover by mutableStateOf(false)
+    var showQuickColorWheel by mutableStateOf(false)
     var brightnessVal by mutableFloatStateOf(0f)
     var contrastVal by mutableFloatStateOf(0f)
     var hueVal by mutableFloatStateOf(0f)

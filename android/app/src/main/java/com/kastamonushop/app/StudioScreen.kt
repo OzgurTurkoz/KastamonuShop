@@ -422,6 +422,7 @@ fun StonebridgeStudioScreen(
             when (s.activePanel) {
                 BottomPanel.DOCK,
                 BottomPanel.DRAW_MENU,
+                BottomPanel.RETOUCH_MENU,
                 BottomPanel.SELECT_MENU,
                 BottomPanel.ADJUST_MENU,
                 BottomPanel.CROP_MENU,
@@ -536,7 +537,10 @@ fun StonebridgeStudioScreen(
                         st.activeTool == ActiveTool.CLONE_STAMP && st.pickingCloneSource
                     },
                     isHandPanActive = { currentHandPanState },
-                    onStrokeBegin = { sample -> vm.beginLiveStroke(sample) },
+                    onStrokeBegin = { sample ->
+                        if (s.showToolPopover) s.showToolPopover = false
+                        vm.beginLiveStroke(sample)
+                    },
                     onStrokeMove = { samples -> vm.pushLiveStroke(samples) },
                     onStrokeEnd = { vm.finishLiveStroke() },
                     onStrokeCancel = { vm.cancelLiveStroke() },
@@ -571,12 +575,15 @@ fun StonebridgeStudioScreen(
                     onSelectRectCommit = { rx, ry, rw, rh -> vm.selectRect(rx, ry, rw, rh) },
                     onSelectWandTap = { dx, dy -> vm.selectMagicWand(dx, dy) },
                     onBucketTap = { dx, dy ->
+                        if (s.showToolPopover) s.showToolPopover = false
                         if (vm.uiState.value.activeTool == ActiveTool.RED_EYE) {
                             vm.applyRedEye(dx, dy)
                         } else {
                             vm.applyPaintBucket(dx, dy, s.bucketTolerance.roundToInt(), s.bucketContiguous)
                         }
                     },
+                    onTwoFingerUndo = { vm.undo() },
+                    onThreeFingerRedo = { vm.redo() },
                     onCloneSourcePick = { dx, dy -> vm.setCloneSource(dx, dy) },
                     onLoupePointer = { sx, sy, dx, dy, active ->
                         val tool = vm.uiState.value.activeTool
@@ -2394,7 +2401,58 @@ fun StonebridgeStudioScreen(
             }
         }
 
-        // GROUPED 5-CATEGORY BOTTOM CIRCULAR DOCK & COMPACT SUB-MENUS
+        // v1.7.2 PROCREATE-STYLE LEFT EDGE VERTICAL SIZE & OPACITY SIDEBAR
+        if (s.activePanel == BottomPanel.DRAW_MENU || s.activePanel == BottomPanel.RETOUCH_MENU) {
+            LeftBrushSidebar(
+                vm = vm,
+                state = state,
+                bucketTolerance = s.bucketTolerance,
+                onBucketTolerance = { s.bucketTolerance = it },
+                onBrushSizePreview = { s.brushSizePreviewTick++ },
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 6.dp)
+            )
+        }
+
+        // v1.7.2 FLOATING BRUSH / TOOL SETTINGS POPOVER (AUTO-CLOSES ON CANVAS TOUCH)
+        if (s.showToolPopover && (s.activePanel == BottomPanel.DRAW_MENU || s.activePanel == BottomPanel.RETOUCH_MENU)) {
+            ToolSettingsPopoverCard(
+                vm = vm,
+                state = state,
+                bucketTolerance = s.bucketTolerance,
+                onBucketTolerance = { s.bucketTolerance = it },
+                bucketContiguous = s.bucketContiguous,
+                onBucketContiguous = { s.bucketContiguous = it },
+                onImportAbr = { importAbrLauncher.launch(arrayOf("*/*")) },
+                onDismiss = { s.showToolPopover = false },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(
+                        bottom = if (s.measuredBottomBarPx > 10f)
+                            with(density) { s.measuredBottomBarPx.toDp() + 14.dp }
+                        else 80.dp
+                    )
+            )
+        }
+
+        // v1.7.2 DIRECT 1-TAP PRO HSV COLOR WHEEL DIALOG
+        if (s.showQuickColorWheel) {
+            ProColorWheelDialog(
+                initialHex = state.colorHex,
+                initialOpacity = state.brushOpacity,
+                showOpacity = true,
+                onPickEyedropper = { vm.setTool(ActiveTool.EYEDROPPER) },
+                onDismiss = { s.showQuickColorWheel = false },
+                onConfirm = { pickedHex, pickedOpacity ->
+                    vm.updateBrush(colorHex = pickedHex, opacity = pickedOpacity)
+                    s.showQuickColorWheel = false
+                }
+            )
+        }
+
+                // GROUPED 5-CATEGORY BOTTOM CIRCULAR DOCK & COMPACT SUB-MENUS
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
