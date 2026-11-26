@@ -90,6 +90,8 @@ pub struct PuppetPinPoint {
     pub src_y: f32,
     pub dst_x: f32,
     pub dst_y: f32,
+    pub rotate_deg: Option<f32>,
+    pub depth: i32,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -1872,34 +1874,51 @@ impl KastamonuEngine {
 
     /// 60 FPS live proxy preview for PhotoCraft Puppet Warp (`edit.puppetWarp`).
     /// Scales pin coordinates into the 512px proxy space and warps the primary raster layer smoothly.
-    pub fn update_proxy_puppet_warp(&self, pins: Vec<PuppetPinPoint>, mode: String) -> Result<(), EngineError> {
+    pub fn update_proxy_puppet_warp(
+        &self,
+        pins: Vec<PuppetPinPoint>,
+        mode: String,
+        density: String,
+        expansion: f32,
+    ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
-        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
         guard.dismiss_compare();
         ensure_proxy_preview_locked(&mut guard)?;
         let Some(proxy) = guard.proxy_preview.as_mut() else {
             return Ok(());
         };
-        let sc = proxy.scale;
+        let scale = proxy.scale as f64;
+        let any_changed = pins.iter().any(|p| {
+            (p.dst_x - p.src_x).hypot(p.dst_y - p.src_y) > 0.5
+                || p.rotate_deg.is_some_and(|r| r.abs() > 0.1)
+        });
         let mut ps = Session::new();
         ps.add_document((*proxy.base_doc).clone(), None);
         ps.set_active(0);
-        if active_id.is_some() {
-            ps.set_active_layer(active_id);
-        }
-        let any_moved = pins.iter().any(|p| (p.dst_x - p.src_x).hypot(p.dst_y - p.src_y) > 0.5);
-        if !pins.is_empty() && any_moved {
+        if !pins.is_empty() && any_changed {
             let mode_str = match mode.as_str() {
                 "rigid" | "distort" | "normal" => mode.as_str(),
+                _ => "normal",
+            };
+            let dens_str = match density.as_str() {
+                "fewer" | "more" | "normal" => density.as_str(),
                 _ => "normal",
             };
             let pin_json: Vec<Value> = pins
                 .iter()
                 .map(|p| {
-                    json!({
-                        "src": [(p.src_x * sc) as f64, (p.src_y * sc) as f64],
-                        "dst": [(p.dst_x * sc) as f64, (p.dst_y * sc) as f64],
-                    })
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("src".into(), json!([(p.src_x as f64) * scale, (p.src_y as f64) * scale]));
+                    obj.insert("dst".into(), json!([(p.dst_x as f64) * scale, (p.dst_y as f64) * scale]));
+                    if let Some(rot) = p.rotate_deg {
+                        if rot.abs() > 0.05 {
+                            obj.insert("rotate".into(), json!(rot as f64));
+                        }
+                    }
+                    if p.depth != 0 {
+                        obj.insert("depth".into(), json!(p.depth));
+                    }
+                    Value::Object(obj)
                 })
                 .collect();
             let target_id = ps
@@ -1912,7 +1931,8 @@ impl KastamonuEngine {
                     json!({
                         "pins": pin_json,
                         "mode": mode_str,
-                        "density": "normal",
+                        "density": dens_str,
+                        "expansion": ((expansion as f64) * scale).clamp(-20.0, 60.0),
                     }),
                 );
             }
@@ -1922,14 +1942,88 @@ impl KastamonuEngine {
         Ok(())
     }
 
-    /// Commits PhotoCraft Puppet Warp (`edit.puppetWarp`) at full resolution (1 undoable step).
-    pub fn apply_puppet_warp(&self, pins: Vec<PuppetPinPoint>, mode: String) -> Result<DocumentInfo, EngineError> {
+    pub fn get_puppet_mesh_segments(
+        &self,
+        pins: Vec<PuppetPinPoint>,
+        mode: String,
+        density: String,
+        expansion: f32,
+    ) -> Result<Vec<f32>, EngineError> {
+        let mut guard = self.core.lock();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let scale = proxy.scale as f64;
+        let inv_scale = if scale > 1e-5 { 1.0 / scale } else { 1.0 };
+        let doc = &proxy.base_doc;
+        let target_id = find_primary_photo_raster_layer(doc, guard.session.active().and_then(|d| d.active_layer()))
+            .map(|(id, _)| id);
+        let Some(tid) = target_id else {
+            return Ok(Vec::new());
+        };
+        let Some(layer) = doc.layer(tid) else {
+            return Ok(Vec::new());
+        };
+        let LayerContent::Raster(ref surf) = layer.content else {
+            return Ok(Vec::new());
+        };
+        let bounds = doc.bounds();
+        let warp = photocraft_algo::puppet::PuppetWarp {
+            pins: pins
+                .iter()
+                .map(|p| photocraft_algo::puppet::PuppetPin {
+                    src: [(p.src_x as f64) * scale, (p.src_y as f64) * scale],
+                    dst: [(p.dst_x as f64) * scale, (p.dst_y as f64) * scale],
+                    rotate: p.rotate_deg.filter(|r| r.abs() > 0.05).map(|r| r as f64),
+                    depth: p.depth,
+                })
+                .collect(),
+            mode: photocraft_algo::puppet::PuppetMode::parse(&mode).unwrap_or(photocraft_algo::puppet::PuppetMode::Normal),
+            density: photocraft_algo::puppet::PuppetDensity::parse(&density).unwrap_or(photocraft_algo::puppet::PuppetDensity::Normal),
+            expansion: ((expansion as f64) * scale).clamp(-20.0, 60.0),
+        };
+        let (verts, tris) = if warp.pins.is_empty() || warp.is_identity() {
+            let mesh = photocraft_algo::puppet::build_mesh(surf, bounds, warp.density, warp.expansion);
+            (mesh.verts, mesh.tris)
+        } else {
+            let (solver, deformed, _) = photocraft_algo::puppet::deform(surf, bounds, &warp, 8);
+            (deformed, solver.mesh.tris)
+        };
+        let mut seen = std::collections::HashSet::with_capacity(tris.len() * 2);
+        let mut out = Vec::with_capacity(tris.len() * 8);
+        for [a, b, c] in tris {
+            for (u, v) in [(a, b), (b, c), (c, a)] {
+                let key = if u < v { (u, v) } else { (v, u) };
+                if seen.insert(key) {
+                    if let (Some(p0), Some(p1)) = (verts.get(u), verts.get(v)) {
+                        out.push((p0[0] * inv_scale) as f32);
+                        out.push((p0[1] * inv_scale) as f32);
+                        out.push((p1[0] * inv_scale) as f32);
+                        out.push((p1[1] * inv_scale) as f32);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn apply_puppet_warp(
+        &self,
+        pins: Vec<PuppetPinPoint>,
+        mode: String,
+        density: String,
+        expansion: f32,
+    ) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
         guard.proxy_preview = None;
         guard.dismiss_compare();
-        let any_moved = pins.iter().any(|p| (p.dst_x - p.src_x).hypot(p.dst_y - p.src_y) > 0.5);
-        if pins.is_empty() || !any_moved {
+        let any_changed = pins.iter().any(|p| {
+            (p.dst_x - p.src_x).hypot(p.dst_y - p.src_y) > 0.5
+                || p.rotate_deg.is_some_and(|r| r.abs() > 0.1)
+        });
+        if pins.is_empty() || !any_changed {
             guard.mark_full_dirty();
             return self.info_from_locked(&guard);
         }
@@ -1937,13 +2031,25 @@ impl KastamonuEngine {
             "rigid" | "distort" | "normal" => mode.as_str(),
             _ => "normal",
         };
+        let dens_str = match density.as_str() {
+            "fewer" | "more" | "normal" => density.as_str(),
+            _ => "normal",
+        };
         let pin_json: Vec<Value> = pins
             .iter()
             .map(|p| {
-                json!({
-                    "src": [p.src_x as f64, p.src_y as f64],
-                    "dst": [p.dst_x as f64, p.dst_y as f64],
-                })
+                let mut obj = serde_json::Map::new();
+                obj.insert("src".into(), json!([p.src_x as f64, p.src_y as f64]));
+                obj.insert("dst".into(), json!([p.dst_x as f64, p.dst_y as f64]));
+                if let Some(rot) = p.rotate_deg {
+                    if rot.abs() > 0.05 {
+                        obj.insert("rotate".into(), json!(rot as f64));
+                    }
+                }
+                if p.depth != 0 {
+                    obj.insert("depth".into(), json!(p.depth));
+                }
+                Value::Object(obj)
             })
             .collect();
         let target_id = {
@@ -1962,7 +2068,8 @@ impl KastamonuEngine {
                 json!({
                     "pins": pin_json,
                     "mode": mode_str,
-                    "density": "normal",
+                    "density": dens_str,
+                    "expansion": (expansion as f64).clamp(-20.0, 60.0),
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
@@ -1970,8 +2077,6 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
-    /// Resizes the entire document canvas and all layers using PhotoCraft's native `image.imageSize`
-    /// with selectable resampling filter (`lanczos`, `bicubic`, `bicubicSharper`, `preserveDetails`, `bilinear`, `nearest`).
     pub fn resize_image(&self, width: u32, height: u32, resample: String) -> Result<DocumentInfo, EngineError> {
         let mut guard = self.core.lock();
         guard.live_stroke = None;
@@ -7876,13 +7981,13 @@ mod v08_automated_tests {
         let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
         eng.new_document("Test".into(), 128, 128).unwrap();
         let pins = vec![
-            PuppetPinPoint { src_x: 32.0, src_y: 32.0, dst_x: 32.0, dst_y: 32.0 },
-            PuppetPinPoint { src_x: 96.0, src_y: 32.0, dst_x: 96.0, dst_y: 32.0 },
-            PuppetPinPoint { src_x: 64.0, src_y: 96.0, dst_x: 78.0, dst_y: 84.0 },
+            PuppetPinPoint { rotate_deg: None, depth: 0, src_x: 32.0, src_y: 32.0, dst_x: 32.0, dst_y: 32.0 },
+            PuppetPinPoint { rotate_deg: None, depth: 0, src_x: 96.0, src_y: 32.0, dst_x: 96.0, dst_y: 32.0 },
+            PuppetPinPoint { rotate_deg: None, depth: 0, src_x: 64.0, src_y: 96.0, dst_x: 78.0, dst_y: 84.0 },
         ];
         eng.begin_proxy_preview().unwrap();
-        eng.update_proxy_puppet_warp(pins.clone(), "normal".into()).unwrap();
-        let info = eng.apply_puppet_warp(pins, "normal".into()).unwrap();
+        eng.update_proxy_puppet_warp(pins.clone(), "normal".into(), "normal".into(), 2.0).unwrap();
+        let info = eng.apply_puppet_warp(pins, "normal".into(), "normal".into(), 2.0).unwrap();
         assert!(info.can_undo, "apply_puppet_warp must push an undo step");
     }
 
@@ -7892,8 +7997,8 @@ mod v08_automated_tests {
             let eng = KastamonuEngine::from_shared(Arc::new(Mutex::new(EngineCore::new())));
             eng.new_document("Test".into(), 96, 96).unwrap();
             let pins = vec![
-                PuppetPinPoint { src_x: 24.0, src_y: 48.0, dst_x: 24.0, dst_y: 48.0 },
-                PuppetPinPoint { src_x: 72.0, src_y: 48.0, dst_x: 72.0, dst_y: 62.0 },
+                PuppetPinPoint { rotate_deg: None, depth: 0, src_x: 24.0, src_y: 48.0, dst_x: 24.0, dst_y: 48.0 },
+                PuppetPinPoint { rotate_deg: None, depth: 0, src_x: 72.0, src_y: 48.0, dst_x: 72.0, dst_y: 62.0 },
             ];
             eng.apply_puppet_warp(pins, mode.into())
                 .unwrap_or_else(|e| panic!("puppetWarp mode {mode} failed: {e:?}"));
@@ -8330,6 +8435,32 @@ LUT_3D_SIZE 2
         ]).to_string();
         eng.update_proxy_layer_style_stack(stack).unwrap();
         eng.end_proxy_preview();
+    }
+
+
+    #[test]
+    fn test_v176_puppet_warp_rotate_depth_density_expansion() {
+        let eng = test_engine();
+        let rgba = vec![80u8, 160, 220, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("puppet_pro.png".into(), 64, 64, rgba).unwrap();
+        let pins = vec![
+            PuppetPinPoint { src_x: 16.0, src_y: 32.0, dst_x: 16.0, dst_y: 32.0, rotate_deg: Some(25.0), depth: 1 },
+            PuppetPinPoint { src_x: 48.0, src_y: 32.0, dst_x: 42.0, dst_y: 26.0, rotate_deg: None, depth: -1 },
+        ];
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_puppet_warp(pins.clone(), "rigid".into(), "more".into(), 4.0).unwrap();
+        let info = eng.apply_puppet_warp(pins, "rigid".into(), "more".into(), 4.0).unwrap();
+        assert!(info.can_undo);
+    }
+
+    #[test]
+    fn test_v176_puppet_mesh_segments_output() {
+        let eng = test_engine();
+        let rgba = vec![100u8, 200, 120, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("puppet_mesh.png".into(), 64, 64, rgba).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        let segs = eng.get_puppet_mesh_segments(Vec::new(), "normal".into(), "normal".into(), 2.0).unwrap();
+        assert!(segs.len() >= 12 && segs.len() % 4 == 0, "Expected non-empty triangle edge segments");
     }
 
 }

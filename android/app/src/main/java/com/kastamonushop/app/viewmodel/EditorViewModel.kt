@@ -242,7 +242,7 @@ class EditorViewModel : ViewModel() {
             val warpHDist: Float,
             val warpVDist: Float
         ) : ProxyJob()
-        data class PuppetWarp(val pins: List<PuppetPinPoint>, val mode: String) : ProxyJob()
+        data class PuppetWarp(val pins: List<PuppetPinPoint>, val mode: String, val density: String, val expansion: Float) : ProxyJob()
     }
     private val pendingProxyJob = AtomicReference<ProxyJob?>(null)
     private val proxyDrainScheduled = AtomicBoolean(false)
@@ -576,20 +576,47 @@ class EditorViewModel : ViewModel() {
         }
     }
 
-    fun updateProxyPuppetWarp(pins: List<PuppetPinPoint>, mode: String) {
-        pendingProxyJob.set(ProxyJob.PuppetWarp(pins, mode))
+    fun updateProxyPuppetWarp(
+        pins: List<PuppetPinPoint>,
+        mode: String,
+        density: String = "normal",
+        expansion: Float = 2f
+    ) {
+        pendingProxyJob.set(ProxyJob.PuppetWarp(pins, mode, density, expansion))
         if (proxyDrainScheduled.compareAndSet(false, true)) {
             paintExecutor.execute { drainPendingProxyJobs() }
         }
     }
 
-    fun applyPuppetWarp(pins: List<PuppetPinPoint>, mode: String) {
+    fun fetchPuppetMeshSegments(
+        pins: List<PuppetPinPoint>,
+        mode: String,
+        density: String,
+        expansion: Float,
+        onResult: (List<Float>) -> Unit
+    ) {
+        paintExecutor.execute {
+            val segs = runCatching {
+                engine.getPuppetMeshSegments(pins, mode, density, expansion)
+            }.getOrDefault(emptyList())
+            viewModelScope.launch(Dispatchers.Main) {
+                onResult(segs)
+            }
+        }
+    }
+
+    fun applyPuppetWarp(
+        pins: List<PuppetPinPoint>,
+        mode: String,
+        density: String = "normal",
+        expansion: Float = 2f
+    ) {
         pendingProxyJob.set(null)
         dismissCompareOriginal()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
-                val info = engine.applyPuppetWarp(pins, mode)
+                val info = engine.applyPuppetWarp(pins, mode, density, expansion)
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
@@ -1291,7 +1318,7 @@ class EditorViewModel : ViewModel() {
                         job.caps, job.hScale, job.vScale, job.tracking, job.lineHeight, job.vertical,
                         job.warpStyle, job.warpBend, job.warpHDist, job.warpVDist
                     )
-                    is ProxyJob.PuppetWarp -> engine.updateProxyPuppetWarp(job.pins, job.mode)
+                    is ProxyJob.PuppetWarp -> engine.updateProxyPuppetWarp(job.pins, job.mode, job.density, job.expansion)
                 }
                 NativeSurfaceBridge.nativeRenderFrame()
             }

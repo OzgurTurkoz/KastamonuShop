@@ -95,6 +95,8 @@ internal fun PuppetWarpCanvasOverlay(
     docH: Float,
     pins: List<PuppetPinPoint>,
     selectedIdx: Int,
+    showMesh: Boolean = false,
+    meshSegments: List<Float> = emptyList(),
     onSelectPin: (Int) -> Unit,
     onPushUndo: (List<PuppetPinPoint>) -> Unit,
     onAddPin: (Float, Float) -> Unit,
@@ -109,8 +111,8 @@ internal fun PuppetWarpCanvasOverlay(
     val deleteOffsetXPx = with(density) { 26.dp.toPx() }
     val deleteOffsetYPx = with(density) { -24.dp.toPx() }
     val deleteHitPx = with(density) { 22.dp.toPx() }
-    val normalRadiusPx = with(density) { 6.5.dp.toPx() }
-    val selectedRadiusPx = with(density) { 9.dp.toPx() }
+    val normalRadiusPx = with(density) { 4.5.dp.toPx() }
+    val selectedRadiusPx = with(density) { 6.5.dp.toPx() }
 
     val curPins by rememberUpdatedState(pins)
     val curSelIdx by rememberUpdatedState(selectedIdx)
@@ -271,6 +273,21 @@ internal fun PuppetWarpCanvasOverlay(
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val _camTick = cameraTick
                 if (_camTick < 0) return@Canvas
+                if (showMesh && meshSegments.size >= 4) {
+                    var i = 0
+                    val limit = meshSegments.size - 3
+                    while (i < limit) {
+                        val (x0, y0) = canvasViewRef.docToScreen(meshSegments[i], meshSegments[i + 1])
+                        val (x1, y1) = canvasViewRef.docToScreen(meshSegments[i + 2], meshSegments[i + 3])
+                        drawLine(
+                            color = Color(0x664FC3F7),
+                            start = Offset(x0, y0),
+                            end = Offset(x1, y1),
+                            strokeWidth = 1.2f
+                        )
+                        i += 4
+                    }
+                }
                 pins.forEachIndexed { idx, pin ->
                     val (sx, sy) = canvasViewRef.docToScreen(pin.srcX, pin.srcY)
                     val (dx, dy) = canvasViewRef.docToScreen(pin.dstX, pin.dstY)
@@ -291,12 +308,12 @@ internal fun PuppetWarpCanvasOverlay(
                         // Thin stem to below-pin drag handle
                         val hy = dy + handleOffsetYPx
                         drawLine(color = Color(0x99FFD600), start = Offset(dx, dy + selectedRadiusPx), end = Offset(dx, hy - 10f), strokeWidth = 2f)
-                        drawCircle(color = Color(0x55FFD600), radius = 13f, center = Offset(dx, hy))
-                        drawCircle(color = Color(0xEEFFD600), radius = 6f, center = Offset(dx, hy))
+                        drawCircle(color = Color(0x55FFD600), radius = 9f, center = Offset(dx, hy))
+                        drawCircle(color = Color(0xEEFFD600), radius = 4f, center = Offset(dx, hy))
 
                         // Floating red × delete button at top-right of selected pin
                         val delC = Offset(dx + deleteOffsetXPx, dy + deleteOffsetYPx)
-                        drawCircle(color = Color(0xFFE53935), radius = 15f, center = delC)
+                        drawCircle(color = Color(0xFFE53935), radius = 11f, center = delC)
                         drawLine(color = Color.White, start = Offset(delC.x - 5.5f, delC.y - 5.5f), end = Offset(delC.x + 5.5f, delC.y + 5.5f), strokeWidth = 2.6f)
                         drawLine(color = Color.White, start = Offset(delC.x + 5.5f, delC.y - 5.5f), end = Offset(delC.x - 5.5f, delC.y + 5.5f), strokeWidth = 2.6f)
                     }
@@ -318,40 +335,101 @@ internal fun PuppetWarpCanvasOverlay(
 @Composable
 internal fun PuppetWarpPanel(
     pinCount: Int,
-    hasSelectedPin: Boolean,
+    selectedPin: PuppetPinPoint?,
     mode: String,
+    density: String,
+    expansion: Float,
+    showMesh: Boolean,
     onMode: (String) -> Unit,
+    onDensity: (String) -> Unit,
+    onExpansion: (Float) -> Unit,
+    onToggleMesh: () -> Unit,
+    onRotateSelected: (Float) -> Unit,
+    onDepthDelta: (Int) -> Unit,
+    onNudgeSelected: (Float, Float) -> Unit,
     onDeleteSelected: () -> Unit,
     onReset: () -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    var showMeshSettings by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader(
-            title = "Kukla Bükme ($pinCount iğne)",
-            subtitle = "Dokunarak iğne koy, sürükleyerek bük (2 parmakla yakınlaştır)",
+            title = "Kukla Pro ($pinCount iğne)",
+            subtitle = "",
             applyLabel = "Uygula",
             onClose = onClose,
             onApply = onApply
         )
+
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             listOf("rigid" to "Sert", "normal" to "Normal", "distort" to "Esnek").forEach { (id, lbl) ->
-                FilterChip(selected = mode == id, onClick = { onMode(id) }, label = { Text(lbl, fontSize = 11.sp) })
+                ProPill(selected = mode == id, onClick = { onMode(id) }, label = { Text(lbl, fontSize = 11.sp) })
             }
-            Spacer(modifier = Modifier.width(4.dp))
-            if (hasSelectedPin) {
-                FilledTonalButton(onClick = onDeleteSelected, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
-                    Text("İğneyi Sil", fontSize = 10.sp)
-                }
+            ProPill(
+                selected = showMesh,
+                onClick = onToggleMesh,
+                label = { Text(if (showMesh) "Ağ ✓" else "Ağ", fontSize = 11.sp) }
+            )
+            ProPill(
+                selected = showMeshSettings,
+                onClick = { showMeshSettings = !showMeshSettings },
+                label = { Text("Yoğunluk", fontSize = 11.sp) }
+            )
+            if (selectedPin != null) {
+                ProPill(
+                    selected = false,
+                    onClick = onDeleteSelected,
+                    label = { Text("İğne Sil", fontSize = 11.sp, color = Color(0xFFFF8A8A)) }
+                )
             }
             if (pinCount > 0) {
-                FilledTonalButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
-                    Text("Sıfırla", fontSize = 10.sp)
+                ProPill(
+                    selected = false,
+                    onClick = onReset,
+                    label = { Text("Sıfırla", fontSize = 11.sp) }
+                )
+            }
+        }
+
+        if (showMeshSettings) {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Ağ:", color = Color(0xFF9EA5BA), fontSize = 11.sp)
+                listOf("fewer" to "Az", "normal" to "Normal", "more" to "Çok").forEach { (dId, dLbl) ->
+                    ProPill(selected = density == dId, onClick = { onDensity(dId) }, label = { Text(dLbl, fontSize = 11.sp) })
                 }
+            }
+            CompactSliderRow("Genişlet", "${expansion.roundToInt()}px", expansion, -10f..30f, defaultValue = 2f) {
+                onExpansion(it)
+            }
+        }
+
+        if (selectedPin != null) {
+            val curRot = selectedPin.rotateDeg ?: 0f
+            CompactSliderRow("Döndür", "${curRot.roundToInt()}°", curRot, -180f..180f, defaultValue = 0f) {
+                onRotateSelected(it)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val depthTag = if (selectedPin.depth > 0) "+${selectedPin.depth}" else "${selectedPin.depth}"
+                ProPill(selected = false, onClick = { onDepthDelta(1) }, label = { Text("Öne ($depthTag)", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { onDepthDelta(-1) }, label = { Text("Arkaya", fontSize = 10.sp) })
+                Spacer(modifier = Modifier.width(4.dp))
+                ProPill(selected = false, onClick = { onNudgeSelected(-2f, 0f) }, label = { Text("←", fontSize = 12.sp) })
+                ProPill(selected = false, onClick = { onNudgeSelected(0f, -2f) }, label = { Text("↑", fontSize = 12.sp) })
+                ProPill(selected = false, onClick = { onNudgeSelected(0f, 2f) }, label = { Text("↓", fontSize = 12.sp) })
+                ProPill(selected = false, onClick = { onNudgeSelected(2f, 0f) }, label = { Text("→", fontSize = 12.sp) })
             }
         }
     }
@@ -395,7 +473,7 @@ internal fun ImageResizePanel(
                 label = { Text("Genişlik (px)", fontSize = 10.sp) },
                 modifier = Modifier.weight(1f)
             )
-            FilterChip(
+            ProPill(
                 selected = lockAspect,
                 onClick = onToggleLock,
                 label = { Text(if (lockAspect) "Oran Kilitli" else "Serbest", fontSize = 10.sp) }
@@ -421,7 +499,7 @@ internal fun ImageResizePanel(
                 "1080×1080" to (1080 to 1080),
                 "4K" to (3840 to (3840f * origH / origW.coerceAtLeast(1)).roundToInt())
             ).forEach { (lbl, dims) ->
-                FilterChip(
+                ProPill(
                     selected = curW == dims.first && curH == dims.second,
                     onClick = { onPreset(dims.first, dims.second) },
                     label = { Text(lbl, fontSize = 10.sp) }
@@ -439,7 +517,7 @@ internal fun ImageResizePanel(
                 "bilinear" to "Bilineer",
                 "nearest" to "Piksel"
             ).forEach { (id, lbl) ->
-                FilterChip(selected = resample == id, onClick = { onResample(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                ProPill(selected = resample == id, onClick = { onResample(id) }, label = { Text(lbl, fontSize = 10.sp) })
             }
         }
     }

@@ -582,8 +582,32 @@ fun StonebridgeStudioScreen(
                             vm.applyPaintBucket(dx, dy, s.bucketTolerance.roundToInt(), s.bucketContiguous)
                         }
                     },
-                    onTwoFingerUndo = { vm.undo() },
-                    onThreeFingerRedo = { vm.redo() },
+                    onTwoFingerUndo = {
+                        if (s.activePanel == BottomPanel.PUPPET_WARP_EDIT && s.puppetUndoStack.isNotEmpty()) {
+                            val prev = s.puppetUndoStack.last()
+                            s.puppetRedoStack = s.puppetRedoStack + listOf(s.puppetPins)
+                            s.puppetUndoStack = s.puppetUndoStack.dropLast(1)
+                            s.puppetPins = prev
+                            s.puppetSelectedIdx = s.puppetSelectedIdx.coerceIn(-1, prev.lastIndex)
+                            if (prev.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(prev, s.puppetMode, s.puppetDensity, s.puppetExpansion)
+                            if (s.puppetShowMesh) vm.fetchPuppetMeshSegments(prev, s.puppetMode, s.puppetDensity, s.puppetExpansion) { s.puppetMeshSegments = it }
+                        } else {
+                            vm.undo()
+                        }
+                    },
+                    onThreeFingerRedo = {
+                        if (s.activePanel == BottomPanel.PUPPET_WARP_EDIT && s.puppetRedoStack.isNotEmpty()) {
+                            val next = s.puppetRedoStack.last()
+                            s.puppetUndoStack = s.puppetUndoStack + listOf(s.puppetPins)
+                            s.puppetRedoStack = s.puppetRedoStack.dropLast(1)
+                            s.puppetPins = next
+                            s.puppetSelectedIdx = s.puppetSelectedIdx.coerceIn(-1, next.lastIndex)
+                            if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, s.puppetMode, s.puppetDensity, s.puppetExpansion)
+                            if (s.puppetShowMesh) vm.fetchPuppetMeshSegments(next, s.puppetMode, s.puppetDensity, s.puppetExpansion) { s.puppetMeshSegments = it }
+                        } else {
+                            vm.redo()
+                        }
+                    },
                     onCloneSourcePick = { dx, dy -> vm.setCloneSource(dx, dy) },
                     onLoupePointer = { sx, sy, dx, dy, active ->
                         val tool = vm.uiState.value.activeTool
@@ -1474,6 +1498,8 @@ fun StonebridgeStudioScreen(
                 docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat(),
                 pins = s.puppetPins,
                 selectedIdx = s.puppetSelectedIdx,
+                showMesh = s.puppetShowMesh,
+                meshSegments = s.puppetMeshSegments,
                 onSelectPin = { s.puppetSelectedIdx = it },
                 onPushUndo = { snapshot ->
                     s.puppetUndoStack = (s.puppetUndoStack + listOf(snapshot)).takeLast(40)
@@ -1482,7 +1508,7 @@ fun StonebridgeStudioScreen(
                 onAddPin = { dx, dy ->
                     s.puppetUndoStack = (s.puppetUndoStack + listOf(s.puppetPins)).takeLast(40)
                     s.puppetRedoStack = emptyList()
-                    val next = s.puppetPins + PuppetPinPoint(dx, dy, dx, dy)
+                    val next = s.puppetPins + PuppetPinPoint(dx, dy, dx, dy, null, 0)
                     s.puppetPins = next
                     s.puppetSelectedIdx = next.lastIndex
                 },
@@ -1493,21 +1519,22 @@ fun StonebridgeStudioScreen(
                         val next = s.puppetPins.toMutableList().apply { removeAt(idx) }
                         s.puppetPins = next
                         s.puppetSelectedIdx = if (next.isEmpty()) -1 else (idx.coerceAtMost(next.lastIndex))
-                        if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, s.puppetMode)
+                        if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, s.puppetMode, s.puppetDensity, s.puppetExpansion)
                     }
                 },
                 onMovePin = { idx, nx, ny ->
                     if (idx in s.puppetPins.indices) {
                         val updated = s.puppetPins.toMutableList()
                         val old = updated[idx]
-                        updated[idx] = PuppetPinPoint(old.srcX, old.srcY, nx, ny)
+                        updated[idx] = PuppetPinPoint(old.srcX, old.srcY, nx, ny, old.rotateDeg, old.depth)
                         s.puppetPins = updated
-                        vm.updateProxyPuppetWarp(updated, s.puppetMode)
+                        vm.updateProxyPuppetWarp(updated, s.puppetMode, s.puppetDensity, s.puppetExpansion)
+                        if (s.puppetShowMesh) vm.fetchPuppetMeshSegments(updated, s.puppetMode, s.puppetDensity, s.puppetExpansion) { s.puppetMeshSegments = it }
                     }
                 },
                 onRestorePins = { prev ->
                     s.puppetPins = prev
-                    if (prev.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(prev, s.puppetMode)
+                    if (prev.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(prev, s.puppetMode, s.puppetDensity, s.puppetExpansion)
                 },
                 onPinchPan = { dPanX, dPanY, zoomScale, cx, cy ->
                     s.canvasViewRef?.applyExternalPinchPan(zoomScale, dPanX, dPanY)
@@ -1866,7 +1893,7 @@ fun StonebridgeStudioScreen(
                                     s.puppetUndoStack = s.puppetUndoStack.dropLast(1)
                                     s.puppetPins = prev
                                     s.puppetSelectedIdx = s.puppetSelectedIdx.coerceIn(-1, prev.lastIndex)
-                                    if (prev.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(prev, s.puppetMode)
+                                    if (prev.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(prev, s.puppetMode, s.puppetDensity, s.puppetExpansion)
                                 }
                             }
                             else -> {
@@ -1897,7 +1924,7 @@ fun StonebridgeStudioScreen(
                                     s.puppetRedoStack = s.puppetRedoStack.dropLast(1)
                                     s.puppetPins = next
                                     s.puppetSelectedIdx = s.puppetSelectedIdx.coerceIn(-1, next.lastIndex)
-                                    if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, s.puppetMode)
+                                    if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, s.puppetMode, s.puppetDensity, s.puppetExpansion)
                                 }
                             }
                             else -> {

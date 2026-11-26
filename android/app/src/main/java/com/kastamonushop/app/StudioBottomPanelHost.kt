@@ -1317,39 +1317,107 @@ private fun StudioBottomPanelHostPart2(
                         s.activePanel = BottomPanel.DOCK
                     }
                 )
-                BottomPanel.PUPPET_WARP_EDIT -> PuppetWarpPanel(
-                    pinCount = s.puppetPins.size,
-                    hasSelectedPin = s.puppetSelectedIdx in s.puppetPins.indices,
-                    mode = s.puppetMode,
-                    onMode = { m ->
-                        s.puppetMode = m
-                        if (s.puppetPins.isNotEmpty()) vm.updateProxyPuppetWarp(s.puppetPins, m)
-                    },
-                    onDeleteSelected = {
-                        if (s.puppetSelectedIdx in s.puppetPins.indices) {
-                            s.puppetUndoStack = (s.puppetUndoStack + listOf(s.puppetPins)).takeLast(40)
-                            s.puppetRedoStack = emptyList()
-                            val next = s.puppetPins.toMutableList().apply { removeAt(s.puppetSelectedIdx) }
-                            s.puppetPins = next
-                            s.puppetSelectedIdx = if (next.isEmpty()) -1 else (s.puppetSelectedIdx.coerceAtMost(next.lastIndex))
-                            if (next.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(next, s.puppetMode)
-                        }
-                    },
-                    onReset = {
-                        if (s.puppetPins.isNotEmpty()) {
-                            s.puppetUndoStack = (s.puppetUndoStack + listOf(s.puppetPins)).takeLast(40)
-                            s.puppetRedoStack = emptyList()
-                        }
-                        s.puppetPins = emptyList()
-                        s.puppetSelectedIdx = -1
-                        vm.resetProxyPreview()
-                    },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.EFFECT_MENU },
-                    onApply = {
-                        vm.applyPuppetWarp(s.puppetPins, s.puppetMode)
-                        s.activePanel = BottomPanel.DOCK
+                BottomPanel.PUPPET_WARP_EDIT -> {
+                    fun refreshPuppet(pins: List<PuppetPinPoint> = s.puppetPins, mode: String = s.puppetMode, dens: String = s.puppetDensity, exp: Float = s.puppetExpansion, showM: Boolean = s.puppetShowMesh) {
+                        if (pins.isEmpty()) vm.resetProxyPreview() else vm.updateProxyPuppetWarp(pins, mode, dens, exp)
+                        if (showM) vm.fetchPuppetMeshSegments(pins, mode, dens, exp) { s.puppetMeshSegments = it }
                     }
-                )
+                    PuppetWarpPanel(
+                        pinCount = s.puppetPins.size,
+                        selectedPin = s.puppetPins.getOrNull(s.puppetSelectedIdx),
+                        mode = s.puppetMode,
+                        density = s.puppetDensity,
+                        expansion = s.puppetExpansion,
+                        showMesh = s.puppetShowMesh,
+                        onMode = { m ->
+                            s.puppetMode = m
+                            refreshPuppet(mode = m)
+                        },
+                        onDensity = { d ->
+                            s.puppetDensity = d
+                            refreshPuppet(dens = d)
+                        },
+                        onExpansion = { ex ->
+                            s.puppetExpansion = ex
+                            refreshPuppet(exp = ex)
+                        },
+                        onToggleMesh = {
+                            val nextM = !s.puppetShowMesh
+                            s.puppetShowMesh = nextM
+                            if (nextM) vm.fetchPuppetMeshSegments(s.puppetPins, s.puppetMode, s.puppetDensity, s.puppetExpansion) { s.puppetMeshSegments = it }
+                        },
+                        onRotateSelected = { deg ->
+                            val idx = s.puppetSelectedIdx
+                            if (idx in s.puppetPins.indices) {
+                                val old = s.puppetPins[idx]
+                                val updated = s.puppetPins.toMutableList()
+                                updated[idx] = PuppetPinPoint(old.srcX, old.srcY, old.dstX, old.dstY, deg, old.depth)
+                                s.puppetPins = updated
+                                refreshPuppet(pins = updated)
+                            }
+                        },
+                        onDepthDelta = { delta ->
+                            val idx = s.puppetSelectedIdx
+                            if (idx in s.puppetPins.indices) {
+                                s.puppetUndoStack = s.puppetUndoStack + listOf(s.puppetPins)
+                                s.puppetRedoStack = emptyList()
+                                val old = s.puppetPins[idx]
+                                val updated = s.puppetPins.toMutableList()
+                                updated[idx] = PuppetPinPoint(old.srcX, old.srcY, old.dstX, old.dstY, old.rotateDeg, (old.depth + delta).coerceIn(-10, 10))
+                                s.puppetPins = updated
+                                refreshPuppet(pins = updated)
+                            }
+                        },
+                        onNudgeSelected = { ndx, ndy ->
+                            val idx = s.puppetSelectedIdx
+                            if (idx in s.puppetPins.indices) {
+                                s.puppetUndoStack = s.puppetUndoStack + listOf(s.puppetPins)
+                                s.puppetRedoStack = emptyList()
+                                val old = s.puppetPins[idx]
+                                val updated = s.puppetPins.toMutableList()
+                                updated[idx] = PuppetPinPoint(old.srcX, old.srcY, old.dstX + ndx, old.dstY + ndy, old.rotateDeg, old.depth)
+                                s.puppetPins = updated
+                                refreshPuppet(pins = updated)
+                            }
+                        },
+                        onDeleteSelected = {
+                            if (s.puppetSelectedIdx in s.puppetPins.indices) {
+                                s.puppetUndoStack = s.puppetUndoStack + listOf(s.puppetPins)
+                                s.puppetRedoStack = emptyList()
+                                val next = s.puppetPins.toMutableList().apply { removeAt(s.puppetSelectedIdx) }
+                                s.puppetPins = next
+                                s.puppetSelectedIdx = next.lastIndex
+                                refreshPuppet(pins = next)
+                            }
+                        },
+                        onReset = {
+                            if (s.puppetPins.isNotEmpty()) {
+                                s.puppetUndoStack = s.puppetUndoStack + listOf(s.puppetPins)
+                                s.puppetRedoStack = emptyList()
+                            }
+                            s.puppetPins = emptyList()
+                            s.puppetSelectedIdx = -1
+                            vm.resetProxyPreview()
+                            if (s.puppetShowMesh) vm.fetchPuppetMeshSegments(emptyList(), s.puppetMode, s.puppetDensity, s.puppetExpansion) { s.puppetMeshSegments = it }
+                        },
+                        onClose = {
+                            s.puppetPins = emptyList()
+                            s.puppetSelectedIdx = -1
+                            s.puppetShowMesh = false
+                            s.puppetMeshSegments = emptyList()
+                            vm.endProxyPreview()
+                            s.activePanel = BottomPanel.DOCK
+                        },
+                        onApply = {
+                            vm.applyPuppetWarp(s.puppetPins, s.puppetMode, s.puppetDensity, s.puppetExpansion)
+                            s.puppetPins = emptyList()
+                            s.puppetSelectedIdx = -1
+                            s.puppetShowMesh = false
+                            s.puppetMeshSegments = emptyList()
+                            s.activePanel = BottomPanel.DOCK
+                        }
+                    )
+                }
 
                 BottomPanel.IMAGE_RESIZE_EDIT -> ImageResizePanel(
                     origW = state.docInfo?.width?.toInt() ?: 1080,
