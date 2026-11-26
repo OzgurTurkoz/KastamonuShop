@@ -4883,7 +4883,10 @@ impl KastamonuEngine {
         guard
             .session
             .edit("Maskeyi Ters Çevir", |doc, active| {
-                let id = active.ok_or_else(|| photocraft_engine::EngineError::NoActiveLayer)?;
+                let id = active.ok_or_else(|| photocraft_engine::EngineError::BadParams {
+                    cmd: "layer.layerMask.invert".into(),
+                    msg: "Aktif katman seçili değil".into(),
+                })?;
                 let canvas = doc.bounds();
                 let layer = doc
                     .layer_mut(id)
@@ -7427,7 +7430,7 @@ mod v08_automated_tests {
         let eng = test_engine();
         let rgba = vec![128u8, 128, 128, 255].repeat(32 * 32);
         eng.open_rgba_bytes("lut.png".into(), 32, 32, rgba).unwrap();
-        let cube = "TITLE "WarmTest"
+        let cube = r#"TITLE "WarmTest"
 LUT_3D_SIZE 2
 0.0 0.0 0.0
 1.0 0.0 0.0
@@ -7437,7 +7440,7 @@ LUT_3D_SIZE 2
 1.0 0.0 1.0
 0.0 1.0 1.0
 1.0 0.9 0.8
-".to_string();
+"#.to_string();
         eng.begin_proxy_preview().unwrap();
         eng.update_proxy_color_lookup("warm.cube".into(), cube.clone(), 0.85).unwrap();
         let info = eng.apply_color_lookup("warm.cube".into(), cube, 0.85).unwrap();
