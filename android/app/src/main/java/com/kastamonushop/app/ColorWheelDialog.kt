@@ -580,10 +580,11 @@ internal fun ProColorWheelDialog(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                             )
                         }
-                        Slider(
+                        ProSleekTrackSlider(
                             value = opacity,
-                            onValueChange = { opacity = it },
-                            valueRange = 0.05f..1f,
+                            range = 0.05f..1f,
+                            defaultValue = 1f,
+                            onChange = { opacity = it },
                             modifier = Modifier.weight(1f)
                         )
                     }

@@ -671,7 +671,7 @@ internal fun StudioBottomPanelHost(
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             listOf("Gölgeler", "Orta Tonlar", "Aydınlıklar").forEachIndexed { idx, lbl ->
-                                FilterChip(
+                                ProPill(
                                     selected = s.cbToneIdx == idx,
                                     onClick = { s.cbToneIdx = idx },
                                     label = { Text(lbl, fontSize = 11.sp) }
@@ -710,7 +710,7 @@ internal fun StudioBottomPanelHost(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             listOf("RGB", "Kırmızı", "Yeşil", "Mavi").forEachIndexed { idx, lbl ->
-                                FilterChip(
+                                ProPill(
                                     selected = s.curveChannelIdx == idx,
                                     onClick = { s.curveChannelIdx = idx },
                                     label = { Text(lbl, fontSize = 11.sp) }
@@ -820,7 +820,7 @@ internal fun StudioBottomPanelHost(
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    FilterChip(
+                                    ProPill(
                                         selected = false,
                                         onClick = {
                                             s.curveBlackVal = 0.0f; s.curveShadowVal = 0.17f; s.curveMidVal = 0.50f; s.curveHighVal = 0.84f; s.curveWhiteVal = 1.0f
@@ -828,7 +828,7 @@ internal fun StudioBottomPanelHost(
                                         },
                                         label = { Text("S-Kontrast", fontSize = 10.sp) }
                                     )
-                                    FilterChip(
+                                    ProPill(
                                         selected = false,
                                         onClick = {
                                             s.curveBlackVal = 0.08f; s.curveShadowVal = 0.34f; s.curveMidVal = 0.52f; s.curveHighVal = 0.72f; s.curveWhiteVal = 0.94f
@@ -838,7 +838,7 @@ internal fun StudioBottomPanelHost(
                                     )
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    FilterChip(
+                                    ProPill(
                                         selected = false,
                                         onClick = {
                                             s.curveBlackVal = 0.0f; s.curveShadowVal = 0.33f; s.curveMidVal = 0.62f; s.curveHighVal = 0.85f; s.curveWhiteVal = 1.0f
@@ -846,7 +846,7 @@ internal fun StudioBottomPanelHost(
                                         },
                                         label = { Text("Aydınlık", fontSize = 10.sp) }
                                     )
-                                    FilterChip(
+                                    ProPill(
                                         selected = false,
                                         onClick = {
                                             s.curveBlackVal = 0.0f; s.curveShadowVal = 0.25f; s.curveMidVal = 0.50f; s.curveHighVal = 0.75f; s.curveWhiteVal = 1.0f
@@ -1055,13 +1055,13 @@ private fun StudioBottomPanelHostPart2(
                                 .horizontalScroll(effectScrollState),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            FilterChip(
+                            ProPill(
                                 selected = s.cropFreeMode,
                                 onClick = { s.cropFreeMode = true },
                                 label = { Text("Serbest", fontSize = 11.sp) }
                             )
                             CROP_PRESETS.forEach { preset ->
-                                FilterChip(
+                                ProPill(
                                     selected = !s.cropFreeMode && preset == s.selectedCropPreset,
                                     onClick = {
                                         s.cropFreeMode = false
@@ -1513,7 +1513,7 @@ private fun StudioBottomPanelHostPart2(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            FilterChip(
+                            ProPill(
                                 selected = isEnine,
                                 onClick = {
                                     s.selectedMirrorMode = MIRROR_MODES[0]
@@ -1521,7 +1521,7 @@ private fun StudioBottomPanelHostPart2(
                                 },
                                 label = { Text("Ayna (Enine)", fontSize = 11.sp) }
                             )
-                            FilterChip(
+                            ProPill(
                                 selected = !isEnine,
                                 onClick = {
                                     s.selectedMirrorMode = MIRROR_MODES[2]
@@ -1586,12 +1586,12 @@ private fun StudioBottomPanelHostPart2(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            FilterChip(
+                            ProPill(
                                 selected = !s.layerLockAspect,
                                 onClick = { s.layerLockAspect = false },
                                 label = { Text("Serbest Uzat", fontSize = 11.sp) }
                             )
-                            FilterChip(
+                            ProPill(
                                 selected = s.layerLockAspect,
                                 onClick = {
                                     s.layerLockAspect = true

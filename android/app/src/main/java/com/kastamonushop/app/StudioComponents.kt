@@ -46,6 +46,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -281,6 +283,130 @@ internal fun CircularDockButton(
 }
 
 @Composable
+internal fun ProPill(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: @Composable () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(11.dp),
+        color = if (selected) Color(0xFF3A7AFE) else Color(0xFF232632),
+        modifier = modifier
+            .height(32.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 11.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            CompositionLocalProvider(
+                LocalContentColor provides if (selected) Color.White else Color(0xFFC8CEE0)
+            ) {
+                label()
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ProSleekTrackSlider(
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    defaultValue: Float = range.start,
+    onChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val span = (range.endInclusive - range.start).coerceAtLeast(1e-5f)
+    val fraction = ((value - range.start) / span).coerceIn(0f, 1f)
+    val anchorFrac = if (range.start < 0f && range.endInclusive > 0f) {
+        ((0f - range.start) / span).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val latestOnChange by rememberUpdatedState(onChange)
+    androidx.compose.foundation.Canvas(
+        modifier = modifier
+            .height(28.dp)
+            .pointerInput(range) {
+                fun emitX(x: Float) {
+                    val pad = 9.dp.toPx()
+                    val usable = (size.width - pad * 2f).coerceAtLeast(1f)
+                    val f = ((x - pad) / usable).coerceIn(0f, 1f)
+                    latestOnChange(range.start + f * span)
+                }
+                detectTapGestures { pos -> emitX(pos.x) }
+            }
+            .pointerInput(range) {
+                fun emitX(x: Float) {
+                    val pad = 9.dp.toPx()
+                    val usable = (size.width - pad * 2f).coerceAtLeast(1f)
+                    val f = ((x - pad) / usable).coerceIn(0f, 1f)
+                    latestOnChange(range.start + f * span)
+                }
+                detectDragGestures(
+                    onDragStart = { pos -> emitX(pos.x) },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        emitX(change.position.x)
+                    }
+                )
+            }
+    ) {
+        val pad = 9.dp.toPx()
+        val usable = (size.width - pad * 2f).coerceAtLeast(1f)
+        val cy = size.height * 0.5f
+        val trackH = 3.dp.toPx()
+        val r = CornerRadius(trackH * 0.5f, trackH * 0.5f)
+        // Base slim track
+        drawRoundRect(
+            color = Color(0xFF353948),
+            topLeft = Offset(pad, cy - trackH * 0.5f),
+            size = Size(usable, trackH),
+            cornerRadius = r
+        )
+        // Center zero tick mark for bipolar ranges (-100..100, -3..3)
+        if (range.start < 0f && range.endInclusive > 0f) {
+            val zx = pad + anchorFrac * usable
+            drawLine(
+                color = Color(0xFF6B7188),
+                start = Offset(zx, cy - 5.dp.toPx()),
+                end = Offset(zx, cy + 5.dp.toPx()),
+                strokeWidth = 1.5.dp.toPx()
+            )
+        }
+        // Active accent segment
+        val x0 = pad + minOf(anchorFrac, fraction) * usable
+        val x1 = pad + maxOf(anchorFrac, fraction) * usable
+        if (x1 - x0 > 0.5f) {
+            drawRoundRect(
+                color = Color(0xFF5CA8FF),
+                topLeft = Offset(x0, cy - trackH * 0.5f),
+                size = Size(x1 - x0, trackH),
+                cornerRadius = r
+            )
+        }
+        // Sleek circular thumb
+        val thumbX = pad + fraction * usable
+        drawCircle(
+            color = Color(0x555CA8FF),
+            radius = 9.dp.toPx(),
+            center = Offset(thumbX, cy)
+        )
+        drawCircle(
+            color = Color.White,
+            radius = 6.5.dp.toPx(),
+            center = Offset(thumbX, cy)
+        )
+        drawCircle(
+            color = Color(0xFF3A7AFE),
+            radius = 2.5.dp.toPx(),
+            center = Offset(thumbX, cy)
+        )
+    }
+}
+
+@Composable
 internal fun CompactSliderRow(
     label: String,
     valueText: String,
@@ -298,43 +424,43 @@ internal fun CompactSliderRow(
     ) {
         Text(
             text = label,
-            color = Color(0xFFDCE0EC),
+            color = Color(0xFFC8CEE0),
             fontSize = 11.sp,
             lineHeight = 13.sp,
-            maxLines = 2,
-            modifier = Modifier.width(74.dp)
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(68.dp)
         )
-        Slider(
+        ProSleekTrackSlider(
             value = value,
-            onValueChange = onChange,
-            valueRange = range,
-            modifier = Modifier
-                .weight(1f)
-                .height(28.dp)
+            range = range,
+            defaultValue = defaultValue,
+            onChange = onChange,
+            modifier = Modifier.weight(1f)
         )
         Text(
             text = valueText,
-            color = Color.White,
+            color = if (isModified) Color(0xFF7BB8FF) else Color(0xFFD6DBE8),
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.End,
             modifier = Modifier
-                .width(40.dp)
+                .width(44.dp)
                 .padding(end = 4.dp)
         )
         Box(
             modifier = Modifier
-                .size(26.dp)
+                .size(24.dp)
                 .clip(CircleShape)
-                .background(if (isModified) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color(0xFF2A2C36))
+                .background(if (isModified) Color(0x333A7AFE) else Color.Transparent)
                 .clickable(enabled = isModified) { if (onReset != null) onReset() else onChange(defaultValue) },
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Default.RestartAlt,
                 contentDescription = "Sıfırla",
-                tint = if (isModified) MaterialTheme.colorScheme.primary else Color(0xFF5A5E70),
-                modifier = Modifier.size(15.dp)
+                tint = if (isModified) Color(0xFF6BB5FF) else Color(0xFF454959),
+                modifier = Modifier.size(14.dp)
             )
         }
     }

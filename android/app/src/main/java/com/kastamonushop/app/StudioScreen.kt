@@ -2047,12 +2047,12 @@ fun StonebridgeStudioScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text("Maske", color = Color(0xFF4F9CFF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    FilterChip(
+                    ProPill(
                         selected = state.colorHex.equals("#000000", ignoreCase = true),
                         onClick = { vm.updateBrush(colorHex = "#000000"); vm.setTool(ActiveTool.BRUSH) },
                         label = { Text("Gizle", fontSize = 11.sp) }
                     )
-                    FilterChip(
+                    ProPill(
                         selected = state.colorHex.equals("#FFFFFF", ignoreCase = true),
                         onClick = { vm.updateBrush(colorHex = "#FFFFFF"); vm.setTool(ActiveTool.BRUSH) },
                         label = { Text("Göster", fontSize = 11.sp) }
@@ -2178,7 +2178,7 @@ fun StonebridgeStudioScreen(
                         val isActiveGroup = activeLayer?.isGroup == true
                         val isActiveClipped = activeLayer?.clipped == true
                         val hasActiveMask = activeLayer?.hasMask == true
-                        FilterChip(
+                        ProPill(
                             selected = hasActiveMask || state.maskPaintMode,
                             onClick = {
                                 s.showLayers = false
@@ -2186,17 +2186,17 @@ fun StonebridgeStudioScreen(
                             },
                             label = { Text(if (hasActiveMask) "Maske ✓" else "Maske", fontSize = 10.sp) }
                         )
-                        FilterChip(
+                        ProPill(
                             selected = isActiveClipped,
                             onClick = { vm.toggleClippingMask() },
                             label = { Text(if (isActiveClipped) "↳ Kırp" else "Kırpma", fontSize = 10.sp) }
                         )
-                        FilterChip(
+                        ProPill(
                             selected = isActiveGroup,
                             onClick = { if (isActiveGroup) vm.ungroupActiveLayer() else vm.groupActiveLayer() },
                             label = { Text(if (isActiveGroup) "Dağıt" else "Grupla", fontSize = 10.sp) }
                         )
-                        FilterChip(
+                        ProPill(
                             selected = s.activePanel == BottomPanel.BLEND_IF_EDIT,
                             onClick = {
                                 s.showLayers = false
@@ -2208,27 +2208,27 @@ fun StonebridgeStudioScreen(
                             },
                             label = { Text("Blend If", fontSize = 10.sp) }
                         )
-                        FilterChip(
+                        ProPill(
                             selected = false,
                             onClick = { vm.copyActiveLayerStyle() },
                             label = { Text("Stil Kopyala", fontSize = 10.sp) }
                         )
                         if (state.hasCopiedStyle) {
-                            FilterChip(
+                            ProPill(
                                 selected = true,
                                 onClick = { vm.pasteLayerStyleToActive() },
                                 label = { Text("Stil Yapıştır", fontSize = 10.sp) }
                             )
                         }
                         if (activeLayer?.isText == true) {
-                            FilterChip(
+                            ProPill(
                                 selected = false,
                                 onClick = { vm.rasterizeActiveTextLayer() },
                                 label = { Text("Rasterleştir", fontSize = 10.sp) }
                             )
                         }
                         if (state.selectionBounds != null) {
-                            FilterChip(
+                            ProPill(
                                 selected = false,
                                 onClick = { vm.layerViaCopy() },
                                 label = { Text("Seçimden Katman", fontSize = 10.sp) }

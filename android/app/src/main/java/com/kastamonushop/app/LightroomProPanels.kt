@@ -101,7 +101,7 @@ internal fun CameraRawProPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             listOf("Işık", "Doku & Gürültü", "Renk Grading", "Kalibrasyon").forEachIndexed { idx, lbl ->
-                FilterChip(
+                ProPill(
                     selected = s.camTabIdx == idx,
                     onClick = { s.camTabIdx = idx },
                     label = { Text(lbl, fontSize = 11.sp) }
@@ -173,24 +173,55 @@ internal fun LensCorrectionPanel(
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
+    var activeParam by remember { mutableIntStateOf(0) }
+    val params = listOf(
+        Triple("Bükülme", s.lensDistortion, { v: Float -> s.lensDistortion = v }),
+        Triple("Vinyet", s.lensVignette, { v: Float -> s.lensVignette = v }),
+        Triple("Kırmızı/Cyan", s.lensRedCyan, { v: Float -> s.lensRedCyan = v }),
+        Triple("Mavi/Sarı", s.lensBlueYellow, { v: Float -> s.lensBlueYellow = v }),
+        Triple("Dikey Eğim", s.lensVertical, { v: Float -> s.lensVertical = v }),
+        Triple("Yatay Eğim", s.lensHorizontal, { v: Float -> s.lensHorizontal = v })
+    )
+    val cur = params[activeParam.coerceIn(0, params.lastIndex)]
     Column(
-        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         BottomEditorHeader(
             title = "Lens Düzeltme",
-            subtitle = "Fıçı/yastık bükülme, renk saçılması ve perspektif düzelt",
+            subtitle = "",
             applyLabel = "Uygula",
             onClose = onClose,
             onApply = onApply
         )
-        CompactSliderRow("Bükülme", "${s.lensDistortion.roundToInt()}", s.lensDistortion, -100f..100f, defaultValue = 0f) { s.lensDistortion = it; onPreview() }
-        CompactSliderRow("Vinyet", "${s.lensVignette.roundToInt()}", s.lensVignette, -100f..100f, defaultValue = 0f) { s.lensVignette = it; onPreview() }
-        CompactSliderRow("Kırmızı/Cyan", "${s.lensRedCyan.roundToInt()}", s.lensRedCyan, -100f..100f, defaultValue = 0f) { s.lensRedCyan = it; onPreview() }
-        CompactSliderRow("Mavi/Sarı", "${s.lensBlueYellow.roundToInt()}", s.lensBlueYellow, -100f..100f, defaultValue = 0f) { s.lensBlueYellow = it; onPreview() }
-        CompactSliderRow("Dikey Eğim", "${s.lensVertical.roundToInt()}", s.lensVertical, -100f..100f, defaultValue = 0f) { s.lensVertical = it; onPreview() }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = onReset) { Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A80)) }
+        CompactSliderRow(
+            label = cur.first,
+            valueText = "${cur.second.roundToInt()}",
+            value = cur.second,
+            range = -100f..100f,
+            defaultValue = 0f
+        ) {
+            cur.third(it)
+            onPreview()
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            params.forEachIndexed { idx, (lbl, v, _) ->
+                val badge = if (kotlin.math.abs(v) >= 0.5f) "$lbl ${v.roundToInt()}" else lbl
+                ProPill(
+                    selected = activeParam == idx,
+                    onClick = { activeParam = idx },
+                    label = { Text(badge, fontSize = 11.sp, maxLines = 1) }
+                )
+            }
+            ProPill(
+                selected = false,
+                onClick = onReset,
+                label = { Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A8A)) }
+            )
         }
     }
 }

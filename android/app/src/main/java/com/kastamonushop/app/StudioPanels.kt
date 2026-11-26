@@ -111,7 +111,7 @@ internal fun CameraLightPanel(
             Box(modifier = Modifier.weight(1f)) {
                 CompactSliderRow("Canlılık", "${vibrance.roundToInt()}", vibrance, -100f..100f, 0f) { onVibrance(it); onPreview() }
             }
-            FilterChip(selected = showFine, onClick = onToggleFine, label = { Text(if (showFine) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) })
+            ProPill(selected = showFine, onClick = onToggleFine, label = { Text(if (showFine) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) })
         }
         if (showFine) {
             CompactSliderRow("Sıcaklık", "${temp.roundToInt()}", temp, -100f..100f, 0f) { onTemp(it); onPreview() }
@@ -155,7 +155,7 @@ internal fun GradientEditPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             listOf("linear" to "Doğrusal", "radial" to "Dairesel", "reflected" to "Yansımalı", "diamond" to "Elmas").forEach { (st, lbl) ->
-                FilterChip(selected = style == st, onClick = { onStyle(st); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
+                ProPill(selected = style == st, onClick = { onStyle(st); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
             }
         }
         Row(
@@ -227,7 +227,7 @@ internal fun ShapeEditPanel(
         BottomEditorHeader("Vektör Şekil", "", "Uygula", onClose, onApply)
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("roundedRect" to "Yuvarlak", "rect" to "Kutu", "ellipse" to "Daire", "triangle" to "Üçgen", "polygon" to "Çokgen", "star" to "Yıldız", "line" to "Çizgi").forEach { (k, lbl) ->
-                FilterChip(selected = kind == k, onClick = { onKind(k); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
+                ProPill(selected = kind == k, onClick = { onKind(k); onPreview() }, label = { Text(lbl, fontSize = 11.sp) })
             }
         }
         Row(
@@ -247,13 +247,13 @@ internal fun ShapeEditPanel(
                 Box(modifier = Modifier.size(20.dp).clip(CircleShape).background(fillCol).border(1.5.dp, Color.White, CircleShape))
                 Text(if (fillHex.isBlank()) "Renk Seç" else "Dolgu Rengi", color = Color.White, fontSize = 11.sp)
             }
-            FilterChip(
+            ProPill(
                 selected = fillHex.isBlank(),
                 onClick = { onFillHex(if (fillHex.isBlank()) "#4F9CFF" else ""); onPreview() },
                 label = { Text("Dolgusuz", fontSize = 10.sp) }
             )
             Spacer(modifier = Modifier.weight(1f))
-            FilterChip(
+            ProPill(
                 selected = showFine,
                 onClick = onToggleFine,
                 label = { Text(if (showFine) "İnce ▲" else "İnce ▼", fontSize = 10.sp, maxLines = 1, softWrap = false) }
@@ -365,8 +365,8 @@ internal fun RadialBlurPanel(
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader("Radyal Bulanıklık", "Merkeze odaklanan Zoom veya Dönüş efekti", "Uygula", onClose, onApply)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = method == "zoom", onClick = { onMethod("zoom"); onPreview() }, label = { Text("Yakınlaş (Zoom)", fontSize = 11.sp) })
-            FilterChip(selected = method == "spin", onClick = { onMethod("spin"); onPreview() }, label = { Text("Döndür (Spin)", fontSize = 11.sp) })
+            ProPill(selected = method == "zoom", onClick = { onMethod("zoom"); onPreview() }, label = { Text("Yakınlaş (Zoom)", fontSize = 11.sp) })
+            ProPill(selected = method == "spin", onClick = { onMethod("spin"); onPreview() }, label = { Text("Döndür (Spin)", fontSize = 11.sp) })
         }
         CompactSliderRow("Şiddet", "${amount.roundToInt()}", amount, 0f..80f, 14f) { onAmount(it); onPreview() }
     }
@@ -385,7 +385,7 @@ internal fun LiquifyEditPanel(
         BottomEditorHeader("Sıvılaştırma (Liquify)", "Fotoğraf üzerinde parmağınla it, şişir veya bük", "Uygula", onClose, onApply)
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             listOf("forwardWarp" to "İt", "bloat" to "Şişir", "pucker" to "Büz", "twirlCw" to "Burgu", "smooth" to "Yumuşat", "reconstruct" to "Geri Al").forEach { (id, lbl) ->
-                FilterChip(selected = tool == id, onClick = { onTool(id) }, label = { Text(lbl, fontSize = 11.sp) })
+                ProPill(selected = tool == id, onClick = { onTool(id) }, label = { Text(lbl, fontSize = 11.sp) })
             }
             OutlinedButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp), modifier = Modifier.height(32.dp)) {
                 Text("Sıfırla", fontSize = 11.sp)
@@ -474,8 +474,8 @@ internal fun PosterThreshPanel(
     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         BottomEditorHeader(if (isPoster) "Posterize" else "Eşik (S&B)", "Çubuğu kaydırınca uygulanır — Sıfırla orijinale döner", "Uygula", onClose, onApply)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = isPoster, onClick = { onMode(true) }, label = { Text("Posterize", fontSize = 11.sp) })
-            FilterChip(selected = !isPoster, onClick = { onMode(false) }, label = { Text("Eşik (S&B)", fontSize = 11.sp) })
+            ProPill(selected = isPoster, onClick = { onMode(true) }, label = { Text("Posterize", fontSize = 11.sp) })
+            ProPill(selected = !isPoster, onClick = { onMode(false) }, label = { Text("Eşik (S&B)", fontSize = 11.sp) })
         }
         if (isPoster) {
             CompactSliderRow(
@@ -716,7 +716,7 @@ internal fun LightDistortPanel(
             "lensFlare" -> {
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("moviePrime" to "Sinema", "zoom" to "Zoom", "prime35" to "35mm", "prime105" to "105mm").forEach { (id, lbl) ->
-                        FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                        ProPill(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
                 CompactSliderRow("Parlaklık", "${amount.roundToInt()}%", amount, 0f..100f, 55f, onChange = onAmount)
@@ -726,7 +726,7 @@ internal fun LightDistortPanel(
             "lensBlur" -> {
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("hexagon" to "Altıgen", "octagon" to "Sekizgen", "pentagon" to "Beşgen", "square" to "Kare").forEach { (id, lbl) ->
-                        FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                        ProPill(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
                 CompactSliderRow("Bulanıklık", "${amount.roundToInt()}%", amount, 5f..100f, 40f, onChange = onAmount)
@@ -735,7 +735,7 @@ internal fun LightDistortPanel(
             "wave" -> {
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("sine" to "Sinüs", "triangle" to "Üçgen", "square" to "Kare").forEach { (id, lbl) ->
-                        FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                        ProPill(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
                 CompactSliderRow("Genlik", "${amount.roundToInt()}%", amount, 5f..100f, 40f, onChange = onAmount)
@@ -744,7 +744,7 @@ internal fun LightDistortPanel(
             "spherize" -> {
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("normal" to "Normal", "horizontalOnly" to "Yatay", "verticalOnly" to "Dikey").forEach { (id, lbl) ->
-                        FilterChip(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                        ProPill(selected = variant == id, onClick = { onVariant(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
                 CompactSliderRow("Şiddet", "${amount.roundToInt()}%", amount, -100f..100f, 0f, onChange = onAmount)
@@ -814,11 +814,11 @@ internal fun TextStudioPanel(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("Yazı & Font", fontSize = 11.sp) })
-            FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("Boyut & Biçim", fontSize = 11.sp) })
-            FilterChip(selected = tab == 2, onClick = { tab = 2 }, label = { Text("Bükme & Maske", fontSize = 11.sp) })
+            ProPill(selected = tab == 0, onClick = { tab = 0 }, label = { Text("Yazı & Font", fontSize = 11.sp) })
+            ProPill(selected = tab == 1, onClick = { tab = 1 }, label = { Text("Boyut & Biçim", fontSize = 11.sp) })
+            ProPill(selected = tab == 2, onClick = { tab = 2 }, label = { Text("Bükme & Maske", fontSize = 11.sp) })
             if (isEditingExisting) {
-                FilterChip(selected = false, onClick = onSwitchToNew, label = { Text("+ Yeni", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = onSwitchToNew, label = { Text("+ Yeni", fontSize = 10.sp) })
             }
         }
         when (tab) {
@@ -906,11 +906,11 @@ internal fun TextStudioPanel(
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilterChip(selected = bold, onClick = { onBold(!bold) }, label = { Text("K", fontWeight = FontWeight.Bold, fontSize = 11.sp) })
-                    FilterChip(selected = italic, onClick = { onItalic(!italic) }, label = { Text("İ", fontStyle = FontStyle.Italic, fontSize = 11.sp) })
-                    FilterChip(selected = underline, onClick = { onUnderline(!underline) }, label = { Text("A", textDecoration = TextDecoration.Underline, fontSize = 11.sp) })
-                    FilterChip(selected = strikethrough, onClick = { onStrikethrough(!strikethrough) }, label = { Text("S", textDecoration = TextDecoration.LineThrough, fontSize = 11.sp) })
-                    FilterChip(
+                    ProPill(selected = bold, onClick = { onBold(!bold) }, label = { Text("K", fontWeight = FontWeight.Bold, fontSize = 11.sp) })
+                    ProPill(selected = italic, onClick = { onItalic(!italic) }, label = { Text("İ", fontStyle = FontStyle.Italic, fontSize = 11.sp) })
+                    ProPill(selected = underline, onClick = { onUnderline(!underline) }, label = { Text("A", textDecoration = TextDecoration.Underline, fontSize = 11.sp) })
+                    ProPill(selected = strikethrough, onClick = { onStrikethrough(!strikethrough) }, label = { Text("S", textDecoration = TextDecoration.LineThrough, fontSize = 11.sp) })
+                    ProPill(
                         selected = caps != "normal",
                         onClick = { onCaps(when (caps) { "normal" -> "all"; "all" -> "small"; else -> "normal" }) },
                         label = { Text(if (caps == "small") "Aa" else "AA", fontSize = 10.sp) }
@@ -937,11 +937,11 @@ internal fun TextStudioPanel(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     listOf("left" to "Sol", "center" to "Orta", "right" to "Sağ").forEach { (id, lbl) ->
-                        FilterChip(selected = align == id, onClick = { onAlign(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                        ProPill(selected = align == id, onClick = { onAlign(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                     Spacer(modifier = Modifier.width(6.dp))
-                    FilterChip(selected = !vertical, onClick = { onVertical(false) }, label = { Text("Yatay", fontSize = 10.sp) })
-                    FilterChip(selected = vertical, onClick = { onVertical(true) }, label = { Text("Dikey", fontSize = 10.sp) })
+                    ProPill(selected = !vertical, onClick = { onVertical(false) }, label = { Text("Yatay", fontSize = 10.sp) })
+                    ProPill(selected = vertical, onClick = { onVertical(true) }, label = { Text("Dikey", fontSize = 10.sp) })
                 }
             }
             else -> {
@@ -960,7 +960,7 @@ internal fun TextStudioPanel(
                         "rise" to "Yükselme",
                         "twist" to "Büküm"
                     ).forEach { (id, lbl) ->
-                        FilterChip(selected = warpStyle == id, onClick = { onWarpStyle(id) }, label = { Text(lbl, fontSize = 10.sp) })
+                        ProPill(selected = warpStyle == id, onClick = { onWarpStyle(id) }, label = { Text(lbl, fontSize = 10.sp) })
                     }
                 }
                 if (warpStyle != "none") {
@@ -1269,7 +1269,7 @@ internal fun DrawMenuPanel(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 listOf("Temel", "Dinamikler", ".abr Fırçalar").forEachIndexed { idx, lbl ->
-                    FilterChip(
+                    ProPill(
                         selected = brushSubTab == idx,
                         onClick = {
                             brushSubTab = idx
@@ -1326,7 +1326,7 @@ internal fun DrawMenuPanel(
                                 onBrushSizePreview()
                             }
                         }
-                        FilterChip(
+                        ProPill(
                             selected = showBrushFineTune,
                             onClick = { showBrushFineTune = !showBrushFineTune },
                             label = { Text(if (showBrushFineTune) "İnce ▲" else "İnce ▼", fontSize = 10.sp) }
@@ -1397,7 +1397,7 @@ internal fun DrawMenuPanel(
                         ) {
                             state.brushPresets.take(40).forEach { preset ->
                                 val isSel = state.activeBrushPresetName.equals(preset.name, ignoreCase = true)
-                                FilterChip(
+                                ProPill(
                                     selected = isSel,
                                     onClick = { vm.selectBrushPreset(preset.name) },
                                     label = {
@@ -1432,7 +1432,7 @@ internal fun DrawMenuPanel(
                         .border(1.5.dp, Color.White, CircleShape)
                         .clickable { showColorWheel = true }
                 )
-                FilterChip(
+                ProPill(
                     selected = state.mixerSampleAll,
                     onClick = { vm.updateMixerParams(sampleAll = !state.mixerSampleAll) },
                     label = { Text("Tümü", fontSize = 10.sp) }
@@ -1477,7 +1477,7 @@ internal fun DrawMenuPanel(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 listOf("color" to "Renk", "hue" to "Ton", "saturation" to "Doygunluk", "luminosity" to "Parlaklık").forEach { (k, lbl) ->
-                    FilterChip(
+                    ProPill(
                         selected = state.colorReplaceMode == k,
                         onClick = { vm.updateColorReplaceParams(mode = k) },
                         label = { Text(lbl, fontSize = 10.sp) }
@@ -1511,7 +1511,7 @@ internal fun DrawMenuPanel(
                         .border(1.5.dp, Color.White, CircleShape)
                         .clickable { showColorWheel = true }
                 )
-                FilterChip(
+                ProPill(
                     selected = bucketContiguous,
                     onClick = { onBucketContiguous(!bucketContiguous) },
                     label = { Text(if (bucketContiguous) "Bitişik" else "Tümü", fontSize = 10.sp) }
@@ -1526,12 +1526,12 @@ internal fun DrawMenuPanel(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                FilterChip(
+                ProPill(
                     selected = state.patchMode == "source",
                     onClick = { vm.updatePatchMode("source") },
                     label = { Text("Kaynak Modu", fontSize = 11.sp) }
                 )
-                FilterChip(
+                ProPill(
                     selected = state.patchMode == "destination",
                     onClick = { vm.updatePatchMode("destination") },
                     label = { Text("Hedef Modu", fontSize = 11.sp) }
@@ -1660,13 +1660,13 @@ internal fun SelectMenuPanel(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                FilterChip(selected = false, onClick = { vm.layerViaCopy() }, label = { Text("Katmana Kopyala", fontSize = 10.sp) })
-                FilterChip(selected = false, onClick = { vm.selectInverse() }, label = { Text("Ters Çevir", fontSize = 10.sp) })
-                FilterChip(selected = false, onClick = { vm.featherSelection(6f) }, label = { Text("Yumuşat", fontSize = 10.sp) })
-                FilterChip(selected = false, onClick = { vm.contentAwareRemove() }, label = { Text("Nesneyi Sil", fontSize = 10.sp) })
-                FilterChip(selected = false, onClick = { vm.clearSelection() }, label = { Text("Temizle", fontSize = 10.sp) })
-                FilterChip(selected = false, onClick = { vm.revealSelectionMask() }, label = { Text("Maskele", fontSize = 10.sp) })
-                FilterChip(selected = false, onClick = { vm.deselect() }, label = { Text("Bırak", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { vm.layerViaCopy() }, label = { Text("Katmana Kopyala", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { vm.selectInverse() }, label = { Text("Ters Çevir", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { vm.featherSelection(6f) }, label = { Text("Yumuşat", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { vm.contentAwareRemove() }, label = { Text("Nesneyi Sil", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { vm.clearSelection() }, label = { Text("Temizle", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { vm.revealSelectionMask() }, label = { Text("Maskele", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = { vm.deselect() }, label = { Text("Bırak", fontSize = 10.sp) })
             }
         }
     }
@@ -1727,32 +1727,32 @@ internal fun LayerMaskPanel(
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                FilterChip(
+                ProPill(
                     selected = maskPaintMode,
                     onClick = onPaintHide,
                     label = { Text("Siyah Boya (Gizle)", fontSize = 11.sp) }
                 )
-                FilterChip(
+                ProPill(
                     selected = false,
                     onClick = onPaintReveal,
                     label = { Text("Beyaz Boya (Göster)", fontSize = 11.sp) }
                 )
-                FilterChip(
+                ProPill(
                     selected = !maskEnabled,
                     onClick = onToggleEnabled,
                     label = { Text(if (maskEnabled) "Kapat" else "Aç", fontSize = 11.sp) }
                 )
-                FilterChip(
+                ProPill(
                     selected = false,
                     onClick = onInvert,
                     label = { Text("Ters Çevir", fontSize = 11.sp) }
                 )
-                FilterChip(
+                ProPill(
                     selected = false,
                     onClick = onApplyMask,
                     label = { Text("Uygula", fontSize = 11.sp) }
                 )
-                FilterChip(
+                ProPill(
                     selected = false,
                     onClick = onDeleteMask,
                     label = { Text("Maskeyi Sil", fontSize = 11.sp, color = Color(0xFFFF6B6B)) }

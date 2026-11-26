@@ -317,7 +317,7 @@ internal fun MultiFxLayerStyleStudioPanel(
 
                 if (cur.kind == "stroke") {
                     listOf("outside" to "Dış", "center" to "Orta", "inside" to "İç").forEach { (posKey, posLbl) ->
-                        FilterChip(
+                        ProPill(
                             selected = cur.position == posKey,
                             onClick = { cur.position = posKey; cur.enabled = true; pushPreview() },
                             label = { Text(posLbl, fontSize = 10.sp) }
@@ -326,7 +326,7 @@ internal fun MultiFxLayerStyleStudioPanel(
                 }
 
                 listOf("Normal" to "Normal", "Screen" to "Ekran", "Multiply" to "Çarpma").forEach { (bKey, bLbl) ->
-                    FilterChip(
+                    ProPill(
                         selected = cur.blend == bKey,
                         onClick = { cur.blend = bKey; cur.enabled = true; pushPreview() },
                         label = { Text(bLbl, fontSize = 10.sp) }

@@ -577,12 +577,12 @@ internal fun ToolSettingsPopoverCard(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        FilterChip(
+                        ProPill(
                             selected = brushTab == 0,
                             onClick = { brushTab = 0 },
                             label = { Text("Fırça Uçları", fontSize = 11.sp) }
                         )
-                        FilterChip(
+                        ProPill(
                             selected = brushTab == 1,
                             onClick = { brushTab = 1 },
                             label = { Text("Dinamikler", fontSize = 11.sp) }
@@ -663,7 +663,7 @@ internal fun ToolSettingsPopoverCard(
                     CompactSliderRow("Karışım", "%${state.mixerMix.roundToInt()}", state.mixerMix, 0f..100f, defaultValue = 50f) {
                         vm.updateMixerParams(mix = it)
                     }
-                    FilterChip(
+                    ProPill(
                         selected = state.mixerSampleAll,
                         onClick = { vm.updateMixerParams(sampleAll = !state.mixerSampleAll) },
                         label = { Text(if (state.mixerSampleAll) "Tüm Katmanlardan Örnekle ✓" else "Sadece Aktif Katman", fontSize = 11.sp) }
@@ -675,7 +675,7 @@ internal fun ToolSettingsPopoverCard(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         listOf("color" to "Renk", "hue" to "Ton", "saturation" to "Doygunluk", "luminosity" to "Parlaklık").forEach { (k, lbl) ->
-                            FilterChip(
+                            ProPill(
                                 selected = state.colorReplaceMode == k,
                                 onClick = { vm.updateColorReplaceParams(mode = k) },
                                 label = { Text(lbl, fontSize = 10.sp) }
@@ -691,12 +691,12 @@ internal fun ToolSettingsPopoverCard(
                 }
                 ActiveTool.BUCKET -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
+                        ProPill(
                             selected = bucketContiguous,
                             onClick = { onBucketContiguous(true) },
                             label = { Text("Bitişik Alan", fontSize = 11.sp) }
                         )
-                        FilterChip(
+                        ProPill(
                             selected = !bucketContiguous,
                             onClick = { onBucketContiguous(false) },
                             label = { Text("Tüm Benzer Renkler", fontSize = 11.sp) }
@@ -708,12 +708,12 @@ internal fun ToolSettingsPopoverCard(
                 }
                 ActiveTool.PATCH -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
+                        ProPill(
                             selected = state.patchMode == "source",
                             onClick = { vm.updatePatchMode("source") },
                             label = { Text("Kaynak Modu", fontSize = 11.sp) }
                         )
-                        FilterChip(
+                        ProPill(
                             selected = state.patchMode == "destination",
                             onClick = { vm.updatePatchMode("destination") },
                             label = { Text("Hedef Modu", fontSize = 11.sp) }
