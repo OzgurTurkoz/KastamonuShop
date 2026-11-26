@@ -6330,15 +6330,15 @@ impl KastamonuEngine {
         opacity_jitter: f32,
     ) -> Result<(), EngineError> {
         let mut guard = self.core.lock();
-        let b = &mut guard.session.tools.brush;
         let sp = spacing.clamp(0.05, 2.0);
-        b.spacing = sp;
-        b.spacing_enabled = true;
         guard.custom_brush_spacing = (sp - 0.15).abs() > 0.01
             || scatter > 0.001
             || size_jitter > 0.001
             || angle_jitter > 0.001
             || opacity_jitter > 0.001;
+        let b = &mut guard.session.tools.brush;
+        b.spacing = sp;
+        b.spacing_enabled = true;
 
         let sc = scatter.clamp(0.0, 5.0);
         b.scattering.enabled = sc > 0.001;
@@ -6413,9 +6413,9 @@ impl KastamonuEngine {
             size: brush.size.clamp(1.0, 1000.0),
             hardness: brush.hardness.clamp(0.0, 1.0),
             spacing: brush.spacing.clamp(0.05, 2.0),
-            has_sampled_tip: !matches!(brush.tip, photocraft_paint::TipShape::Round),
+            has_sampled_tip: !matches!(*brush.tip, photocraft_paint::TipShape::Round),
         };
-        guard.session.tools.brush = brush;
+        *guard.session.tools.brush = brush;
         guard.session.tools.current_preset = Some(preset.name);
         guard.custom_brush_spacing = true;
         Ok(summary)
@@ -6432,7 +6432,7 @@ impl KastamonuEngine {
         b.hardness = prev_hard;
         b.opacity = prev_op;
         b.flow = prev_flow;
-        guard.session.tools.brush = b;
+        *guard.session.tools.brush = b;
         guard.session.tools.current_preset = None;
         guard.custom_brush_spacing = false;
         Ok(())
@@ -6763,7 +6763,7 @@ impl KastamonuEngine {
                 size: p.brush.size.clamp(1.0, 1000.0),
                 hardness: p.brush.hardness.clamp(0.0, 1.0),
                 spacing: p.brush.spacing.clamp(0.05, 2.0),
-                has_sampled_tip: !matches!(p.brush.tip, photocraft_paint::TipShape::Round),
+                has_sampled_tip: !matches!(*p.brush.tip, photocraft_paint::TipShape::Round),
             })
             .collect()
     }
@@ -7982,8 +7982,8 @@ LUT_3D_SIZE 2
         eng.new_document("dyn.png".into(), 64, 64).unwrap();
         eng.set_brush(16.0, 0.8, 0.9, 1.0, "#FF4422".into()).unwrap();
         eng.set_brush_dynamics(0.35, 1.2, 0.5, 0.4, 0.3).unwrap();
-        eng.begin_live_stroke(StrokeSample { x: 10.0, y: 10.0, pressure: 1.0 }, "#FF4422".into(), false).unwrap();
-        eng.push_live_stroke(vec![StrokeSample { x: 50.0, y: 50.0, pressure: 1.0 }]).unwrap();
+        eng.begin_live_stroke(StrokeSample { x: 10.0, y: 10.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 }, "#FF4422".into(), false).unwrap();
+        eng.push_live_stroke(vec![StrokeSample { x: 50.0, y: 50.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 }]).unwrap();
         let info = eng.finish_live_stroke().unwrap();
         assert!(info.can_undo);
         eng.reset_brush_to_round().unwrap();
@@ -8007,12 +8007,12 @@ LUT_3D_SIZE 2
         }
         eng.open_rgba_bytes("mix.png".into(), 64, 64, rgba).unwrap();
         eng.begin_live_mixer(
-            StrokeSample { x: 16.0, y: 32.0, pressure: 1.0 },
+            StrokeSample { x: 16.0, y: 32.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
             20.0, 0.5, 60.0, 50.0, 50.0, 100.0, "#22CC66".into(), false,
         ).unwrap();
         eng.push_live_mixer(vec![
-            StrokeSample { x: 32.0, y: 32.0, pressure: 1.0 },
-            StrokeSample { x: 48.0, y: 32.0, pressure: 1.0 },
+            StrokeSample { x: 32.0, y: 32.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 48.0, y: 32.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
         ]).unwrap();
         let info = eng.finish_live_mixer().unwrap();
         assert!(info.can_undo);
@@ -8024,10 +8024,10 @@ LUT_3D_SIZE 2
         let rgba = vec![220u8, 50, 50, 255].repeat(48 * 48);
         eng.open_rgba_bytes("crepl.png".into(), 48, 48, rgba).unwrap();
         eng.begin_live_color_replacement(
-            StrokeSample { x: 12.0, y: 24.0, pressure: 1.0 },
+            StrokeSample { x: 12.0, y: 24.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
             18.0, 0.8, "#22AA44".into(), "color".into(), 40.0,
         ).unwrap();
-        eng.push_live_dab(vec![StrokeSample { x: 36.0, y: 24.0, pressure: 1.0 }]).unwrap();
+        eng.push_live_dab(vec![StrokeSample { x: 36.0, y: 24.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 }]).unwrap();
         let info = eng.finish_live_dab().unwrap();
         assert!(info.can_undo);
     }
@@ -8040,10 +8040,10 @@ LUT_3D_SIZE 2
         for tool in ["sponge_saturate", "sponge_desaturate", "blur_brush", "sharpen_brush"] {
             eng.begin_live_dab(
                 tool.into(),
-                StrokeSample { x: 16.0, y: 24.0, pressure: 1.0 },
+                StrokeSample { x: 16.0, y: 24.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
                 16.0, 0.5, 50.0,
             ).unwrap();
-            eng.push_live_dab(vec![StrokeSample { x: 32.0, y: 24.0, pressure: 1.0 }]).unwrap();
+            eng.push_live_dab(vec![StrokeSample { x: 32.0, y: 24.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 }]).unwrap();
             let info = eng.finish_live_dab().unwrap();
             assert!(info.can_undo, "tool {tool} should commit undoable edit");
         }
@@ -8060,7 +8060,7 @@ LUT_3D_SIZE 2
             }
         }
         eng.open_rgba_bytes("patch.png".into(), 64, 64, rgba).unwrap();
-        eng.select_rect(10.0, 10.0, 10.0, 10.0, "replace".into()).unwrap();
+        eng.select_rect(10, 10, 10, 10, false, "replace".into()).unwrap();
         let info = eng.apply_patch_tool(24, 24, "source".into()).unwrap();
         assert!(info.can_undo);
     }
