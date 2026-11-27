@@ -368,6 +368,22 @@ internal fun StudioBottomPanelHost(
                         vm.setTool(ActiveTool.NONE)
                         s.activePanel = BottomPanel.CONTENT_AWARE_MOVE_EDIT
                     },
+                    onOpenSelectSky = {
+                        vm.setTool(ActiveTool.NONE)
+                        s.activePanel = BottomPanel.SELECT_SKY_EDIT
+                    },
+                    onOpenColorRange = {
+                        vm.setTool(ActiveTool.NONE)
+                        s.activePanel = BottomPanel.SELECT_COLOR_RANGE_EDIT
+                    },
+                    onOpenFocusArea = {
+                        vm.setTool(ActiveTool.NONE)
+                        s.activePanel = BottomPanel.SELECT_FOCUS_AREA_EDIT
+                    },
+                    onOpenSelectModify = {
+                        vm.setTool(ActiveTool.NONE)
+                        s.activePanel = BottomPanel.SELECT_MODIFY_EDIT
+                    },
                     onClose = { s.activePanel = BottomPanel.DOCK }
                 )
 
@@ -1886,6 +1902,46 @@ private fun StudioBottomPanelHostPart2(
                         vm.applyContentAwareScale(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones)
                         s.activePanel = BottomPanel.DOCK
                     }
+                )
+                BottomPanel.SELECT_COLOR_RANGE_EDIT -> ColorRangePanel(
+                    s = s,
+                    onClose = { s.activePanel = BottomPanel.SELECT_MENU },
+                    onApply = {
+                        vm.applyColorRange(s.crPreset, s.crColorHex, s.crFuzziness, s.crInvert, s.crMode, s.crSampleAll)
+                        s.activePanel = BottomPanel.SELECT_MENU
+                    }
+                )
+                BottomPanel.SELECT_SKY_EDIT -> SelectSkyPanel(
+                    s = s,
+                    onClose = { s.activePanel = BottomPanel.SELECT_MENU },
+                    onApply = {
+                        vm.applySelectSky(s.skyThreshold, s.skySoftness, s.skyMode, s.skySampleAll)
+                        s.activePanel = BottomPanel.SELECT_MENU
+                    }
+                )
+                BottomPanel.SELECT_FOCUS_AREA_EDIT -> FocusAreaPanel(
+                    s = s,
+                    onClose = { s.activePanel = BottomPanel.SELECT_MENU },
+                    onApply = {
+                        vm.applyFocusArea(s.focusRange, s.focusNoise, s.focusMode, s.focusSampleAll)
+                        s.activePanel = BottomPanel.SELECT_MENU
+                    }
+                )
+                BottomPanel.SELECT_MODIFY_EDIT -> SelectModifyPanel(
+                    s = s,
+                    onApplyModify = {
+                        vm.applyModifySelection(s.selModifyOp, s.selModifyRadius)
+                        s.activePanel = BottomPanel.SELECT_MENU
+                    },
+                    onGrow = {
+                        vm.applyGrowOrSimilarSelection(similar = false, tolerance = s.selGrowTolerance)
+                        s.activePanel = BottomPanel.SELECT_MENU
+                    },
+                    onSimilar = {
+                        vm.applyGrowOrSimilarSelection(similar = true, tolerance = s.selGrowTolerance)
+                        s.activePanel = BottomPanel.SELECT_MENU
+                    },
+                    onClose = { s.activePanel = BottomPanel.SELECT_MENU }
                 )
                 else -> Unit
             }

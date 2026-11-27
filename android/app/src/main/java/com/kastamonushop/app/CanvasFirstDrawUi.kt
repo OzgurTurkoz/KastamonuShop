@@ -64,7 +64,9 @@ internal fun LeftBrushSidebar(
         tool != ActiveTool.PATCH &&
         tool != ActiveTool.RED_EYE &&
         tool != ActiveTool.SELECT_RECT &&
-        tool != ActiveTool.SELECT_WAND
+        tool != ActiveTool.SELECT_WAND &&
+        tool != ActiveTool.SELECT_LASSO &&
+        tool != ActiveTool.SELECT_MAGNETIC_LASSO
 
     val (secondaryLabel, secondaryNorm, secondaryReadout) = when (tool) {
         ActiveTool.BRUSH, ActiveTool.ERASER, ActiveTool.CLONE_STAMP ->

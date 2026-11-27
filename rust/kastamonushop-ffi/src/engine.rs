@@ -7389,6 +7389,216 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+
+
+    // ==================== v1.8.2 ADVANCED SELECTION & QUICK MASK ====================
+
+    pub fn select_lasso(
+        &self,
+        points: Vec<StrokeSample>,
+        mode: String,
+        feather: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.len() < 3 {
+            return Err(EngineError::InvalidParams { detail: "Kement seçimi için en az 3 nokta gerekli".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let pts: Vec<Value> = points.iter().map(|p| json!([p.x as f64, p.y as f64])).collect();
+        guard
+            .session
+            .execute(
+                "select.lasso",
+                json!({
+                    "points": pts,
+                    "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" },
+                    "feather": feather.clamp(0.0, 250.0) as f64,
+                    "antiAlias": true
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn select_magnetic_lasso(
+        &self,
+        points: Vec<StrokeSample>,
+        width: f32,
+        contrast: f32,
+        mode: String,
+        feather: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.len() < 3 {
+            return Err(EngineError::InvalidParams { detail: "Manyetik kement için en az 3 nokta gerekli".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let pts: Vec<Value> = points.iter().map(|p| json!([p.x as f64, p.y as f64])).collect();
+        guard
+            .session
+            .execute(
+                "select.magneticLasso",
+                json!({
+                    "points": pts,
+                    "width": width.clamp(1.0, 256.0) as f64,
+                    "contrast": contrast.clamp(1.0, 100.0) as f64,
+                    "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" },
+                    "feather": feather.clamp(0.0, 250.0) as f64,
+                    "antiAlias": true
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn select_sky(
+        &self,
+        threshold: f32,
+        softness: f32,
+        mode: String,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard
+            .session
+            .execute(
+                "select.sky",
+                json!({
+                    "threshold": threshold.clamp(0.0, 100.0) as f64,
+                    "softness": softness.clamp(0.0, 100.0) as f64,
+                    "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" },
+                    "sampleAllLayers": sample_all_layers
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn select_color_range(
+        &self,
+        preset: String,
+        color_hex: String,
+        fuzziness: f32,
+        invert: bool,
+        mode: String,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let valid_preset = match preset.as_str() {
+            "sampledColors" | "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas"
+            | "highlights" | "midtones" | "shadows" | "skinTones" | "outOfGamut" => preset.as_str(),
+            _ => "sampledColors",
+        };
+        let mut params = json!({
+            "select": valid_preset,
+            "fuzziness": fuzziness.clamp(0.0, 200.0) as f64,
+            "invert": invert,
+            "sampleAllLayers": sample_all_layers,
+            "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" }
+        });
+        if valid_preset == "sampledColors" && !color_hex.trim().is_empty() {
+            params["color"] = json!(color_hex.trim());
+        }
+        guard
+            .session
+            .execute("select.colorRange", params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn select_focus_area(
+        &self,
+        range_pct: f32,
+        noise_pct: f32,
+        mode: String,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard
+            .session
+            .execute(
+                "select.focusArea",
+                json!({
+                    "range": (range_pct / 100.0).clamp(0.0, 1.0) as f64,
+                    "noise": (noise_pct / 100.0).clamp(0.0, 1.0) as f64,
+                    "sampleAllLayers": sample_all_layers,
+                    "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" }
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn modify_selection(&self, op: String, radius: f32) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let cmd = match op.as_str() {
+            "expand" => "select.modify.expand",
+            "contract" => "select.modify.contract",
+            "border" => "select.modify.border",
+            "smooth" => "select.modify.smooth",
+            "feather" => "select.modify.feather",
+            _ => return Err(EngineError::InvalidParams { detail: format!("Geçersiz seçim işlemi: {op}") }),
+        };
+        let r = if op == "border" {
+            radius.clamp(1.0, 200.0)
+        } else {
+            radius.clamp(1.0, 500.0)
+        };
+        guard
+            .session
+            .execute(cmd, json!({ "radius": r as f64 }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn grow_or_similar_selection(
+        &self,
+        similar: bool,
+        tolerance: f32,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let cmd = if similar { "select.similar" } else { "select.grow" };
+        guard
+            .session
+            .execute(
+                cmd,
+                json!({
+                    "tolerance": tolerance.clamp(0.0, 255.0).round() as u32,
+                    "sampleAllLayers": sample_all_layers
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn toggle_quick_mask_mode(&self, on: bool) -> Result<bool, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard
+            .session
+            .execute("select.editInQuickMaskMode", json!({ "on": on }))
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let active = guard
+            .session
+            .active()
+            .is_some_and(|ds| ds.doc().quick_mask.is_some());
+        guard.mark_full_dirty();
+        Ok(active)
+    }
+
 }
 
 impl KastamonuEngine {
@@ -8887,6 +9097,92 @@ LUT_3D_SIZE 2
         eng.update_proxy_content_aware_scale(120.0, 100.0, 100.0, true).unwrap();
         let info = eng.apply_content_aware_scale(120.0, 100.0, 100.0, true).unwrap();
         assert!(info.can_undo);
+    }
+
+
+    #[test]
+    fn test_v182_lasso_and_magnetic_lasso() {
+        let eng = test_engine();
+        let mut rgba = vec![40u8, 40, 40, 255].repeat(64 * 64);
+        for y in 16..48 {
+            for x in 16..48 {
+                let idx = (y * 64 + x) * 4;
+                rgba[idx] = 230; rgba[idx + 1] = 220; rgba[idx + 2] = 60;
+            }
+        }
+        eng.open_rgba_bytes("lasso.png".into(), 64, 64, rgba).unwrap();
+        let pts = vec![
+            StrokeSample { x: 16.0, y: 16.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 48.0, y: 16.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 48.0, y: 48.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 16.0, y: 48.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        eng.select_lasso(pts.clone(), "replace".into(), 0.0).unwrap();
+        assert!(eng.get_selection_bounds().unwrap().is_some());
+        eng.select_magnetic_lasso(pts, 10.0, 10.0, "replace".into(), 0.0).unwrap();
+        assert!(eng.get_selection_bounds().unwrap().is_some());
+    }
+
+    #[test]
+    fn test_v182_select_sky_and_focus_area() {
+        let eng = test_engine();
+        let mut rgba = vec![0u8; 64 * 64 * 4];
+        for y in 0..64 {
+            for x in 0..64 {
+                let idx = (y * 64 + x) * 4;
+                if y < 32 {
+                    rgba[idx] = 110; rgba[idx + 1] = 180; rgba[idx + 2] = 245; rgba[idx + 3] = 255;
+                } else {
+                    rgba[idx] = 50; rgba[idx + 1] = 110; rgba[idx + 2] = 40; rgba[idx + 3] = 255;
+                }
+            }
+        }
+        eng.open_rgba_bytes("sky.png".into(), 64, 64, rgba).unwrap();
+        eng.select_sky(50.0, 50.0, "replace".into(), true).unwrap();
+        eng.select_focus_area(50.0, 0.0, "replace".into(), true).unwrap();
+    }
+
+    #[test]
+    fn test_v182_color_range_presets_and_sampled() {
+        let eng = test_engine();
+        let mut rgba = vec![30u8, 30, 30, 255].repeat(64 * 64);
+        for y in 16..48 {
+            for x in 16..48 {
+                let idx = (y * 64 + x) * 4;
+                rgba[idx] = 240; rgba[idx + 1] = 30; rgba[idx + 2] = 30;
+            }
+        }
+        eng.open_rgba_bytes("cr.png".into(), 64, 64, rgba).unwrap();
+        eng.select_color_range("reds".into(), "#FF0000".into(), 40.0, false, "replace".into(), true).unwrap();
+        assert!(eng.get_selection_bounds().unwrap().is_some());
+        eng.select_color_range("sampledColors".into(), "#F01E1E".into(), 60.0, false, "replace".into(), true).unwrap();
+        assert!(eng.get_selection_bounds().unwrap().is_some());
+    }
+
+    #[test]
+    fn test_v182_modify_expand_contract_border_grow_similar() {
+        let eng = test_engine();
+        let rgba = vec![100u8, 150, 200, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("modsel.png".into(), 64, 64, rgba).unwrap();
+        eng.select_rect(20, 20, 20, 20, false, "replace".into()).unwrap();
+        eng.modify_selection("expand".into(), 4.0).unwrap();
+        eng.modify_selection("contract".into(), 2.0).unwrap();
+        eng.modify_selection("border".into(), 3.0).unwrap();
+        eng.modify_selection("smooth".into(), 2.0).unwrap();
+        eng.grow_or_similar_selection(false, 32.0, true).unwrap();
+        eng.grow_or_similar_selection(true, 32.0, true).unwrap();
+        assert!(eng.get_selection_bounds().unwrap().is_some());
+    }
+
+    #[test]
+    fn test_v182_quick_mask_toggle_roundtrip() {
+        let eng = test_engine();
+        let rgba = vec![120u8, 140, 160, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("qmask.png".into(), 64, 64, rgba).unwrap();
+        eng.select_rect(10, 10, 24, 24, false, "replace".into()).unwrap();
+        assert!(eng.toggle_quick_mask_mode(true).unwrap());
+        assert!(!eng.toggle_quick_mask_mode(false).unwrap());
+        assert!(eng.get_selection_bounds().unwrap().is_some());
     }
 
 }

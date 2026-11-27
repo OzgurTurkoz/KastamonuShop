@@ -70,7 +70,9 @@ enum class ActiveTool {
     SHARPEN_BRUSH,
     RED_EYE,
     PATCH,
-    REMOVE_TOOL
+    REMOVE_TOOL,
+    SELECT_LASSO,
+    SELECT_MAGNETIC_LASSO
 }
 
 data class EditorUiState(
@@ -125,7 +127,8 @@ data class EditorUiState(
     val hasCopiedStyle: Boolean = false,
     val removeCloseLoops: Boolean = true,
     val removeSampleAllLayers: Boolean = false,
-    val removeNewLayer: Boolean = false
+    val removeNewLayer: Boolean = false,
+    val quickMaskMode: Boolean = false
 )
 
 class EditorViewModel : ViewModel() {
@@ -3793,6 +3796,140 @@ class EditorViewModel : ViewModel() {
             }.onFailure { err ->
                 _uiState.update { it.copy(isBusy = false) }
                 showStatus("Akıllı ölçekleme: ${err.message}", 2800L)
+            }
+        }
+    }
+
+    // ==================== v1.8.2 ADVANCED SELECTION & QUICK MASK ====================
+
+    fun applyLassoSelection(samples: List<StrokeSample>, magnetic: Boolean = false) {
+        if (samples.size < 3) {
+            showStatus("Kement için en az 3 nokta çizin", 1800L)
+            return
+        }
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = if (magnetic) {
+                    engine.selectMagneticLasso(samples, 12f, 12f, "replace", 0f)
+                } else {
+                    engine.selectLasso(samples, "replace", 0f)
+                }
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (magnetic) "Manyetik kement seçildi" else "Kement seçildi", 1500L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Kement hatası: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applySelectSky(threshold: Float, softness: Float, mode: String, sampleAllLayers: Boolean) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.selectSky(threshold, softness, mode, sampleAllLayers)
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (bounds != null) "Gökyüzü seçildi" else "Gökyüzü bulunamadı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Gökyüzü seç: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyColorRange(preset: String, colorHex: String, fuzziness: Float, invert: Boolean, mode: String, sampleAllLayers: Boolean) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.selectColorRange(preset, colorHex, fuzziness, invert, mode, sampleAllLayers)
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (bounds != null) "Renk aralığı seçildi" else "Eşleşen renk bulunamadı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Renk aralığı: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyFocusArea(rangePct: Float, noisePct: Float, mode: String, sampleAllLayers: Boolean) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.selectFocusArea(rangePct, noisePct, mode, sampleAllLayers)
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (bounds != null) "Odak alanı seçildi" else "Odak alanı bulunamadı", 1800L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Odak alanı: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyModifySelection(op: String, radius: Float) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.modifySelection(op, radius)
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                val lbl = when (op) {
+                    "expand" -> "Seçim genişletildi"
+                    "contract" -> "Seçim daraltıldı"
+                    "border" -> "Kenarlık seçimi oluşturuldu"
+                    "smooth" -> "Seçim pürüzsüzleştirildi"
+                    else -> "Seçim yumuşatıldı"
+                }
+                showStatus(lbl, 1600L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Seçim değiştir: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyGrowOrSimilarSelection(similar: Boolean, tolerance: Float, sampleAllLayers: Boolean = true) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.growOrSimilarSelection(similar, tolerance, sampleAllLayers)
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (similar) "Benzer renkler seçildi" else "Komşu benzer alan büyütüldü", 1600L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Seçim hatası: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun toggleQuickMaskMode(on: Boolean? = null) {
+        val target = on ?: !_uiState.value.quickMaskMode
+        paintExecutor.execute {
+            runCatching {
+                val active = engine.toggleQuickMaskMode(target)
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                _uiState.update {
+                    it.copy(
+                        quickMaskMode = active,
+                        selectionBounds = bounds,
+                        activeTool = if (active) ActiveTool.BRUSH else ActiveTool.NONE
+                    )
+                }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus(if (active) "Hızlı Maske AÇIK — Siyah/Beyaz fırçayla maskeyi boya" else "Hızlı Maske seçime dönüştürüldü", 2200L)
+            }.onFailure { err ->
+                showStatus("Hızlı Maske: ${err.message}", 2400L)
             }
         }
     }

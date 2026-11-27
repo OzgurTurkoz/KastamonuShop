@@ -1120,6 +1120,8 @@ internal fun DrawMenuPanel(
                 ActiveTool.SELECT_QUICK -> "Akıllı Fırça · nesne üzerinden geç"
                 ActiveTool.SELECT_BRUSH_ADD -> "Elle Ekle (+) · parmağınla seçime boya"
                 ActiveTool.SELECT_BRUSH_SUB -> "Elle Sil (-) · yanlış seçilen yerleri sil"
+                ActiveTool.SELECT_LASSO -> "Serbest Kement · nesnenin etrafını serbestçe çiz"
+                ActiveTool.SELECT_MAGNETIC_LASSO -> "Manyetik Kement · kenarlara yapışarak çiz"
                 ActiveTool.NONE -> "Çizim veya Rötuş için bir araç seç"
             },
             onClose = { onClose() }
@@ -1617,6 +1619,10 @@ internal fun SelectMenuPanel(
     selectScrollState: androidx.compose.foundation.ScrollState,
     onOpenContentAwareFill: () -> Unit = {},
     onOpenContentAwareMove: () -> Unit = {},
+    onOpenSelectSky: () -> Unit = {},
+    onOpenColorRange: () -> Unit = {},
+    onOpenFocusArea: () -> Unit = {},
+    onOpenSelectModify: () -> Unit = {},
     onClose: () -> Unit
 ) {
     Column(
@@ -1652,8 +1658,26 @@ internal fun SelectMenuPanel(
                     if (state.activeTool == ActiveTool.SELECT_RECT) vm.toggleSelectEllipse()
                     else vm.setTool(ActiveTool.SELECT_RECT)
                 }
+                SlimToolChip(Icons.Default.Gesture, "Kement", state.activeTool == ActiveTool.SELECT_LASSO) {
+                    vm.setTool(ActiveTool.SELECT_LASSO)
+                }
+                SlimToolChip(Icons.Default.Timeline, "Manyetik", state.activeTool == ActiveTool.SELECT_MAGNETIC_LASSO) {
+                    vm.setTool(ActiveTool.SELECT_MAGNETIC_LASSO)
+                }
                 SlimToolChip(Icons.Default.PersonSearch, "Konuyu Seç", false) {
                     vm.selectSubject()
+                }
+                SlimToolChip(Icons.Default.Cloud, "Gökyüzü", false) {
+                    onOpenSelectSky()
+                }
+                SlimToolChip(Icons.Default.ColorLens, "Renk Aralığı", false) {
+                    onOpenColorRange()
+                }
+                SlimToolChip(Icons.Default.CenterFocusStrong, "Odak Alanı", false) {
+                    onOpenFocusArea()
+                }
+                SlimToolChip(Icons.Default.Layers, "Hızlı Maske", state.quickMaskMode) {
+                    vm.toggleQuickMaskMode()
                 }
             }
         }
@@ -1665,7 +1689,7 @@ internal fun SelectMenuPanel(
             ) {
                 ProPill(selected = false, onClick = { vm.layerViaCopy() }, label = { Text("Katmana Kopyala", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = { vm.selectInverse() }, label = { Text("Ters Çevir", fontSize = 10.sp) })
-                ProPill(selected = false, onClick = { vm.featherSelection(6f) }, label = { Text("Yumuşat", fontSize = 10.sp) })
+                ProPill(selected = false, onClick = onOpenSelectModify, label = { Text("Değiştir", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = onOpenContentAwareFill, label = { Text("İçerik Dolgu", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = onOpenContentAwareMove, label = { Text("Akıllı Taşı", fontSize = 10.sp) })
                 ProPill(selected = false, onClick = { vm.contentAwareRemove() }, label = { Text("Hızlı Sil", fontSize = 10.sp) })

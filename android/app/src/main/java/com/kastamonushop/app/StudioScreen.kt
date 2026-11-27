@@ -523,7 +523,9 @@ fun StonebridgeStudioScreen(
                             t == ActiveTool.PATCH ||
                             t == ActiveTool.SELECT_QUICK ||
                             t == ActiveTool.SELECT_BRUSH_ADD ||
-                            t == ActiveTool.SELECT_BRUSH_SUB
+                            t == ActiveTool.SELECT_BRUSH_SUB ||
+                            t == ActiveTool.SELECT_LASSO ||
+                            t == ActiveTool.SELECT_MAGNETIC_LASSO
                     },
                     isEyedropperActive = { vm.uiState.value.activeTool == ActiveTool.EYEDROPPER },
                     isRulerEnabled = { vm.uiState.value.rulerEnabled },
@@ -551,7 +553,9 @@ fun StonebridgeStudioScreen(
                     },
                     onRetouchCommit = { samples ->
                         val t = vm.uiState.value.activeTool
-                        if (t == ActiveTool.SELECT_QUICK || t == ActiveTool.SELECT_BRUSH_ADD || t == ActiveTool.SELECT_BRUSH_SUB) {
+                        if (t == ActiveTool.SELECT_LASSO || t == ActiveTool.SELECT_MAGNETIC_LASSO) {
+                            vm.applyLassoSelection(samples, magnetic = (t == ActiveTool.SELECT_MAGNETIC_LASSO))
+                        } else if (t == ActiveTool.SELECT_QUICK || t == ActiveTool.SELECT_BRUSH_ADD || t == ActiveTool.SELECT_BRUSH_SUB) {
                             vm.applySelectionStroke(samples)
                         } else if (t == ActiveTool.REMOVE_TOOL) {
                             vm.applyRemoveTool(samples)
@@ -769,9 +773,15 @@ fun StonebridgeStudioScreen(
                 ActiveTool.SPOT_HEAL -> Color(0x88FF5A5F)
                 ActiveTool.SELECT_BRUSH_SUB -> Color(0x88FF4D4F)
                 ActiveTool.SELECT_QUICK -> Color(0x882ED573)
+                ActiveTool.SELECT_LASSO -> Color(0xDD00E5FF)
+                ActiveTool.SELECT_MAGNETIC_LASSO -> Color(0xDDFFD600)
                 else -> Color(0x884F9CFF)
             }
-            val strokeW = ((state.brushSize * (viewRef?.getCurrentZoom() ?: 1f)).coerceIn(4f, 360f))
+            val strokeW = if (state.activeTool == ActiveTool.SELECT_LASSO || state.activeTool == ActiveTool.SELECT_MAGNETIC_LASSO) {
+                6f
+            } else {
+                ((state.brushSize * (viewRef?.getCurrentZoom() ?: 1f)).coerceIn(4f, 360f))
+            }
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val trail = s.retouchTrailPoints
                 if (trail.isEmpty()) return@Canvas
@@ -2063,6 +2073,40 @@ fun StonebridgeStudioScreen(
         LaunchedEffect(s.showLayers, state.layers, state.docInfo) {
             if (s.showLayers) {
                 vm.refreshLayerThumbnails()
+            }
+        }
+
+        // Floating Quick Mask Mode control bar (v1.8.2)
+        if (state.quickMaskMode) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 74.dp),
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xEE2B1620),
+                tonalElevation = 8.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("Hızlı Maske", color = Color(0xFFFF6B81), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    ProPill(
+                        selected = state.colorHex.equals("#000000", ignoreCase = true),
+                        onClick = { vm.updateBrush(colorHex = "#000000"); vm.setTool(ActiveTool.BRUSH) },
+                        label = { Text("Çıkar", fontSize = 11.sp) }
+                    )
+                    ProPill(
+                        selected = state.colorHex.equals("#FFFFFF", ignoreCase = true),
+                        onClick = { vm.updateBrush(colorHex = "#FFFFFF"); vm.setTool(ActiveTool.BRUSH) },
+                        label = { Text("Ekle", fontSize = 11.sp) }
+                    )
+                    TextButton(onClick = { vm.toggleQuickMaskMode(false) }) {
+                        Text("Seçime Dön", color = Color(0xFFFFD600), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
         }
 
