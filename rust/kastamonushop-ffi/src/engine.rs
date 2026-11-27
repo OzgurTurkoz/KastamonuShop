@@ -7791,8 +7791,11 @@ impl KastamonuEngine {
             let tid = active_id.or_else(|| ds.active_layer());
             if let Some(id) = tid {
                 let _ = ds.set_active_layer(Some(id));
-                if let Some(layer) = ds.doc_mut().layer_mut(id) {
-                    Arc::make_mut(layer).locks.pixels = false;
+                let doc = Arc::make_mut(ds.doc_mut());
+                if let Some(l) = doc.layers.iter_mut().find(|l| l.id == id) {
+                    l.locks.pixels = false;
+                    l.locks.position = false;
+                    l.locks.all = false;
                 }
             }
         }
@@ -10062,8 +10065,9 @@ LUT_3D_SIZE 2
             let mut g = eng.core.lock();
             if let Some(ds) = g.session.active_mut() {
                 if let Some(id) = ds.active_layer() {
-                    if let Some(layer) = ds.doc_mut().layer_mut(id) {
-                        Arc::make_mut(layer).locks.pixels = true;
+                    let doc = Arc::make_mut(ds.doc_mut());
+                    if let Some(l) = doc.layers.iter_mut().find(|l| l.id == id) {
+                        l.locks.pixels = true;
                     }
                 }
             }
