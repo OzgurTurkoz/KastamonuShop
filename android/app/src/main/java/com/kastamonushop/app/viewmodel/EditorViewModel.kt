@@ -136,7 +136,6 @@ data class EditorUiState(
     val removeSampleAllLayers: Boolean = false,
     val removeNewLayer: Boolean = false,
     val quickMaskMode: Boolean = false,
-    val symmetryMode: String = "off",
     val magicEraserTolerance: Float = 32f,
     val magicEraserContiguous: Boolean = true,
     val magicEraserSampleAll: Boolean = false,
@@ -1004,7 +1003,7 @@ class EditorViewModel : ViewModel() {
         _uiState.update {
             it.copy(
                 activeTool = tool,
-                pickingCloneSource = (tool == ActiveTool.CLONE_STAMP && it.cloneSourceDoc == null)
+                pickingCloneSource = ((tool == ActiveTool.CLONE_STAMP || tool == ActiveTool.HEALING_BRUSH) && it.cloneSourceDoc == null)
             )
         }
     }
@@ -4159,19 +4158,23 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun startPickHealingSource() {
+        _uiState.update { it.copy(activeTool = ActiveTool.HEALING_BRUSH, pickingCloneSource = true) }
+        showStatus("Kaynak doku noktasına dokun", 2000L)
+    }
+
     fun applyHealingBrush(samples: List<StrokeSample>) {
         if (samples.isEmpty()) return
         val s = _uiState.value
-        val sx = s.cloneSourceX
-        val sy = s.cloneSourceY
-        if (sx == null || sy == null) {
+        val src = s.cloneSourceDoc
+        if (src == null) {
             _uiState.update { it.copy(pickingCloneSource = true) }
             showStatus("Önce fotoğraf üzerinde kaynak doku noktasına dokun", 2200L)
             return
         }
         paintExecutor.execute {
             runCatching {
-                val info = engine.applyHealingBrush(samples, s.brushSize, s.brushHardness, sx, sy, s.healingSampleAll)
+                val info = engine.applyHealingBrush(samples, s.brushSize, s.brushHardness, src.first, src.second, s.healingSampleAll)
                 _uiState.update { it.copy(docInfo = info) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 refreshLayerThumbnails()

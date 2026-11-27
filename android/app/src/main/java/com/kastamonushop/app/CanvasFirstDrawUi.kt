@@ -917,7 +917,7 @@ internal fun ToolSettingsPopoverCard(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ProPill(
                             selected = state.pickingCloneSource,
-                            onClick = { vm.startPickCloneSource() },
+                            onClick = { vm.startPickHealingSource() },
                             label = { Text("Kaynak Nokta Seç", fontSize = 11.sp) }
                         )
                         ProPill(
