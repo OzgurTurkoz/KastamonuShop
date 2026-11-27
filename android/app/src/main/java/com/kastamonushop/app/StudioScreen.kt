@@ -407,7 +407,7 @@ fun StonebridgeStudioScreen(
             s.activePanel == BottomPanel.FILTER_GALLERY_EDIT ||
             s.activePanel == BottomPanel.LIGHT_DISTORT_EDIT ||
             s.activePanel == BottomPanel.TEXT_EDIT ||
-            s.activePanel == BottomPanel.PUPPET_WARP_EDIT || s.activePanel == BottomPanel.BLEND_IF_EDIT || s.activePanel == BottomPanel.LENS_CORRECTION_EDIT || s.activePanel == BottomPanel.LUT_IMPORT_EDIT
+            s.activePanel == BottomPanel.PUPPET_WARP_EDIT || s.activePanel == BottomPanel.BLEND_IF_EDIT || s.activePanel == BottomPanel.LENS_CORRECTION_EDIT || s.activePanel == BottomPanel.LUT_IMPORT_EDIT || s.activePanel == BottomPanel.CONTENT_AWARE_FILL_EDIT || s.activePanel == BottomPanel.CONTENT_AWARE_SCALE_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -1504,6 +1504,7 @@ fun StonebridgeStudioScreen(
                 selectedIdx = s.puppetSelectedIdx,
                 showMesh = s.puppetShowMesh,
                 meshSegments = s.puppetMeshSegments,
+                handPanEnabled = s.singleFingerPanMode,
                 onSelectPin = { s.puppetSelectedIdx = it },
                 onPushUndo = { snapshot ->
                     s.puppetUndoStack = (s.puppetUndoStack + listOf(snapshot)).takeLast(40)
@@ -1731,7 +1732,8 @@ fun StonebridgeStudioScreen(
                 androidx.compose.foundation.Canvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(s.liquifyTool, s.liquifySize, s.liquifyPressure) {
+                        .then(
+                            if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(s.liquifyTool, s.liquifySize, s.liquifyPressure) {
                             awaitPointerEventScope {
                                 while (true) {
                                     val firstDown = awaitFirstDown(requireUnconsumed = false)
@@ -1793,6 +1795,7 @@ fun StonebridgeStudioScreen(
                                 }
                             }
                         }
+                        )
                 ) {
                     val cur = s.liquifyCursorScreen
                     if (cur != null) {
@@ -2140,13 +2143,15 @@ fun StonebridgeStudioScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(bounds, z) {
-                            detectDragGestures { change, dragAmount ->
-                                change.consume()
-                                s.camMoveDx += dragAmount.x / z
-                                s.camMoveDy += dragAmount.y / z
+                        .then(
+                            if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(bounds, z) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    s.camMoveDx += dragAmount.x / z
+                                    s.camMoveDy += dragAmount.y / z
+                                }
                             }
-                        }
+                        )
                 ) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         // Original selection dashed box

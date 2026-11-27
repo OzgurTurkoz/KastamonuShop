@@ -97,6 +97,7 @@ internal fun PuppetWarpCanvasOverlay(
     selectedIdx: Int,
     showMesh: Boolean = false,
     meshSegments: List<Float> = emptyList(),
+    handPanEnabled: Boolean = false,
     onSelectPin: (Int) -> Unit,
     onPushUndo: (List<PuppetPinPoint>) -> Unit,
     onAddPin: (Float, Float) -> Unit,
@@ -130,7 +131,8 @@ internal fun PuppetWarpCanvasOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(docW, docH) {
+            .then(
+                if (handPanEnabled) Modifier else Modifier.pointerInput(docW, docH) {
                 awaitPointerEventScope {
                     while (true) {
                         val firstDown = awaitFirstDown(requireUnconsumed = false)
@@ -268,6 +270,7 @@ internal fun PuppetWarpCanvasOverlay(
                     }
                 }
             }
+            )
     ) {
         if (canvasViewRef != null) {
             Canvas(modifier = Modifier.fillMaxSize()) {

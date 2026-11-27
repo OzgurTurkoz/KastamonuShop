@@ -7048,9 +7048,19 @@ impl KastamonuEngine {
         let mut ps = Session::new();
         ps.add_document((*proxy.base_doc).clone(), None);
         ps.set_active(0);
-        if active_id.is_some() {
+        let target_info = ps.active().and_then(|ds| find_primary_photo_raster_layer(ds.doc(), active_id));
+        if let Some((target_id, was_locked)) = target_info {
+            ps.set_active_layer(Some(target_id));
+            if was_locked {
+                let _ = ps.execute(
+                    "layer.setProps",
+                    json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+                );
+            }
+        } else if active_id.is_some() {
             ps.set_active_layer(active_id);
         }
+        let _ = output;
         let params = json!({
             "sampling": if sampling == "rectangular" { "rectangular" } else { "auto" },
             "colorAdaptation": match color_adaptation.as_str() {
@@ -7064,10 +7074,7 @@ impl KastamonuEngine {
             "scale": scale,
             "mirror": mirror,
             "sampleAllLayers": sample_all_layers,
-            "output": match output.as_str() {
-                "current" | "new" | "duplicate" => output.as_str(),
-                _ => "current",
-            },
+            "output": "current",
         });
         let _ = ps.execute("edit.contentAwareFill", params);
         proxy.session = ps;
@@ -7301,7 +7308,16 @@ impl KastamonuEngine {
         let mut ps = Session::new();
         ps.add_document((*proxy.base_doc).clone(), None);
         ps.set_active(0);
-        if active_id.is_some() {
+        let target_info = ps.active().and_then(|ds| find_primary_photo_raster_layer(ds.doc(), active_id));
+        if let Some((target_id, was_locked)) = target_info {
+            ps.set_active_layer(Some(target_id));
+            if was_locked {
+                let _ = ps.execute(
+                    "layer.setProps",
+                    json!({ "layer": target_id.0, "locks": { "pixels": false } }),
+                );
+            }
+        } else if active_id.is_some() {
             ps.set_active_layer(active_id);
         }
         let _ = ps.execute(
