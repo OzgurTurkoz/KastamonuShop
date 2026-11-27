@@ -230,6 +230,8 @@ struct ProxyPreviewSession {
     session: Session,
     scale: f32,
     real_size: (u32, u32),
+        selection_only: false,
+    selection_only: bool,
 }
 
 struct ActiveLiquifySession {
@@ -391,8 +393,10 @@ impl EngineCore {
             return Some((doc, sz));
         }
         if let Some(proxy) = &self.proxy_preview {
-            if let Some(ds) = proxy.session.active() {
-                return Some((Arc::clone(ds.doc()), proxy.real_size));
+            if !proxy.selection_only {
+                if let Some(ds) = proxy.session.active() {
+                    return Some((Arc::clone(ds.doc()), proxy.real_size));
+                }
             }
         }
         let doc = self.active_document()?;
@@ -405,6 +409,17 @@ impl EngineCore {
             return Some((Arc::new(cloned), sz));
         }
         Some((doc, sz))
+    }
+
+    pub fn active_selection_document(&self) -> Option<Arc<Document>> {
+        if let Some(proxy) = &self.proxy_preview {
+            if proxy.selection_only {
+                if let Some(ds) = proxy.session.active() {
+                    return Some(Arc::clone(ds.doc()));
+                }
+            }
+        }
+        self.active_document()
     }
 
     pub fn capture_original_snapshot(&mut self) {
@@ -806,7 +821,7 @@ fn ensure_proxy_preview_locked(guard: &mut EngineCore) -> Result<(), EngineError
     };
     let real_w = real_doc.size.width.max(1);
     let real_h = real_doc.size.height.max(1);
-    let max_proxy = 384u32;
+    let max_proxy = 1024u32;
     let scale = (max_proxy as f32 / real_w.max(real_h) as f32).min(1.0);
     let pw = ((real_w as f32 * scale).round() as u32).clamp(1, max_proxy);
     let ph = ((real_h as f32 * scale).round() as u32).clamp(1, max_proxy);
@@ -841,6 +856,7 @@ fn ensure_proxy_preview_locked(guard: &mut EngineCore) -> Result<(), EngineError
         session: ps,
         scale,
         real_size: (real_w, real_h),
+        selection_only: false,
     });
     Ok(())
 }
@@ -2666,7 +2682,7 @@ impl KastamonuEngine {
         };
         let real_w = real_doc.size.width.max(1);
         let real_h = real_doc.size.height.max(1);
-        let max_proxy = 384u32;
+        let max_proxy = 1024u32;
         let scale = (max_proxy as f32 / real_w.max(real_h) as f32).min(1.0);
         let pw = ((real_w as f32 * scale).round() as u32).clamp(1, max_proxy);
         let ph = ((real_h as f32 * scale).round() as u32).clamp(1, max_proxy);
@@ -2701,6 +2717,7 @@ impl KastamonuEngine {
             session: ps,
             scale,
             real_size: (real_w, real_h),
+        selection_only: false,
         });
         guard.mark_full_dirty();
         Ok(())
@@ -2827,7 +2844,7 @@ impl KastamonuEngine {
         };
         let real_w = real_doc.size.width.max(1);
         let real_h = real_doc.size.height.max(1);
-        let max_proxy = 384u32;
+        let max_proxy = 1024u32;
         let scale = (max_proxy as f32 / real_w.max(real_h) as f32).min(1.0);
         let pw = ((real_w as f32 * scale).round() as u32).clamp(1, max_proxy);
         let ph = ((real_h as f32 * scale).round() as u32).clamp(1, max_proxy);
@@ -2861,6 +2878,7 @@ impl KastamonuEngine {
             session: ps,
             scale,
             real_size: (real_w, real_h),
+        selection_only: false,
         });
         guard.mark_full_dirty();
         Ok(())
@@ -7679,6 +7697,7 @@ impl KastamonuEngine {
                 "sampleAllLayers": sample_all_layers
             }),
         );
+        proxy.selection_only = true;
         proxy.session = ps;
         guard.mark_selection_dirty();
         Ok(())
@@ -7708,8 +7727,8 @@ impl KastamonuEngine {
         let mut pw = (base_w * scale_x).round().max(16.0);
         let mut ph = (base_h * scale_y).round().max(16.0);
         let max_side = pw.max(ph);
-        if max_side > 512.0 {
-            let k = 512.0 / max_side;
+        if max_side > 1024.0 {
+            let k = 1024.0 / max_side;
             pw = (pw * k).round().max(16.0);
             ph = (ph * k).round().max(16.0);
         }
@@ -7759,6 +7778,7 @@ impl KastamonuEngine {
         ps.add_document((*proxy.base_doc).clone(), None);
         ps.set_active(0);
         let _ = ps.execute(cmd, json!({ "radius": scaled_r as f64 }));
+        proxy.selection_only = true;
         proxy.session = ps;
         guard.mark_selection_dirty();
         Ok(())
@@ -7853,6 +7873,7 @@ impl KastamonuEngine {
             params["color"] = json!(color_hex.trim());
         }
         let _ = ps.execute("select.colorRange", params);
+        proxy.selection_only = true;
         proxy.session = ps;
         guard.mark_selection_dirty();
         Ok(())
@@ -7883,6 +7904,7 @@ impl KastamonuEngine {
                 "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" }
             }),
         );
+        proxy.selection_only = true;
         proxy.session = ps;
         guard.mark_selection_dirty();
         Ok(())

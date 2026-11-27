@@ -230,12 +230,13 @@ pub extern "system" fn Java_com_kastamonushop_app_bridge_NativeSurfaceBridge_nat
         // Non-blocking try_lock on engine: if a background CPU job is running, still blit the cached GPU texture at 60 FPS!
         let doc_state = rt.engine.try_lock().and_then(|mut guard| {
             let (doc, disp_size) = guard.active_document_and_display_size()?;
+            let sel_doc = guard.active_selection_document().unwrap_or_else(|| std::sync::Arc::clone(&doc));
             let (full, rect) = guard.take_dirty_state();
-            Some((doc, disp_size, guard.render_generation, guard.selection_generation, full, rect))
+            Some((doc, sel_doc, disp_size, guard.render_generation, guard.selection_generation, full, rect))
         });
 
-        let result = if let Some((doc, disp_size, render_gen, sel_gen, force_full, dirty_rect)) = doc_state {
-            renderer.render_frame(&doc, disp_size, render_gen, sel_gen, force_full, dirty_rect, camera, preview)
+        let result = if let Some((doc, sel_doc, disp_size, render_gen, sel_gen, force_full, dirty_rect)) = doc_state {
+            renderer.render_frame(&doc, &sel_doc, disp_size, render_gen, sel_gen, force_full, dirty_rect, camera, preview)
         } else {
             renderer.present_cached_only(camera, preview)
         };

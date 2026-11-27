@@ -166,8 +166,8 @@ internal object ToolRegistryV2 {
             vm.setTool(ActiveTool.NONE)
             s.curveBlackVal = 0f; s.curveShadowVal = 0.25f; s.curveMidVal = 0.50f
             s.curveHighVal = 0.75f; s.curveWhiteVal = 1.0f
-            s.curveOverlayExpanded = false
-            vm.beginProxyPreview()
+            s.curveChannelIdx = 0
+            s.curveOverlayExpanded = true
             s.activePanel = BottomPanel.CURVES_LIVE
         },
         StudioToolSpec(

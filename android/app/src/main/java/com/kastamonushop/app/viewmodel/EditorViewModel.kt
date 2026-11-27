@@ -155,17 +155,7 @@ class EditorViewModel : ViewModel() {
     private var statusAutoHideJob: Job? = null
 
     private val paintExecutor = Executors.newSingleThreadExecutor()
-    private val renderExecutor = Executors.newSingleThreadExecutor()
-    private val renderScheduled = AtomicBoolean(false)
-
-    private fun requestRenderFrame() {
-        if (renderScheduled.compareAndSet(false, true)) {
-            renderExecutor.execute {
-                renderScheduled.set(false)
-                NativeSurfaceBridge.nativeRenderFrame()
-            }
-        }
-    }
+    private var lastLiveRenderMs = 0L
     private val pendingLock = Any()
     private val pendingSamples = ArrayList<StrokeSample>(64)
     @Volatile
@@ -2214,7 +2204,12 @@ class EditorViewModel : ViewModel() {
                     isDab -> engine.pushLiveDab(filtered)
                     else -> engine.pushLiveStroke(filtered)
                 }
-                requestRenderFrame()
+                val now = android.os.SystemClock.uptimeMillis()
+                val queueEmpty = synchronized(pendingLock) { pendingSamples.isEmpty() }
+                if (queueEmpty || now - lastLiveRenderMs >= 16L) {
+                    lastLiveRenderMs = now
+                    NativeSurfaceBridge.nativeRenderFrame()
+                }
             }
         }
     }

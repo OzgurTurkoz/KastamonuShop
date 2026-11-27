@@ -257,7 +257,7 @@ internal fun StudioBottomPanelHost(
                                 warpStyle = s.textWarpStyle, warpBend = s.textWarpBend,
                                 warpHDist = s.textWarpHDist, warpVDist = s.textWarpVDist
                             )
-                            s.activePanel = BottomPanel.SELECT_MENU
+                            s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                         },
                         onRasterize = {
                             vm.rasterizeActiveTextLayer()
@@ -390,7 +390,7 @@ internal fun StudioBottomPanelHost(
                         resetCameraRawProState(s)
                         vm.resetProxyPreview()
                     },
-                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         vm.applyCameraRawJson(buildCameraRawProJson(s))
                         s.activePanel = BottomPanel.DOCK
@@ -463,7 +463,7 @@ internal fun StudioBottomPanelHost(
                         s.contrastVal = it
                         vm.updateProxyAdjustment("brightnessContrast", """{"brightness":${s.brightnessVal.roundToInt()},"contrast":${s.contrastVal.roundToInt()}}""")
                     },
-                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         if (s.brightnessVal.roundToInt() == 0 && s.contrastVal.roundToInt() == 0) onClearAdjustGpuPreviewOnly()
                         else vm.applyAdjustmentOnce("brightnessContrast", """{"brightness":${s.brightnessVal.roundToInt()},"contrast":${s.contrastVal.roundToInt()}}""", "Işık & Kontrast")
@@ -482,7 +482,7 @@ internal fun StudioBottomPanelHost(
                         s.hueVal = it
                         vm.updateProxyAdjustment("hueSaturation", """{"hue":${s.hueVal.roundToInt()},"saturation":${s.saturationVal.roundToInt()},"lightness":0}""")
                     },
-                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         if (s.saturationVal.roundToInt() == 0 && s.hueVal.roundToInt() == 0) onClearAdjustGpuPreviewOnly()
                         else vm.applyAdjustmentOnce("hueSaturation", """{"hue":${s.hueVal.roundToInt()},"saturation":${s.saturationVal.roundToInt()},"lightness":0}""", "Renk & Canlılık")
@@ -501,7 +501,7 @@ internal fun StudioBottomPanelHost(
                         val gStr = String.format(java.util.Locale.US, "%.2f", g)
                         vm.updateProxyAdjustment("levels", """{"inBlack":${b.roundToInt()},"gamma":$gStr,"inWhite":${w.roundToInt()}}""")
                     },
-                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         val ib = s.levelsBlackVal.roundToInt().coerceIn(0, 240)
                         val iw = s.levelsWhiteVal.roundToInt().coerceIn(ib + 10, 255)
@@ -528,7 +528,7 @@ internal fun StudioBottomPanelHost(
                             title = "Renk Dengesi (3 Ton)",
                             subtitle = "Gölgeler, Orta Tonlar ve Aydınlıklar ayrı ayrı",
                             applyLabel = "Uygula",
-                            onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU },
+                            onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                             onApply = {
                                 vm.applyAdjustmentOnce("colorBalance", buildCbJson(), "Renk dengesi uygulandı")
                                 s.activePanel = BottomPanel.DOCK
@@ -560,7 +560,7 @@ internal fun StudioBottomPanelHost(
                 BottomPanel.CURVES_LIVE -> {
                     Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         fun buildRgbCurvesJson(): String {
                             fun fmtPts(pts: List<Float>): String {
@@ -568,8 +568,26 @@ internal fun StudioBottomPanelHost(
                                 return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
                             }
                             val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                            return """{"points":${fmtPts(mPts)},"red":${fmtPts(s.curveRedPts)},"green":${fmtPts(s.curveGreenPts)},"blue":${fmtPts(s.curveBluePts)}}"""
+                            return "{\"points\":${fmtPts(mPts)},\"red\":${fmtPts(s.curveRedPts)},\"green\":${fmtPts(s.curveGreenPts)},\"blue\":${fmtPts(s.curveBluePts)}}"
                         }
+                        BottomEditorHeader(
+                            title = "Eğriler (Curves)",
+                            subtitle = "Fotoğraf üzerindeki noktaları doğrudan parmağınla sürükle",
+                            applyLabel = "Uygula",
+                            onClose = {
+                                s.curveOverlayExpanded = false
+                                onClearAdjustGpuPreviewOnly()
+                                vm.endProxyPreview()
+                                s.activePanel = BottomPanel.DOCK
+                                s.activeWorkspaceV2 = s.lastWorkspaceV2
+                            },
+                            onApply = {
+                                s.curveOverlayExpanded = false
+                                onClearAdjustGpuPreviewOnly()
+                                vm.applyAdjustment("curves", buildRgbCurvesJson())
+                                s.activePanel = BottomPanel.DOCK
+                            }
+                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -577,213 +595,48 @@ internal fun StudioBottomPanelHost(
                             listOf("RGB", "Kırmızı", "Yeşil", "Mavi").forEachIndexed { idx, lbl ->
                                 ProPill(
                                     selected = s.curveChannelIdx == idx,
-                                    onClick = { s.curveChannelIdx = idx },
-                                    label = { Text(lbl, fontSize = 11.sp) }
+                                    onClick = {
+                                        s.curveChannelIdx = idx
+                                        if (idx > 0) vm.beginProxyPreview()
+                                    },
+                                    label = { Text(lbl, fontSize = 11.5.sp) },
+                                    modifier = Modifier.weight(1f)
                                 )
                             }
                         }
-                        if (s.curveChannelIdx > 0) {
-                            val chPts = when (s.curveChannelIdx) { 1 -> s.curveRedPts; 2 -> s.curveGreenPts; else -> s.curveBluePts }
-                            fun setCh(i: Int, v: Float) {
-                                val next = chPts.toMutableList().apply { this[i] = v }
-                                when (s.curveChannelIdx) { 1 -> s.curveRedPts = next; 2 -> s.curveGreenPts = next; else -> s.curveBluePts = next }
-                                vm.updateProxyAdjustment("curves", buildRgbCurvesJson())
-                            }
-                            CompactSliderRow("Gölgeler", "${(chPts[1] * 255).roundToInt()}", chPts[1], 0f..1f, defaultValue = 0.25f) { setCh(1, it) }
-                            CompactSliderRow("Orta Ton", "${(chPts[2] * 255).roundToInt()}", chPts[2], 0f..1f, defaultValue = 0.50f) { setCh(2, it) }
-                            CompactSliderRow("Aydınlık", "${(chPts[3] * 255).roundToInt()}", chPts[3], 0f..1f, defaultValue = 0.75f) { setCh(3, it) }
-                        }
-                        BottomEditorHeader(
-                            title = "Eğriler (RGB Curves)",
-                            subtitle = if (s.curveOverlayExpanded) "Fotoğraf üzerindeki 5 noktayı parmağınla sürükle" else "RGB / R / G / B kanallarını bağımsız ayarla",
-                            applyLabel = "Uygula",
-                            onClose = {
-                                s.curveOverlayExpanded = false
-                                onClearAdjustGpuPreviewOnly()
-                                s.activePanel = BottomPanel.ADJUST_MENU
-                            },
-                            onApply = {
-                                s.curveOverlayExpanded = false
-                                val isDefault = abs(s.curveBlackVal - 0.0f) < 0.01f &&
-                                    abs(s.curveShadowVal - 0.25f) < 0.01f &&
-                                    abs(s.curveMidVal - 0.50f) < 0.01f &&
-                                    abs(s.curveHighVal - 0.75f) < 0.01f &&
-                                    abs(s.curveWhiteVal - 1.0f) < 0.01f
-                                if (isDefault) {
-                                    onClearAdjustGpuPreviewOnly()
-                                } else {
-                                    val by = (s.curveBlackVal * 255f).roundToInt().coerceIn(0, 255)
-                                    val sy = (s.curveShadowVal * 255f).roundToInt().coerceIn(0, 255)
-                                    val my = (s.curveMidVal * 255f).roundToInt().coerceIn(0, 255)
-                                    val hy = (s.curveHighVal * 255f).roundToInt().coerceIn(0, 255)
-                                    val wy = (s.curveWhiteVal * 255f).roundToInt().coerceIn(0, 255)
-                                    vm.applyAdjustmentOnce(
-                                        "curves",
-                                        """{"points":[[0,$by],[64,$sy],[128,$my],[192,$hy],[255,$wy]]}""",
-                                        "Eğriler"
-                                    )
-                                }
-                                s.activePanel = BottomPanel.DOCK
-                            }
-                        )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // Tappable Mini Tone Curve Graph -> opens/closes full-canvas manual curve overlay!
-                            Box(
-                                modifier = Modifier
-                                    .size(76.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (s.curveOverlayExpanded) Color(0xFF1D2B45) else Color(0xFF141720))
-                                    .border(
-                                        width = if (s.curveOverlayExpanded) 2.dp else 1.dp,
-                                        color = if (s.curveOverlayExpanded) MaterialTheme.colorScheme.primary else Color(0xFF454D66),
-                                        shape = RoundedCornerShape(10.dp)
-                                    )
-                                    .clickable {
-                                        s.curveOverlayExpanded = !s.curveOverlayExpanded
-                                        onFitToSafeArea(0, BottomPanel.CURVES_LIVE)
-                                    }
-                            ) {
-                                Canvas(modifier = Modifier.fillMaxSize().padding(6.dp)) {
-                                    val w = size.width
-                                    val h = size.height
-                                    drawLine(Color(0x33FFFFFF), Offset(w * 0.5f, 0f), Offset(w * 0.5f, h), 1f)
-                                    drawLine(Color(0x33FFFFFF), Offset(0f, h * 0.5f), Offset(w, h * 0.5f), 1f)
-                                    drawLine(Color(0x44FFFFFF), Offset(0f, h), Offset(w, 0f), 1f)
-                                    val path = Path()
-                                    val steps = 24
-                                    for (i in 0..steps) {
-                                        val x = i.toFloat() / steps.toFloat()
-                                        val y = evalHermiteCurve(x, s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                                        val sx = x * w
-                                        val sy = h * (1f - y)
-                                        if (i == 0) path.moveTo(sx, sy) else path.lineTo(sx, sy)
-                                    }
-                                    drawPath(path, Color(0xFF4F9CFF), style = Stroke(width = 2.5f))
-                                    val ys = floatArrayOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                                    val xs = floatArrayOf(0f, 0.25f, 0.50f, 0.75f, 1.0f)
-                                    for (i in 0..4) {
-                                        drawCircle(Color.White, radius = 3f, center = Offset(w * xs[i], h * (1f - ys[i])))
-                                    }
-                                }
-                                Icon(
-                                    imageVector = if (s.curveOverlayExpanded) Icons.Default.CloseFullscreen else Icons.Default.OpenInFull,
-                                    contentDescription = "Manuel Eğri",
-                                    tint = if (s.curveOverlayExpanded) MaterialTheme.colorScheme.primary else Color(0xCCFFFFFF),
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(4.dp)
-                                        .size(13.dp)
-                                )
-                            }
-                            // 1-tap Pro Presets
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    ProPill(
-                                        selected = false,
-                                        onClick = {
-                                            s.curveBlackVal = 0.0f; s.curveShadowVal = 0.17f; s.curveMidVal = 0.50f; s.curveHighVal = 0.84f; s.curveWhiteVal = 1.0f
-                                            onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                                        },
-                                        label = { Text("S-Kontrast", fontSize = 10.sp) }
-                                    )
-                                    ProPill(
-                                        selected = false,
-                                        onClick = {
-                                            s.curveBlackVal = 0.08f; s.curveShadowVal = 0.34f; s.curveMidVal = 0.52f; s.curveHighVal = 0.72f; s.curveWhiteVal = 0.94f
-                                            onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                                        },
-                                        label = { Text("Mat Film", fontSize = 10.sp) }
-                                    )
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    ProPill(
-                                        selected = false,
-                                        onClick = {
-                                            s.curveBlackVal = 0.0f; s.curveShadowVal = 0.33f; s.curveMidVal = 0.62f; s.curveHighVal = 0.85f; s.curveWhiteVal = 1.0f
-                                            onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                                        },
-                                        label = { Text("Aydınlık", fontSize = 10.sp) }
-                                    )
-                                    ProPill(
-                                        selected = false,
-                                        onClick = {
-                                            s.curveBlackVal = 0.0f; s.curveShadowVal = 0.25f; s.curveMidVal = 0.50f; s.curveHighVal = 0.75f; s.curveWhiteVal = 1.0f
-                                            onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                                        },
-                                        label = { Text("Sıfırla", fontSize = 10.sp) }
-                                    )
-                                }
-                            }
-                        }
-                        CompactSliderRow("Gölgeler", "${(s.curveShadowVal * 255f).roundToInt()}", s.curveShadowVal, 0.0f..1.0f, defaultValue = 0.25f) {
-                            s.curveShadowVal = it
-                            onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                        }
-                        CompactSliderRow("Orta Ton", "${(s.curveMidVal * 255f).roundToInt()}", s.curveMidVal, 0.0f..1.0f, defaultValue = 0.50f) {
-                            s.curveMidVal = it
-                            onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                        }
-                        CompactSliderRow("Parlaklar", "${(s.curveHighVal * 255f).roundToInt()}", s.curveHighVal, 0.0f..1.0f, defaultValue = 0.75f) {
-                            s.curveHighVal = it
-                            onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                            ProPill(selected = false, onClick = {
+                                s.curveBlackVal = 0f; s.curveShadowVal = 0.18f; s.curveMidVal = 0.50f; s.curveHighVal = 0.82f; s.curveWhiteVal = 1f
+                                s.curveChannelIdx = 0
+                                onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                            }, label = { Text("S-Kontrast", fontSize = 11.sp) })
+                            ProPill(selected = false, onClick = {
+                                s.curveBlackVal = 0.08f; s.curveShadowVal = 0.28f; s.curveMidVal = 0.52f; s.curveHighVal = 0.78f; s.curveWhiteVal = 0.94f
+                                s.curveChannelIdx = 0
+                                onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                            }, label = { Text("Mat Film", fontSize = 11.sp) })
+                            ProPill(selected = false, onClick = {
+                                s.curveBlackVal = 0f; s.curveShadowVal = 0.34f; s.curveMidVal = 0.62f; s.curveHighVal = 0.85f; s.curveWhiteVal = 1f
+                                s.curveChannelIdx = 0
+                                onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                            }, label = { Text("Aydınlık", fontSize = 11.sp) })
+                            ProPill(selected = false, onClick = {
+                                s.curveBlackVal = 0f; s.curveShadowVal = 0.25f; s.curveMidVal = 0.50f; s.curveHighVal = 0.75f; s.curveWhiteVal = 1f
+                                s.curveRedPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+                                s.curveGreenPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+                                s.curveBluePts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+                                onClearAdjustGpuPreviewOnly()
+                                vm.resetProxyPreview()
+                            }, label = { Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A8A)) })
                         }
                     }
                 }
 
-                // Category 3: Kırp & Çevir — 0 ms Instant GPU Preview for 90° Rotate & Flip!
-                else -> StudioBottomPanelHostPart2(
-                    vm = vm,
-                    state = state,
-                    s = s,
-                    context = context,
-                    studioFonts = studioFonts,
-                    cinemaThumbs = cinemaThumbs,
-                    galleryThumbs = galleryThumbs,
-                    lightDistortThumbs = lightDistortThumbs,
-                    cropScrollState = cropScrollState,
-                    effectScrollState = effectScrollState,
-                    onImportFont = onImportFont,
-                    onImportXmp = onImportXmp,
-                    onImportLut = onImportLut,
-                    onPushGpuMirrorPreview = onPushGpuMirrorPreview,
-                    onFitToSafeArea = onFitToSafeArea,
-                    onClearGpuPreview = onClearGpuPreview,
-                    onClearAdjustGpuPreviewOnly = onClearAdjustGpuPreviewOnly,
-                    onPushGpuTransformPreview = onPushGpuTransformPreview
-                )
-            }
-            }
-}
-
-@Composable
-private fun StudioBottomPanelHostPart2(
-    vm: EditorViewModel,
-    state: EditorUiState,
-    s: StudioSessionState,
-    context: Context,
-    studioFonts: List<EditorViewModel.StudioFontOption>,
-    cinemaThumbs: List<ImageBitmap>,
-    galleryThumbs: List<ImageBitmap>,
-    lightDistortThumbs: List<ImageBitmap>,
-    cropScrollState: ScrollState,
-    effectScrollState: ScrollState,
-    onImportFont: () -> Unit,
-    onImportXmp: () -> Unit,
-    onImportLut: () -> Unit,
-    onPushGpuMirrorPreview: (MirrorModeOption, Float) -> Unit,
-    onFitToSafeArea: (Int, BottomPanel) -> Unit,
-    onClearGpuPreview: () -> Unit,
-    onClearAdjustGpuPreviewOnly: () -> Unit,
-    onPushGpuTransformPreview: (Int, Boolean, Boolean) -> Unit
-) {
-            when (s.activePanel) {
                 BottomPanel.CROP_MENU -> {
                     val hasPendingTransform = s.pendingQuarterTurns != 0 || s.pendingFlipH || s.pendingFlipV
                     Row(
@@ -916,7 +769,7 @@ private fun StudioBottomPanelHostPart2(
                             title = "Kırp (${cropW}×${cropH})",
                             subtitle = "4 köşeden boyutlandır veya içinden tutup taşı",
                             applyLabel = "Uygula",
-                            onClose = { s.activePanel = BottomPanel.CROP_MENU },
+                            onClose = { s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                             onApply = {
                                 vm.cropCanvas(cropX, cropY, cropW, cropH)
                                 s.activePanel = BottomPanel.DOCK
@@ -963,7 +816,7 @@ private fun StudioBottomPanelHostPart2(
                             title = "Perspektif Kırpma",
                             subtitle = "4 mavi köşeyi belge/nesne köşelerine sürükle, Uygula de",
                             applyLabel = "Uygula",
-                            onClose = { s.activePanel = BottomPanel.CROP_MENU },
+                            onClose = { s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                             onApply = {
                                 vm.perspectiveCrop(
                                     s.pTl.x * docW, s.pTl.y * docH,
@@ -1025,14 +878,14 @@ private fun StudioBottomPanelHostPart2(
                 BottomPanel.BLUR_EDIT -> BlurEditPanel(
                     radius = s.blurRadiusVal,
                     onRadius = { s.blurRadiusVal = it; vm.updateProxyBlur(it) },
-                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.FILTER_MENU },
+                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = { vm.applyBlurFast(s.blurRadiusVal); s.activePanel = BottomPanel.DOCK }
                 )
 
                 BottomPanel.SHARPEN_EDIT -> SharpenEditPanel(
                     amount = s.sharpenAmountVal,
                     onAmount = { s.sharpenAmountVal = it; vm.updateProxySharpen(it) },
-                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.FILTER_MENU },
+                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = { vm.applySharpenFast(s.sharpenAmountVal); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.QUICK_ACTIONS_MENU -> QuickActionsPanel(
@@ -1052,7 +905,7 @@ private fun StudioBottomPanelHostPart2(
                         s.hslHue = h; s.hslSat = sat; s.hslLum = l
                         vm.updateProxyHslMixer(h, sat, l)
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = { vm.applyHslMixer(s.hslHue, s.hslSat, s.hslLum); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.POSTER_THRESH_LIVE -> PosterThreshPanel(
@@ -1093,7 +946,7 @@ private fun StudioBottomPanelHostPart2(
                         s.threshLevel = 128f
                         vm.resetProxyPreview()
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         if (!s.posterTouched) {
                             vm.endProxyPreview()
@@ -1106,7 +959,7 @@ private fun StudioBottomPanelHostPart2(
                     }
                 )
                 BottomPanel.AUTO_ENHANCE_MENU -> AutoEnhancePanel(
-                    onClose = { s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onPick = { mode, lbl -> vm.applyAutoEnhance(mode, lbl); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.CINEMA_LOOK_EDIT -> CinemaLookPanel(
@@ -1116,7 +969,7 @@ private fun StudioBottomPanelHostPart2(
                     vignette = s.cinemaVignette, onVignette = { s.cinemaVignette = it },
                     grain = s.cinemaGrain, onGrain = { s.cinemaGrain = it },
                     onPreview = { vm.updateProxyCinemaLook(s.cinemaPreset, s.cinemaIntensity, s.cinemaVignette, s.cinemaGrain) },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.EFFECT_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = { vm.applyCinemaLook(s.cinemaPreset, s.cinemaIntensity, s.cinemaVignette, s.cinemaGrain); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.FILTER_GALLERY_EDIT -> FilterGalleryPanel(
@@ -1136,7 +989,7 @@ private fun StudioBottomPanelHostPart2(
                         s.galleryDetail = d
                         if (s.galleryKind != "none") vm.updateProxyGalleryFilter(s.galleryKind, s.galleryAmount, d)
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.FILTER_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = { lbl ->
                         if (s.galleryKind == "none") vm.endProxyPreview()
                         else vm.applyGalleryFilter(s.galleryKind, s.galleryAmount, s.galleryDetail, lbl)
@@ -1183,7 +1036,7 @@ private fun StudioBottomPanelHostPart2(
                         s.ldVariant = v
                         if (s.ldKind != "none") vm.updateProxyLightDistort(s.ldKind, s.ldAmount, s.ldDetail, s.ldX, s.ldY, v)
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.FILTER_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = { lbl ->
                         if (s.ldKind == "none") vm.endProxyPreview()
                         else vm.applyLightDistort(s.ldKind, s.ldAmount, s.ldDetail, s.ldX, s.ldY, s.ldVariant, lbl)
@@ -1347,7 +1200,7 @@ private fun StudioBottomPanelHostPart2(
                         val ch = s.resizeHeightText.toIntOrNull() ?: (state.docInfo?.height?.toInt() ?: 1080)
                         vm.updateProxyImageResize(cw, ch, it)
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         val tw = s.resizeWidthText.toIntOrNull()?.coerceIn(16, 8192) ?: (state.docInfo?.width?.toInt() ?: 1080)
                         val th = s.resizeHeightText.toIntOrNull()?.coerceIn(16, 8192) ?: (state.docInfo?.height?.toInt() ?: 1080)
@@ -1359,7 +1212,7 @@ private fun StudioBottomPanelHostPart2(
                     angle = s.motionBlurAngle, onAngle = { s.motionBlurAngle = it },
                     distance = s.motionBlurDistance, onDistance = { s.motionBlurDistance = it },
                     onPreview = { vm.updateProxyMotionBlur(s.motionBlurAngle, s.motionBlurDistance) },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.FILTER_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         if (s.motionBlurDistance < 1f) vm.endProxyPreview()
                         else vm.applyMotionBlur(s.motionBlurAngle, s.motionBlurDistance)
@@ -1370,7 +1223,7 @@ private fun StudioBottomPanelHostPart2(
                     amount = s.radialBlurAmount, onAmount = { s.radialBlurAmount = it },
                     method = s.radialBlurMethod, onMethod = { s.radialBlurMethod = it },
                     onPreview = { vm.updateProxyRadialBlur(s.radialBlurAmount, s.radialBlurMethod) },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.FILTER_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         if (s.radialBlurAmount < 1f) vm.endProxyPreview()
                         else vm.applyRadialBlur(s.radialBlurAmount, s.radialBlurMethod)
@@ -1382,7 +1235,7 @@ private fun StudioBottomPanelHostPart2(
                     size = s.liquifySize, onSize = { s.liquifySize = it },
                     pressure = s.liquifyPressure, onPressure = { s.liquifyPressure = it },
                     onReset = { vm.resetLiquify() },
-                    onClose = { vm.cancelLiquify(); s.liquifyCursorScreen = null; s.activePanel = BottomPanel.EFFECT_MENU },
+                    onClose = { vm.cancelLiquify(); s.liquifyCursorScreen = null; s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = { s.liquifyCursorScreen = null; vm.commitLiquify(); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.EFFECT_MENU -> {
@@ -1458,7 +1311,7 @@ private fun StudioBottomPanelHostPart2(
                             applyLabel = "Uygula",
                             onClose = {
                                 onClearGpuPreview()
-                                s.activePanel = BottomPanel.EFFECT_MENU
+                                s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                             },
                             onApply = {
                                 val modeId = s.selectedMirrorMode.id
@@ -1677,7 +1530,7 @@ private fun StudioBottomPanelHostPart2(
                         s.lensBlueYellow = 0f; s.lensVertical = 0f; s.lensHorizontal = 0f
                         vm.resetProxyPreview()
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         vm.applyLensCorrection(s.lensDistortion, s.lensVignette, s.lensRedCyan, s.lensBlueYellow, s.lensVertical, s.lensHorizontal)
                         s.activePanel = BottomPanel.DOCK
@@ -1691,7 +1544,7 @@ private fun StudioBottomPanelHostPart2(
                         s.lutOpacity = it
                         if (s.lutText.isNotBlank()) vm.updateProxyColorLookup(s.lutFileName, s.lutText, it)
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         if (s.lutText.isNotBlank()) {
                             vm.applyColorLookup(s.lutFileName, s.lutText, s.lutOpacity)
@@ -1715,7 +1568,7 @@ private fun StudioBottomPanelHostPart2(
                         s.cafMirror = false; s.cafSampleAllLayers = false; s.cafOutput = "current"
                         vm.resetProxyPreview()
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         vm.applyContentAwareFill(
                             s.cafSampling, s.cafColorAdaptation, s.cafRotationAdaptation,
@@ -1739,7 +1592,7 @@ private fun StudioBottomPanelHostPart2(
                         s.camMoveScale = 100f; s.camMoveRotate = 0f; s.camMoveSampleAll = false
                         vm.resetProxyPreview()
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         vm.applyContentAwareMove(
                             s.camMoveDx, s.camMoveDy, s.camMoveMode,
@@ -1758,7 +1611,7 @@ private fun StudioBottomPanelHostPart2(
                         s.casScaleX = 100f; s.casScaleY = 100f; s.casAmount = 100f; s.casProtectSkinTones = true
                         vm.resetProxyPreview()
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         vm.applyContentAwareScale(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones)
                         s.activePanel = BottomPanel.DOCK
@@ -1767,28 +1620,28 @@ private fun StudioBottomPanelHostPart2(
                 BottomPanel.SELECT_COLOR_RANGE_EDIT -> ColorRangePanel(
                     s = s,
                     onPreview = { vm.updateProxyColorRange(s.crPreset, s.crColorHex, s.crFuzziness, s.crInvert, s.crMode, s.crSampleAll) },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         vm.applyColorRange(s.crPreset, s.crColorHex, s.crFuzziness, s.crInvert, s.crMode, s.crSampleAll)
-                        s.activePanel = BottomPanel.SELECT_MENU
+                        s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                     }
                 )
                 BottomPanel.SELECT_SKY_EDIT -> SelectSkyPanel(
                     s = s,
                     onPreview = { vm.updateProxySelectSky(s.skyThreshold, s.skySoftness, s.skyMode, s.skySampleAll) },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         vm.applySelectSky(s.skyThreshold, s.skySoftness, s.skyMode, s.skySampleAll)
-                        s.activePanel = BottomPanel.SELECT_MENU
+                        s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                     }
                 )
                 BottomPanel.SELECT_FOCUS_AREA_EDIT -> FocusAreaPanel(
                     s = s,
                     onPreview = { vm.updateProxyFocusArea(s.focusRange, s.focusNoise, s.focusMode, s.focusSampleAll) },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
                     onApply = {
                         vm.applyFocusArea(s.focusRange, s.focusNoise, s.focusMode, s.focusSampleAll)
-                        s.activePanel = BottomPanel.SELECT_MENU
+                        s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                     }
                 )
                 BottomPanel.SELECT_MODIFY_EDIT -> SelectModifyPanel(
@@ -1798,19 +1651,19 @@ private fun StudioBottomPanelHostPart2(
                     },
                     onApplyModify = {
                         vm.applyModifySelection(s.selModifyOp, s.selModifyRadius)
-                        s.activePanel = BottomPanel.SELECT_MENU
+                        s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                     },
                     onGrow = {
                         vm.endProxyPreview()
                         vm.applyGrowOrSimilarSelection(similar = false, tolerance = s.selGrowTolerance)
-                        s.activePanel = BottomPanel.SELECT_MENU
+                        s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                     },
                     onSimilar = {
                         vm.endProxyPreview()
                         vm.applyGrowOrSimilarSelection(similar = true, tolerance = s.selGrowTolerance)
-                        s.activePanel = BottomPanel.SELECT_MENU
+                        s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
                 )
                 else -> Unit
             }

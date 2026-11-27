@@ -475,6 +475,7 @@ impl VulkanRenderer {
     pub fn render_frame(
         &mut self,
         doc: &Document,
+        sel_doc: &Document,
         display_size: (u32, u32),
         generation: u64,
         sel_generation: u64,
@@ -569,10 +570,10 @@ impl VulkanRenderer {
                 }
                 self.last_rendered_gen = generation;
             }
-            if self.last_sel_gen != sel_generation {
-                self.sync_selection_texture(doc);
-                self.last_sel_gen = sel_generation;
-            }
+        }
+        if self.last_sel_gen != sel_generation {
+            self.sync_selection_texture(sel_doc);
+            self.last_sel_gen = sel_generation;
         }
 
         self.present_cached_only(camera, preview)

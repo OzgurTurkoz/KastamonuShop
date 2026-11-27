@@ -215,7 +215,7 @@ fun StonebridgeStudioScreen(
     fun bottomInsetPxForPanel(panel: BottomPanel): Float {
         val fallbackDp = when (panel) {
             BottomPanel.DOCK -> 112f
-            BottomPanel.CURVES_LIVE -> 340f
+            BottomPanel.CURVES_LIVE -> 150f
             BottomPanel.DRAW_MENU -> 280f
             BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.LENS_CORRECTION_EDIT -> 300f
             BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE -> 250f
@@ -306,16 +306,16 @@ fun StonebridgeStudioScreen(
         } else if (s.activePanel != BottomPanel.DOCK) {
             when (s.activePanel) {
                 BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE -> {
-                    clearAdjustGpuPreviewOnly()
-                    s.activePanel = BottomPanel.ADJUST_MENU
+                    s.curveOverlayExpanded = false; clearAdjustGpuPreviewOnly(); vm.endProxyPreview()
+                    s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                 }
                 BottomPanel.BLUR_EDIT, BottomPanel.SHARPEN_EDIT -> {
-                    clearAdjustGpuPreviewOnly()
-                    s.activePanel = BottomPanel.FILTER_MENU
+                    s.curveOverlayExpanded = false; clearAdjustGpuPreviewOnly(); vm.endProxyPreview()
+                    s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                 }
                 BottomPanel.MIRROR_EDIT -> {
                     clearGpuPreview()
-                    s.activePanel = BottomPanel.EFFECT_MENU
+                    s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                 }
                 BottomPanel.CROP_MENU -> {
                     if (s.pendingQuarterTurns != 0 || s.pendingFlipH || s.pendingFlipV) {
@@ -323,25 +323,25 @@ fun StonebridgeStudioScreen(
                     }
                     s.activePanel = BottomPanel.DOCK
                 }
-                BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> s.activePanel = BottomPanel.CROP_MENU
-                BottomPanel.IMAGE_RESIZE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU }
-                BottomPanel.PUPPET_WARP_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.EFFECT_MENU }
+                BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
+                BottomPanel.IMAGE_RESIZE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
+                BottomPanel.PUPPET_WARP_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); s.activePanel = BottomPanel.DOCK }
                 BottomPanel.LAYER_FX_EDIT, BottomPanel.BLEND_IF_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK }
-                BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.LENS_CORRECTION_EDIT, BottomPanel.LUT_IMPORT_EDIT -> { clearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.ADJUST_MENU }
-                BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); s.liquifyCursorScreen = null; s.activePanel = BottomPanel.EFFECT_MENU }
-                BottomPanel.AUTO_ENHANCE_MENU -> s.activePanel = BottomPanel.ADJUST_MENU
-                BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.EFFECT_MENU }
-                BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT, BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.LIGHT_DISTORT_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.FILTER_MENU }
+                BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.LENS_CORRECTION_EDIT, BottomPanel.LUT_IMPORT_EDIT -> { s.curveOverlayExpanded = false; clearAdjustGpuPreviewOnly(); vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
+                BottomPanel.LIQUIFY_EDIT -> { vm.cancelLiquify(); s.liquifyCursorScreen = null; s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
+                BottomPanel.AUTO_ENHANCE_MENU -> s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
+                BottomPanel.CINEMA_LOOK_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
+                BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT, BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.LIGHT_DISTORT_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
                 BottomPanel.QUICK_ACTIONS_MENU -> s.activePanel = BottomPanel.DOCK
-                BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE -> { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU }
-                BottomPanel.CONTENT_AWARE_FILL_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
-                BottomPanel.CONTENT_AWARE_MOVE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
-                BottomPanel.CONTENT_AWARE_SCALE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU }
+                BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
+                BottomPanel.CONTENT_AWARE_FILL_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
+                BottomPanel.CONTENT_AWARE_MOVE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
+                BottomPanel.CONTENT_AWARE_SCALE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
                 BottomPanel.SELECT_COLOR_RANGE_EDIT, BottomPanel.SELECT_SKY_EDIT, BottomPanel.SELECT_FOCUS_AREA_EDIT -> {
-                    vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU
+                    vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                 }
-                BottomPanel.SELECT_MODIFY_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
+                BottomPanel.SELECT_MODIFY_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
                 BottomPanel.TEXT_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK }
                 BottomPanel.SELECT_MENU, BottomPanel.DRAW_MENU, BottomPanel.RETOUCH_MENU, BottomPanel.LAYER_MASK_EDIT -> {
                     vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK
@@ -1031,15 +1031,35 @@ fun StonebridgeStudioScreen(
                 fun knotScreen(idx: Int, yNorm: Float): Offset =
                     Offset(boxL + knotXs[idx] * boxW, boxB - yNorm * boxH)
 
+                fun activeChannelYs(): FloatArray = when (s.curveChannelIdx) {
+                    1 -> s.curveRedPts.toFloatArray()
+                    2 -> s.curveGreenPts.toFloatArray()
+                    3 -> s.curveBluePts.toFloatArray()
+                    else -> floatArrayOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                }
+                fun buildAllChannelsJson(): String {
+                    fun fmtPts(pts: List<Float>): String {
+                        val xs = listOf(0, 64, 128, 192, 255)
+                        return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
+                    }
+                    val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                    return "{"points":${fmtPts(mPts)},"red":${fmtPts(s.curveRedPts)},"green":${fmtPts(s.curveGreenPts)},"blue":${fmtPts(s.curveBluePts)}}"
+                }
+                val chColor = when (s.curveChannelIdx) {
+                    1 -> Color(0xFFFF5252)
+                    2 -> Color(0xFF4ADE80)
+                    3 -> Color(0xFF60A5FA)
+                    else -> Color.White
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(boxL, boxT, boxW, boxH) {
+                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(boxL, boxT, boxW, boxH, s.curveChannelIdx) {
                             detectDragGestures(
                                 onDragStart = { pos ->
-                                    val ys = floatArrayOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                                    val ys = activeChannelYs()
                                     var bestIdx = -1
-                                    var bestDist = 110f
+                                    var bestDist = 115f
                                     for (i in 0..4) {
                                         val pt = knotScreen(i, ys[i])
                                         val d = kotlin.math.hypot((pos.x - pt.x).toDouble(), (pos.y - pt.y).toDouble()).toFloat()
@@ -1048,7 +1068,6 @@ fun StonebridgeStudioScreen(
                                             bestIdx = i
                                         }
                                     }
-                                    // If tapped directly near the curve between nodes, pick nearest X node
                                     if (bestIdx == -1 && pos.x in (boxL - 36f)..(boxR + 36f) && pos.y in (boxT - 36f)..(boxB + 36f)) {
                                         val nx = ((pos.x - boxL) / boxW).coerceIn(0f, 1f)
                                         bestIdx = (nx * 4f).roundToInt().coerceIn(0, 4)
@@ -1058,59 +1077,72 @@ fun StonebridgeStudioScreen(
                                 onDragEnd = { s.draggingCurveNode = -1 },
                                 onDragCancel = { s.draggingCurveNode = -1 },
                                 onDrag = { change, _ ->
-                                    if (s.draggingCurveNode in 0..4) {
+                                    val idx = s.draggingCurveNode
+                                    if (idx in 0..4) {
                                         change.consume()
                                         val ny = ((boxB - change.position.y) / boxH).coerceIn(0f, 1f)
-                                        when (s.draggingCurveNode) {
-                                            0 -> s.curveBlackVal = ny
-                                            1 -> s.curveShadowVal = ny
-                                            2 -> s.curveMidVal = ny
-                                            3 -> s.curveHighVal = ny
-                                            4 -> s.curveWhiteVal = ny
+                                        when (s.curveChannelIdx) {
+                                            1 -> {
+                                                s.curveRedPts = s.curveRedPts.toMutableList().apply { this[idx] = ny }
+                                                vm.updateProxyAdjustment("curves", buildAllChannelsJson())
+                                            }
+                                            2 -> {
+                                                s.curveGreenPts = s.curveGreenPts.toMutableList().apply { this[idx] = ny }
+                                                vm.updateProxyAdjustment("curves", buildAllChannelsJson())
+                                            }
+                                            3 -> {
+                                                s.curveBluePts = s.curveBluePts.toMutableList().apply { this[idx] = ny }
+                                                vm.updateProxyAdjustment("curves", buildAllChannelsJson())
+                                            }
+                                            else -> {
+                                                when (idx) {
+                                                    0 -> s.curveBlackVal = ny
+                                                    1 -> s.curveShadowVal = ny
+                                                    2 -> s.curveMidVal = ny
+                                                    3 -> s.curveHighVal = ny
+                                                    4 -> s.curveWhiteVal = ny
+                                                }
+                                                pushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                                            }
                                         }
-                                        pushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
                                     }
                                 }
                             )
                         })
                 ) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        // Dashed outer frame over the photo
                         drawRect(
-                            color = Color(0xBBFFFFFF),
+                            color = Color(0xCCFFFFFF),
                             topLeft = Offset(boxL, boxT),
                             size = Size(boxW, boxH),
                             style = Stroke(width = 2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)))
                         )
-                        // Subtle 4x4 grid + diagonal reference
                         for (g in 1..3) {
                             val t = g / 4f
-                            drawLine(Color(0x33FFFFFF), Offset(boxL + boxW * t, boxT), Offset(boxL + boxW * t, boxB), 1f)
-                            drawLine(Color(0x33FFFFFF), Offset(boxL, boxT + boxH * t), Offset(boxR, boxT + boxH * t), 1f)
+                            drawLine(Color(0x28FFFFFF), Offset(boxL + boxW * t, boxT), Offset(boxL + boxW * t, boxB), 1f)
+                            drawLine(Color(0x28FFFFFF), Offset(boxL, boxT + boxH * t), Offset(boxR, boxT + boxH * t), 1f)
                         }
                         drawLine(Color(0x44FFFFFF), Offset(boxL, boxB), Offset(boxR, boxT), 1.5f)
 
-                        // Smooth 64-step cubic Hermite spline curve (matches blit.wgsl 1:1!)
+                        val ys = activeChannelYs()
                         val path = Path()
                         val steps = 64
                         for (i in 0..steps) {
                             val x = i.toFloat() / steps.toFloat()
-                            val y = evalHermiteCurve(x, s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                            val y = evalHermiteCurve(x, ys[0], ys[1], ys[2], ys[3], ys[4])
                             val sx = boxL + x * boxW
                             val sy = boxB - y * boxH
                             if (i == 0) path.moveTo(sx, sy) else path.lineTo(sx, sy)
                         }
-                        drawPath(path, color = Color(0xCC000000), style = Stroke(width = 6f))
-                        drawPath(path, color = Color.White, style = Stroke(width = 3f))
+                        drawPath(path, color = Color(0xBB000000), style = Stroke(width = 6.5f))
+                        drawPath(path, color = chColor, style = Stroke(width = 3.2f))
 
-                        // 5 large draggable translucent circular handles
-                        val ys = floatArrayOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
                         for (i in 0..4) {
                             val pt = knotScreen(i, ys[i])
                             val active = s.draggingCurveNode == i
                             drawCircle(
-                                color = if (active) Color(0xAA4F9CFF) else Color(0x66FFFFFF),
-                                radius = if (active) 30f else 24f,
+                                color = if (active) Color(0xCCF59E0B) else Color(0x77FFFFFF),
+                                radius = if (active) 32f else 25f,
                                 center = pt
                             )
                             drawCircle(
@@ -2678,6 +2710,7 @@ fun StonebridgeStudioScreen(
                     s.pinnedToolIdsV2 = if (id in s.pinnedToolIdsV2) s.pinnedToolIdsV2 - id else s.pinnedToolIdsV2 + id
                 },
                 onSelectTool = { spec ->
+                    s.lastWorkspaceV2 = spec.workspace
                     s.activeWorkspaceV2 = null
                     val ctx = StudioLaunchContext(
                         vm = vm,
@@ -2751,6 +2784,7 @@ fun StonebridgeStudioScreen(
                     s.pinnedToolIdsV2 = if (id in s.pinnedToolIdsV2) s.pinnedToolIdsV2 - id else s.pinnedToolIdsV2 + id
                 },
                 onSelectTool = { spec ->
+                    s.lastWorkspaceV2 = spec.workspace
                     s.showSearchPaletteV2 = false
                     s.activeWorkspaceV2 = null
                     val ctx = StudioLaunchContext(
