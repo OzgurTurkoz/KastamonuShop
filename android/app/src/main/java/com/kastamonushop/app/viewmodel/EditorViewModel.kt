@@ -136,7 +136,7 @@ data class EditorUiState(
     val removeSampleAllLayers: Boolean = false,
     val removeNewLayer: Boolean = false,
     val quickMaskMode: Boolean = false,
-    val magicEraserTolerance: Float = 32f,
+    val magicEraserTolerance: Float = 50f,
     val magicEraserContiguous: Boolean = true,
     val magicEraserSampleAll: Boolean = false,
     val bgEraserTolerance: Float = 50f,
@@ -145,7 +145,7 @@ data class EditorUiState(
     val adjBrushKind: String = "exposure",
     val adjBrushSubtract: Boolean = false,
     val artHistoryStyle: String = "tightMedium",
-    val artHistoryArea: Float = 50f,
+    val artHistoryArea: Float = 65f,
     val artHistoryTolerance: Float = 0f,
     val healingSampleAll: Boolean = false
 )
@@ -1015,7 +1015,7 @@ class EditorViewModel : ViewModel() {
 
     fun setCloneSource(docX: Float, docY: Float) {
         _uiState.update { it.copy(cloneSourceDoc = docX to docY, pickingCloneSource = false) }
-        showStatus("Klon kaynağı seçildi — şimdi boyamak istediğin yere sürükle", 2200L)
+        showStatus(if (_uiState.value.activeTool == ActiveTool.HEALING_BRUSH) "Düzeltme kaynağı seçildi — şimdi onaracağın yere sürükle" else "Klon kaynağı seçildi — şimdi boyamak istediğin yere sürükle", 2200L)
     }
 
     fun toggleSelectEllipse() {
@@ -2032,7 +2032,8 @@ class EditorViewModel : ViewModel() {
             tool == ActiveTool.SPONGE_DESAT ||
             tool == ActiveTool.BLUR_BRUSH ||
             tool == ActiveTool.SHARPEN_BRUSH ||
-            tool == ActiveTool.COLOR_REPLACE
+            tool == ActiveTool.COLOR_REPLACE ||
+            tool == ActiveTool.BG_ERASER
 
     private fun dabToolKey(tool: ActiveTool): String = when (tool) {
         ActiveTool.SMUDGE -> "smudge"
@@ -2047,7 +2048,7 @@ class EditorViewModel : ViewModel() {
 
     fun beginLiveStroke(sample: StrokeSample) {
         val s = _uiState.value
-        val isBrushOrEraser = s.activeTool == ActiveTool.BRUSH || s.activeTool == ActiveTool.ERASER
+        val isBrushOrEraser = s.activeTool == ActiveTool.BRUSH || s.activeTool == ActiveTool.PENCIL || s.activeTool == ActiveTool.ERASER
         val isMixer = s.activeTool == ActiveTool.MIXER_BRUSH
         val isColorReplace = s.activeTool == ActiveTool.COLOR_REPLACE
         val isDab = isLiveDabTool(s.activeTool)
@@ -2084,8 +2085,16 @@ class EditorViewModel : ViewModel() {
                             s.colorHex, s.colorReplaceMode, s.colorReplaceTolerance
                         )
                     }
+                    s.activeTool == ActiveTool.BG_ERASER -> {
+                        engine.beginLiveBackgroundEraser(
+                            sample, s.brushSize, s.brushHardness, s.bgEraserTolerance, s.bgEraserLimits, s.bgEraserProtectFg
+                        )
+                    }
                     isDab -> {
                         engine.beginLiveDab(dabToolKey(s.activeTool), sample, s.brushSize, s.brushHardness, s.retouchStrength)
+                    }
+                    s.activeTool == ActiveTool.PENCIL -> {
+                        engine.beginLivePencil(sample, s.colorHex)
                     }
                     else -> {
                         engine.beginLiveStroke(sample, s.colorHex, s.activeTool == ActiveTool.ERASER)
@@ -2100,7 +2109,7 @@ class EditorViewModel : ViewModel() {
 
     fun pushLiveStroke(samples: List<StrokeSample>) {
         val tool = _uiState.value.activeTool
-        val ok = tool == ActiveTool.BRUSH || tool == ActiveTool.ERASER || tool == ActiveTool.MIXER_BRUSH ||
+        val ok = tool == ActiveTool.BRUSH || tool == ActiveTool.PENCIL || tool == ActiveTool.ERASER || tool == ActiveTool.MIXER_BRUSH ||
             isLiveDabTool(tool) || (tool == ActiveTool.CLONE_STAMP && !_uiState.value.pickingCloneSource)
         if (!ok || samples.isEmpty()) return
         synchronized(pendingLock) {
@@ -2172,7 +2181,7 @@ class EditorViewModel : ViewModel() {
         val isDab = isLiveDabTool(tool)
         val isClone = tool == ActiveTool.CLONE_STAMP && !_uiState.value.pickingCloneSource
         val isMixer = tool == ActiveTool.MIXER_BRUSH
-        if (tool != ActiveTool.BRUSH && tool != ActiveTool.ERASER && !isDab && !isClone && !isMixer) return
+        if (tool != ActiveTool.BRUSH && tool != ActiveTool.PENCIL && tool != ActiveTool.ERASER && !isDab && !isClone && !isMixer) return
         paintExecutor.execute {
             drainPendingSamples()
             runCatching {
@@ -4119,6 +4128,7 @@ class EditorViewModel : ViewModel() {
                 _uiState.update { it.copy(docInfo = info, layers = layers) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 refreshLayerThumbnails()
+                showStatus(if (s.adjBrushSubtract) "Ayar maskesinden silindi" else "Ayar fırçası uygulandı", 1400L)
             }.onFailure { err ->
                 showStatus("Ayar fırçası: ${err.message}", 2400L)
             }

@@ -182,6 +182,7 @@ struct ActiveLiveStroke {
     points_json: Vec<Value>,
     color_hex: String,
     is_eraser: bool,
+    is_pencil: bool,
     target_mask: bool,
 }
 
@@ -5572,6 +5573,7 @@ impl KastamonuEngine {
             points_json: vec![pt_json],
             color_hex: effective_color,
             is_eraser,
+            is_pencil: false,
             target_mask,
         });
         guard.mark_region_dirty(dmg);
@@ -5615,12 +5617,25 @@ impl KastamonuEngine {
         } else if active.is_eraser {
             params["mode"] = json!("clear");
         }
-        let _ = guard.session.offer_live_stroke(active.live);
-        guard
-            .session
-            .execute("paint.stroke", params)
-            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_region_dirty(bounds);
+        if active.is_pencil {
+            params["hardness"] = json!(1.0);
+            guard
+                .session
+                .execute("paint.pencil", params)
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            guard.mark_full_dirty();
+        } else {
+            let _ = guard.session.offer_live_stroke(active.live);
+            guard
+                .session
+                .execute("paint.stroke", params)
+                .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+            if guard.session.active().is_some_and(|ds| ds.symmetry.is_some()) {
+                guard.mark_full_dirty();
+            } else {
+                guard.mark_region_dirty(bounds);
+            }
+        }
         self.info_from_locked(&guard)
     }
 
@@ -7742,6 +7757,92 @@ impl KastamonuEngine {
 
     // ==================== v1.8.3 PRO DRAW & RETOUCH TOOLS ====================
 
+    pub fn begin_live_pencil(
+        &self,
+        sample: StrokeSample,
+        color_hex: String,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let pt_json = sample_to_json(&sample);
+        let eff_color = if color_hex.trim().is_empty() { "#000000".to_string() } else { color_hex.trim().to_string() };
+        let params = json!({
+            "points": [pt_json.clone()],
+            "color": eff_color,
+            "hardness": 1.0
+        });
+        let live = LiveStroke::begin(&guard.session, &params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let dmg = live.bounds();
+        guard.live_stroke = Some(ActiveLiveStroke {
+            live,
+            points_json: vec![pt_json],
+            color_hex: eff_color,
+            is_eraser: false,
+            is_pencil: true,
+            target_mask: false,
+        });
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
+    pub fn begin_live_background_eraser(
+        &self,
+        sample: StrokeSample,
+        size: f32,
+        hardness: f32,
+        tolerance: f32,
+        limits: String,
+        protect_foreground: bool,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.live_dab = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed { detail: "Silinecek fotoğraf katmanı bulunamadı".into() }
+            })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let pt_json = json!([sample.x as f64, sample.y as f64, sample.pressure.clamp(0.05, 1.0) as f64]);
+        let lim = match limits.as_str() {
+            "discontiguous" | "contiguous" | "findEdges" => limits.as_str(),
+            _ => "contiguous",
+        };
+        let base_params = json!({
+            "size": size.clamp(4.0, 400.0) as f64,
+            "hardness": hardness.clamp(0.0, 1.0) as f64,
+            "sampling": "continuous",
+            "limits": lim,
+            "tolerance": tolerance.clamp(1.0, 100.0) as f64,
+            "protectForegroundColor": protect_foreground
+        });
+        let mut init_params = base_params.clone();
+        init_params["points"] = json!([pt_json.clone()]);
+        let live = photocraft_engine::eraser_cmds::live_background_eraser(&guard.session, &init_params)
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        let dmg = live.bounds();
+        guard.live_dab = Some(ActiveLiveDab {
+            live,
+            cmd: "paint.backgroundEraser".to_string(),
+            base_params,
+            points_json: vec![pt_json],
+            target_id,
+            prev_active,
+            was_locked: false,
+        });
+        guard.mark_region_dirty(dmg);
+        Ok(())
+    }
+
     pub fn set_symmetry_mode(&self, mode: String, rotation_deg: f32) -> Result<String, EngineError> {
         let mut guard = self.core.lock();
         guard.dismiss_compare();
@@ -7978,6 +8079,11 @@ impl KastamonuEngine {
             return Err(EngineError::InvalidParams { detail: "Geçmiş fırçası noktası boş".into() });
         }
         let mut guard = self.core.lock();
+        if !guard.session.is_enabled("edit.undo") {
+            return Err(EngineError::CommandFailed {
+                detail: "Geçmiş fırçası için önce fotoğrafta bir boyama veya filtre uygula (ilk halini geri boyar)".into(),
+            });
+        }
         guard.dismiss_compare();
         guard.live_stroke = None;
         guard.proxy_preview = None;

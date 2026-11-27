@@ -520,7 +520,7 @@ fun StonebridgeStudioScreen(
                     isDrawingActive = {
                         val st = vm.uiState.value
                         val t = st.activeTool
-                        t == ActiveTool.BRUSH || t == ActiveTool.ERASER ||
+                        t == ActiveTool.BRUSH || t == ActiveTool.PENCIL || t == ActiveTool.ERASER || t == ActiveTool.BG_ERASER ||
                             t == ActiveTool.MIXER_BRUSH || t == ActiveTool.COLOR_REPLACE ||
                             t == ActiveTool.SMUDGE || t == ActiveTool.DODGE || t == ActiveTool.BURN ||
                             t == ActiveTool.SPONGE_SAT || t == ActiveTool.SPONGE_DESAT ||
@@ -537,8 +537,6 @@ fun StonebridgeStudioScreen(
                             t == ActiveTool.SELECT_BRUSH_SUB ||
                             t == ActiveTool.SELECT_LASSO ||
                             t == ActiveTool.SELECT_MAGNETIC_LASSO ||
-                            t == ActiveTool.PENCIL ||
-                            t == ActiveTool.BG_ERASER ||
                             t == ActiveTool.ADJUST_BRUSH ||
                             t == ActiveTool.HISTORY_BRUSH ||
                             t == ActiveTool.ART_HISTORY_BRUSH ||
@@ -699,7 +697,7 @@ fun StonebridgeStudioScreen(
         }
         // Active selection pixel mask & organic contour are rendered at 60 FPS directly in blit.wgsl
         // Clone Stamp Source Crosshair
-        if (state.activeTool == ActiveTool.CLONE_STAMP) {
+        if (state.activeTool == ActiveTool.CLONE_STAMP || state.activeTool == ActiveTool.HEALING_BRUSH) {
             state.cloneSourceDoc?.let { (cx, cy) ->
                 val view = s.canvasViewRef
                 if (view != null) {
@@ -2738,6 +2736,10 @@ private fun RetouchTrailOverlay(
         ActiveTool.SELECT_QUICK -> Color(0x882ED573)
         ActiveTool.SELECT_LASSO -> Color(0xDD00E5FF)
         ActiveTool.SELECT_MAGNETIC_LASSO -> Color(0xDDFFD600)
+        ActiveTool.ADJUST_BRUSH -> Color(0x88FFA502)
+        ActiveTool.HEALING_BRUSH -> Color(0x882ED573)
+        ActiveTool.HISTORY_BRUSH -> Color(0x8870A1FF)
+        ActiveTool.ART_HISTORY_BRUSH -> Color(0x88C56CF0)
         else -> Color(0x884F9CFF)
     }
     Canvas(modifier = Modifier.fillMaxSize()) {
