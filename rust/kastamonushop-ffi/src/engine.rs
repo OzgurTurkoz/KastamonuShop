@@ -7790,9 +7790,9 @@ impl KastamonuEngine {
         if let Some(ds) = ps.active_mut() {
             let tid = active_id.or_else(|| ds.active_layer());
             if let Some(id) = tid {
-                let _ = ds.set_active_layer(id);
+                let _ = ds.set_active_layer(Some(id));
                 if let Some(layer) = ds.doc_mut().layer_mut(id) {
-                    layer.lock.pixels = false;
+                    layer.locks.pixels = false;
                 }
             }
         }
@@ -10063,7 +10063,7 @@ LUT_3D_SIZE 2
             if let Some(ds) = g.session.active_mut() {
                 if let Some(id) = ds.active_layer() {
                     if let Some(layer) = ds.doc_mut().layer_mut(id) {
-                        layer.lock.pixels = true;
+                        layer.locks.pixels = true;
                     }
                 }
             }
