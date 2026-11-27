@@ -934,7 +934,16 @@ class EditorViewModel : ViewModel() {
 
     private val thumbRefreshScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    fun refreshLayerThumbnails() {
+    @Volatile
+    private var layersDrawerOpen: Boolean = false
+
+    fun setLayersDrawerOpen(open: Boolean) {
+        layersDrawerOpen = open
+        if (open) refreshLayerThumbnails(force = true)
+    }
+
+    fun refreshLayerThumbnails(force: Boolean = false) {
+        if (!force && !layersDrawerOpen) return
         if (!thumbRefreshScheduled.compareAndSet(false, true)) return
         paintExecutor.execute {
             try {

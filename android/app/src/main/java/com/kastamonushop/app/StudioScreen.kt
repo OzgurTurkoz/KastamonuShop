@@ -560,7 +560,11 @@ fun StonebridgeStudioScreen(
                     onStrokeCancel = { vm.cancelLiveStroke() },
                     onRetouchPreview = { pos ->
                         s.retouchCursor = pos
-                        s.retouchTrailPoints = if (pos == null) emptyList() else (s.retouchTrailPoints + Offset(pos.first, pos.second))
+                        if (pos == null) {
+                            if (s.retouchTrailPoints.isNotEmpty()) s.retouchTrailPoints.clear()
+                        } else {
+                            s.retouchTrailPoints.add(Offset(pos.first, pos.second))
+                        }
                     },
                     onRetouchCommit = { samples ->
                         val t = vm.uiState.value.activeTool
@@ -775,48 +779,13 @@ fun StonebridgeStudioScreen(
             }
         }
 
-        // Live Crop Frame Overlay when in CROP_RATIO_EDIT
-        // v1.0.0 60 FPS Live Stroke Ribbon Trail for Leke (Spot Heal) & Selection Brushes
-        if (s.retouchTrailPoints.isNotEmpty()) {
-            val viewRef = s.canvasViewRef
-            val trailColor = when (state.activeTool) {
-                ActiveTool.REMOVE_TOOL -> Color(0x99FF2EA6)
-                ActiveTool.SPOT_HEAL -> Color(0x88FF5A5F)
-                ActiveTool.SELECT_BRUSH_SUB -> Color(0x88FF4D4F)
-                ActiveTool.SELECT_QUICK -> Color(0x882ED573)
-                ActiveTool.SELECT_LASSO -> Color(0xDD00E5FF)
-                ActiveTool.SELECT_MAGNETIC_LASSO -> Color(0xDDFFD600)
-                else -> Color(0x884F9CFF)
-            }
-            val strokeW = if (state.activeTool == ActiveTool.SELECT_LASSO || state.activeTool == ActiveTool.SELECT_MAGNETIC_LASSO) {
-                6f
-            } else {
-                ((state.brushSize * (viewRef?.getCurrentZoom() ?: 1f)).coerceIn(4f, 360f))
-            }
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val trail = s.retouchTrailPoints
-                if (trail.isEmpty()) return@Canvas
-                if (trail.size == 1) {
-                    drawCircle(trailColor, radius = strokeW * 0.5f, center = trail[0])
-                } else {
-                    val p = Path().apply {
-                        moveTo(trail[0].x, trail[0].y)
-                        for (i in 1 until trail.size) {
-                            lineTo(trail[i].x, trail[i].y)
-                        }
-                    }
-                    drawPath(
-                        path = p,
-                        color = trailColor,
-                        style = Stroke(
-                            width = strokeW,
-                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                            join = androidx.compose.ui.graphics.StrokeJoin.Round
-                        )
-                    )
-                }
-            }
-        }
+        // Isolated 60 FPS Live Stroke Ribbon Trail (does NOT trigger StudioScreen recomposition!)
+        RetouchTrailOverlay(
+            trailPoints = s.retouchTrailPoints,
+            activeTool = state.activeTool,
+            brushSize = state.brushSize,
+            zoomProvider = { s.canvasViewRef?.getCurrentZoom() ?: 1f }
+        )
 
         // v1.0.0 Interactive 4-Corner Draggable & Movable Normal Crop Overlay
         if (s.activePanel == BottomPanel.CROP_RATIO_EDIT) {
@@ -2081,9 +2050,12 @@ fun StonebridgeStudioScreen(
             }
         }
 
+        LaunchedEffect(s.showLayers) {
+            vm.setLayersDrawerOpen(s.showLayers)
+        }
         LaunchedEffect(s.showLayers, state.layers, state.docInfo) {
             if (s.showLayers) {
-                vm.refreshLayerThumbnails()
+                vm.refreshLayerThumbnails(force = true)
             }
         }
 
@@ -2719,6 +2691,53 @@ fun StonebridgeStudioScreen(
                 onClearGpuPreview = { clearGpuPreview() },
                 onClearAdjustGpuPreviewOnly = { clearAdjustGpuPreviewOnly() },
                 onPushGpuTransformPreview = { turns, fh, fv -> pushGpuTransformPreview(turns, fh, fv) }
+            )
+        }
+    }
+}
+
+
+@Composable
+private fun RetouchTrailOverlay(
+    trailPoints: List<Offset>,
+    activeTool: ActiveTool,
+    brushSize: Float,
+    zoomProvider: () -> Float
+) {
+    val trailColor = when (activeTool) {
+        ActiveTool.REMOVE_TOOL -> Color(0x99FF2EA6)
+        ActiveTool.SPOT_HEAL -> Color(0x88FF5A5F)
+        ActiveTool.SELECT_BRUSH_SUB -> Color(0x88FF4D4F)
+        ActiveTool.SELECT_QUICK -> Color(0x882ED573)
+        ActiveTool.SELECT_LASSO -> Color(0xDD00E5FF)
+        ActiveTool.SELECT_MAGNETIC_LASSO -> Color(0xDDFFD600)
+        else -> Color(0x884F9CFF)
+    }
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val n = trailPoints.size
+        if (n == 0) return@Canvas
+        val strokeW = if (activeTool == ActiveTool.SELECT_LASSO || activeTool == ActiveTool.SELECT_MAGNETIC_LASSO) {
+            6f
+        } else {
+            (brushSize * zoomProvider()).coerceIn(4f, 360f)
+        }
+        if (n == 1) {
+            drawCircle(trailColor, radius = strokeW * 0.5f, center = trailPoints[0])
+        } else {
+            val p = Path().apply {
+                moveTo(trailPoints[0].x, trailPoints[0].y)
+                for (i in 1 until n) {
+                    lineTo(trailPoints[i].x, trailPoints[i].y)
+                }
+            }
+            drawPath(
+                path = p,
+                color = trailColor,
+                style = Stroke(
+                    width = strokeW,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                )
             )
         }
     }

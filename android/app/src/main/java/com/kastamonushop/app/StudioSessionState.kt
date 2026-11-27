@@ -121,7 +121,7 @@ internal class StudioSessionState {
     var canvasViewRef by mutableStateOf<VulkanCanvasView?>(null)
     var rulerPreview by mutableStateOf<RulerLinePreview?>(null)
     var retouchCursor by mutableStateOf<Pair<Float, Float>?>(null)
-    var retouchTrailPoints by mutableStateOf<List<Offset>>(emptyList())
+    val retouchTrailPoints = mutableStateListOf<Offset>()
     var cropNormL by mutableFloatStateOf(0.05f)
     var cropNormT by mutableFloatStateOf(0.05f)
     var cropNormR by mutableFloatStateOf(0.95f)

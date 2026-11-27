@@ -631,7 +631,7 @@ impl VulkanRenderer {
         self.is_quick_mask = is_qm;
         let doc_w = doc.size.width.max(1);
         let doc_h = doc.size.height.max(1);
-        let max_dim = 768u32;
+        let max_dim = 384u32;
         let scale = (max_dim as f32 / doc_w.max(doc_h) as f32).min(1.0);
         let sw = ((doc_w as f32 * scale).round() as u32).clamp(1, max_dim);
         let sh = ((doc_h as f32 * scale).round() as u32).clamp(1, max_dim);

@@ -65,13 +65,13 @@ jobs:
         with:
           gradle-version: 8.11.1
 
-      - name: Assemble KastamonuShop Debug APK
+      - name: Assemble StonebridgeCraft Release APK (Fast Compose/ART)
         working-directory: android
-        run: gradle assembleDebug --stacktrace
+        run: gradle assembleRelease --stacktrace
 
       - name: Upload KastamonuShop APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: StonebridgeCraft-arm64-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
