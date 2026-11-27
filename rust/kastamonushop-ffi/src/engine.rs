@@ -9118,9 +9118,9 @@ LUT_3D_SIZE 2
             StrokeSample { x: 16.0, y: 48.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
         ];
         eng.select_lasso(pts.clone(), "replace".into(), 0.0).unwrap();
-        assert!(eng.get_selection_bounds().unwrap().is_some());
+        assert!(eng.get_selection_bounds().is_some());
         eng.select_magnetic_lasso(pts, 10.0, 10.0, "replace".into(), 0.0).unwrap();
-        assert!(eng.get_selection_bounds().unwrap().is_some());
+        assert!(eng.get_selection_bounds().is_some());
     }
 
     #[test]
@@ -9154,9 +9154,9 @@ LUT_3D_SIZE 2
         }
         eng.open_rgba_bytes("cr.png".into(), 64, 64, rgba).unwrap();
         eng.select_color_range("reds".into(), "#FF0000".into(), 40.0, false, "replace".into(), true).unwrap();
-        assert!(eng.get_selection_bounds().unwrap().is_some());
+        assert!(eng.get_selection_bounds().is_some());
         eng.select_color_range("sampledColors".into(), "#F01E1E".into(), 60.0, false, "replace".into(), true).unwrap();
-        assert!(eng.get_selection_bounds().unwrap().is_some());
+        assert!(eng.get_selection_bounds().is_some());
     }
 
     #[test]
@@ -9171,7 +9171,7 @@ LUT_3D_SIZE 2
         eng.modify_selection("smooth".into(), 2.0).unwrap();
         eng.grow_or_similar_selection(false, 32.0, true).unwrap();
         eng.grow_or_similar_selection(true, 32.0, true).unwrap();
-        assert!(eng.get_selection_bounds().unwrap().is_some());
+        assert!(eng.get_selection_bounds().is_some());
     }
 
     #[test]
@@ -9182,7 +9182,7 @@ LUT_3D_SIZE 2
         eng.select_rect(10, 10, 24, 24, false, "replace".into()).unwrap();
         assert!(eng.toggle_quick_mask_mode(true).unwrap());
         assert!(!eng.toggle_quick_mask_mode(false).unwrap());
-        assert!(eng.get_selection_bounds().unwrap().is_some());
+        assert!(eng.get_selection_bounds().is_some());
     }
 
 }
