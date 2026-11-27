@@ -1122,6 +1122,13 @@ internal fun DrawMenuPanel(
                 ActiveTool.SELECT_BRUSH_SUB -> "Elle Sil (-) · yanlış seçilen yerleri sil"
                 ActiveTool.SELECT_LASSO -> "Serbest Kement · nesnenin etrafını serbestçe çiz"
                 ActiveTool.SELECT_MAGNETIC_LASSO -> "Manyetik Kement · kenarlara yapışarak çiz"
+                ActiveTool.PENCIL -> "Piksel Kalem · keskin kenarlı net çizim"
+                ActiveTool.MAGIC_ERASER -> "Sihirli Silgi · tek tıkla eşleşen rengi şeffaf yap"
+                ActiveTool.BG_ERASER -> "Arka Plan Silgisi · kenarları koruyarak arka planı sil"
+                ActiveTool.ADJUST_BRUSH -> "Ayar Fırçası · boyadığın alana bölgesel ayar uygula"
+                ActiveTool.HISTORY_BRUSH -> "Geçmiş Fırçası · boyanan alanı ilk haline döndür"
+                ActiveTool.ART_HISTORY_BRUSH -> "Sanat Geçmişi · geçmişten sanatsal fırça darbeleri boya"
+                ActiveTool.HEALING_BRUSH -> if (state.pickingCloneSource) "Kaynak doku seç: fotoğrafa dokun" else "Düzeltme Fırçası · dokuyu harmanlayarak onar"
                 ActiveTool.NONE -> "Çizim veya Rötuş için bir araç seç"
             },
             onClose = { onClose() }

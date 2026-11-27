@@ -7738,6 +7738,403 @@ impl KastamonuEngine {
         Ok(())
     }
 
+
+
+    // ==================== v1.8.3 PRO DRAW & RETOUCH TOOLS ====================
+
+    pub fn set_symmetry_mode(&self, mode: String, rotation_deg: f32) -> Result<String, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        let m = mode.as_str();
+        if m == "off" || m == "none" || m.is_empty() {
+            let _ = guard.session.execute("paint.symmetryDisable", json!({}));
+            guard.mark_full_dirty();
+            return Ok("off".into());
+        }
+        let valid = match m {
+            "vertical" | "horizontal" | "dual" | "diagonal" => m,
+            _ => "vertical",
+        };
+        guard
+            .session
+            .execute(
+                "paint.setSymmetry",
+                json!({
+                    "mode": valid,
+                    "rotation": rotation_deg.clamp(-180.0, 180.0) as f64
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        Ok(valid.into())
+    }
+
+    pub fn apply_pencil_stroke(
+        &self,
+        points: Vec<StrokeSample>,
+        size: f32,
+        opacity: f32,
+        color_hex: String,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Kalem noktası boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed { detail: "Çizim yapılacak katman bulunamadı".into() }
+            })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let pts: Vec<Value> = points
+            .iter()
+            .map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64]))
+            .collect();
+        let res = guard.session.execute(
+            "paint.pencil",
+            json!({
+                "points": pts,
+                "size": size.clamp(1.0, 400.0) as f64,
+                "opacity": opacity.clamp(0.01, 1.0) as f64,
+                "color": if color_hex.trim().is_empty() { "#000000" } else { color_hex.trim() }
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_magic_eraser(
+        &self,
+        x: f32,
+        y: f32,
+        tolerance: f32,
+        contiguous: bool,
+        sample_all_layers: bool,
+        opacity: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed { detail: "Silinecek fotoğraf katmanı bulunamadı".into() }
+            })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let res = guard.session.execute(
+            "paint.magicEraser",
+            json!({
+                "x": x.round() as i32,
+                "y": y.round() as i32,
+                "tolerance": tolerance.clamp(0.0, 255.0).round() as u32,
+                "antiAlias": true,
+                "contiguous": contiguous,
+                "sampleAllLayers": sample_all_layers,
+                "opacity": (opacity * 100.0).clamp(1.0, 100.0) as f64
+            }),
+        );
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_background_eraser(
+        &self,
+        points: Vec<StrokeSample>,
+        size: f32,
+        hardness: f32,
+        tolerance: f32,
+        limits: String,
+        protect_foreground: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Arka plan silgisi noktası boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed { detail: "Silinecek fotoğraf katmanı bulunamadı".into() }
+            })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let pts: Vec<Value> = points
+            .iter()
+            .map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64]))
+            .collect();
+        let lim = match limits.as_str() {
+            "discontiguous" | "contiguous" | "findEdges" => limits.as_str(),
+            _ => "contiguous",
+        };
+        let res = guard.session.execute(
+            "paint.backgroundEraser",
+            json!({
+                "points": pts,
+                "size": size.clamp(4.0, 400.0) as f64,
+                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "sampling": "continuous",
+                "limits": lim,
+                "tolerance": tolerance.clamp(1.0, 100.0) as f64,
+                "protectForegroundColor": protect_foreground
+            }),
+        );
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_adjustment_brush(
+        &self,
+        points: Vec<StrokeSample>,
+        kind: String,
+        subtract: bool,
+        size: f32,
+        hardness: f32,
+        opacity: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Ayar fırçası noktası boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+
+        let valid_kind = match kind.as_str() {
+            "levels" | "curves" | "exposure" | "hueSaturation" | "colorBalance"
+            | "blackWhite" | "photoFilter" | "posterize" | "invert" => kind.as_str(),
+            _ => "exposure",
+        };
+        let pts: Vec<Value> = points
+            .iter()
+            .map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64]))
+            .collect();
+        guard
+            .session
+            .execute(
+                "paint.adjustmentBrush",
+                json!({
+                    "kind": valid_kind,
+                    "subtract": subtract,
+                    "points": pts,
+                    "size": size.clamp(4.0, 400.0) as f64,
+                    "hardness": hardness.clamp(0.0, 1.0) as f64,
+                    "opacity": opacity.clamp(0.05, 1.0) as f64
+                }),
+            )
+            .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_history_brush(
+        &self,
+        points: Vec<StrokeSample>,
+        size: f32,
+        hardness: f32,
+        opacity: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Geçmiş fırçası noktası boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed { detail: "Geçmiş fırçası için fotoğraf katmanı bulunamadı".into() }
+            })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let pts: Vec<Value> = points
+            .iter()
+            .map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64]))
+            .collect();
+        let res = guard.session.execute(
+            "paint.historyBrush",
+            json!({
+                "points": pts,
+                "size": size.clamp(4.0, 400.0) as f64,
+                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "opacity": opacity.clamp(0.05, 1.0) as f64
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_art_history_brush(
+        &self,
+        points: Vec<StrokeSample>,
+        size: f32,
+        hardness: f32,
+        opacity: f32,
+        style: String,
+        area: f32,
+        tolerance: f32,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Sanat geçmişi fırçası noktası boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed { detail: "Sanat geçmişi için fotoğraf katmanı bulunamadı".into() }
+            })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let pts: Vec<Value> = points
+            .iter()
+            .map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64]))
+            .collect();
+        let valid_style = match style.as_str() {
+            "tightShort" | "tightMedium" | "tightLong" | "looseMedium" | "looseLong"
+            | "dab" | "tightCurl" | "looseCurl" => style.as_str(),
+            _ => "tightMedium",
+        };
+        let res = guard.session.execute(
+            "paint.artHistoryBrush",
+            json!({
+                "points": pts,
+                "size": size.clamp(4.0, 400.0) as f64,
+                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "opacity": opacity.clamp(0.05, 1.0) as f64,
+                "style": valid_style,
+                "area": area.clamp(1.0, 200.0) as f64,
+                "tolerance": tolerance.clamp(0.0, 100.0) as f64
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_healing_brush(
+        &self,
+        points: Vec<StrokeSample>,
+        size: f32,
+        hardness: f32,
+        src_x: f32,
+        src_y: f32,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Düzeltme fırçası noktası boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev).ok_or_else(|| {
+                EngineError::CommandFailed { detail: "Düzeltme fırçası için fotoğraf katmanı bulunamadı".into() }
+            })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let pts: Vec<Value> = points
+            .iter()
+            .map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64]))
+            .collect();
+        let res = guard.session.execute(
+            "paint.healingBrush",
+            json!({
+                "points": pts,
+                "size": size.clamp(4.0, 400.0) as f64,
+                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "source": [src_x as f64, src_y as f64],
+                "aligned": true,
+                "sampleLayer": if sample_all_layers { "all" } else { "current" }
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
 }
 
 impl KastamonuEngine {
@@ -9322,6 +9719,88 @@ LUT_3D_SIZE 2
         assert!(eng.toggle_quick_mask_mode(true).unwrap());
         assert!(!eng.toggle_quick_mask_mode(false).unwrap());
         assert!(eng.get_selection_bounds().is_some());
+    }
+
+
+    #[test]
+    fn test_v183_symmetry_modes_and_disable() {
+        let eng = test_engine();
+        eng.new_document("sym.png".into(), 64, 64).unwrap();
+        assert_eq!(eng.set_symmetry_mode("vertical".into(), 0.0).unwrap(), "vertical");
+        assert_eq!(eng.set_symmetry_mode("dual".into(), 45.0).unwrap(), "dual");
+        assert_eq!(eng.set_symmetry_mode("diagonal".into(), 0.0).unwrap(), "diagonal");
+        assert_eq!(eng.set_symmetry_mode("off".into(), 0.0).unwrap(), "off");
+    }
+
+    #[test]
+    fn test_v183_pencil_stroke() {
+        let eng = test_engine();
+        eng.new_document("pencil.png".into(), 64, 64).unwrap();
+        let pts = vec![
+            StrokeSample { x: 10.0, y: 10.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 40.0, y: 30.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        let info = eng.apply_pencil_stroke(pts, 4.0, 1.0, "#FF3366".into()).unwrap();
+        assert!(info.can_undo);
+    }
+
+    #[test]
+    fn test_v183_magic_and_background_eraser_on_photo() {
+        let eng = test_engine();
+        let rgba = vec![80u8, 160, 230, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("erase.png".into(), 64, 64, rgba).unwrap();
+        let info1 = eng.apply_magic_eraser(10.0, 10.0, 32.0, true, false, 1.0).unwrap();
+        assert!(info1.can_undo);
+        let pts = vec![
+            StrokeSample { x: 20.0, y: 20.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 44.0, y: 20.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        let info2 = eng.apply_background_eraser(pts, 12.0, 0.8, 50.0, "contiguous".into(), false).unwrap();
+        assert!(info2.can_undo);
+    }
+
+    #[test]
+    fn test_v183_adjustment_brush_add_and_subtract() {
+        let eng = test_engine();
+        let rgba = vec![100u8, 120, 140, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("adjb.png".into(), 64, 64, rgba).unwrap();
+        let pts = vec![
+            StrokeSample { x: 16.0, y: 16.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 48.0, y: 48.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        let info1 = eng.apply_adjustment_brush(pts.clone(), "exposure".into(), false, 16.0, 0.5, 1.0).unwrap();
+        assert!(info1.layer_count >= 2);
+        let info2 = eng.apply_adjustment_brush(pts, "exposure".into(), true, 12.0, 0.5, 1.0).unwrap();
+        assert!(info2.can_undo);
+    }
+
+    #[test]
+    fn test_v183_history_and_art_history_brush() {
+        let eng = test_engine();
+        let rgba = vec![120u8, 150, 180, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("hist.png".into(), 64, 64, rgba).unwrap();
+        let pts = vec![
+            StrokeSample { x: 12.0, y: 20.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 50.0, y: 40.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        eng.apply_pencil_stroke(pts.clone(), 10.0, 1.0, "#FF0000".into()).unwrap();
+        let info1 = eng.apply_history_brush(pts.clone(), 12.0, 0.8, 1.0).unwrap();
+        assert!(info1.can_undo);
+        let info2 = eng.apply_art_history_brush(pts, 10.0, 0.8, 1.0, "tightMedium".into(), 40.0, 0.0).unwrap();
+        assert!(info2.can_undo);
+    }
+
+    #[test]
+    fn test_v183_healing_brush_with_source() {
+        let eng = test_engine();
+        let rgba = vec![140u8, 130, 110, 255].repeat(64 * 64);
+        eng.open_rgba_bytes("heal.png".into(), 64, 64, rgba).unwrap();
+        let pts = vec![
+            StrokeSample { x: 40.0, y: 40.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 46.0, y: 42.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        let info = eng.apply_healing_brush(pts, 10.0, 0.7, 16.0, 16.0, false).unwrap();
+        assert!(info.can_undo);
     }
 
 }

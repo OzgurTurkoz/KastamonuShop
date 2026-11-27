@@ -72,7 +72,14 @@ enum class ActiveTool {
     PATCH,
     REMOVE_TOOL,
     SELECT_LASSO,
-    SELECT_MAGNETIC_LASSO
+    SELECT_MAGNETIC_LASSO,
+    PENCIL,
+    MAGIC_ERASER,
+    BG_ERASER,
+    ADJUST_BRUSH,
+    HISTORY_BRUSH,
+    ART_HISTORY_BRUSH,
+    HEALING_BRUSH
 }
 
 data class EditorUiState(
@@ -128,7 +135,20 @@ data class EditorUiState(
     val removeCloseLoops: Boolean = true,
     val removeSampleAllLayers: Boolean = false,
     val removeNewLayer: Boolean = false,
-    val quickMaskMode: Boolean = false
+    val quickMaskMode: Boolean = false,
+    val symmetryMode: String = "off",
+    val magicEraserTolerance: Float = 32f,
+    val magicEraserContiguous: Boolean = true,
+    val magicEraserSampleAll: Boolean = false,
+    val bgEraserTolerance: Float = 50f,
+    val bgEraserLimits: String = "contiguous",
+    val bgEraserProtectFg: Boolean = false,
+    val adjBrushKind: String = "exposure",
+    val adjBrushSubtract: Boolean = false,
+    val artHistoryStyle: String = "tightMedium",
+    val artHistoryArea: Float = 50f,
+    val artHistoryTolerance: Float = 0f,
+    val healingSampleAll: Boolean = false
 )
 
 class EditorViewModel : ViewModel() {
@@ -3979,6 +3999,184 @@ class EditorViewModel : ViewModel() {
                 showStatus(if (active) "Hızlı Maske AÇIK — Siyah/Beyaz fırçayla maskeyi boya" else "Hızlı Maske seçime dönüştürüldü", 2200L)
             }.onFailure { err ->
                 showStatus("Hızlı Maske: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    // ==================== v1.8.3 PRO DRAW & RETOUCH TOOLS ====================
+
+    fun setSymmetryMode(mode: String, rotationDeg: Float = 0f) {
+        paintExecutor.execute {
+            runCatching {
+                val active = engine.setSymmetryMode(mode, rotationDeg)
+                _uiState.update { it.copy(symmetryMode = active) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                val lbl = when (active) {
+                    "vertical" -> "Simetri: Dikey"
+                    "horizontal" -> "Simetri: Yatay"
+                    "dual" -> "Simetri: Çift Eksen"
+                    "diagonal" -> "Simetri: Çapraz"
+                    else -> "Simetri kapatıldı"
+                }
+                showStatus(lbl, 1500L)
+            }.onFailure { err ->
+                showStatus("Simetri hatası: ${err.message}", 2200L)
+            }
+        }
+    }
+
+    fun updateV183ToolSettings(
+        magicTol: Float? = null,
+        magicContiguous: Boolean? = null,
+        magicSampleAll: Boolean? = null,
+        bgTol: Float? = null,
+        bgLimits: String? = null,
+        bgProtectFg: Boolean? = null,
+        adjKind: String? = null,
+        adjSubtract: Boolean? = null,
+        artStyle: String? = null,
+        artArea: Float? = null,
+        artTol: Float? = null,
+        healingSampleAll: Boolean? = null
+    ) {
+        _uiState.update {
+            it.copy(
+                magicEraserTolerance = magicTol ?: it.magicEraserTolerance,
+                magicEraserContiguous = magicContiguous ?: it.magicEraserContiguous,
+                magicEraserSampleAll = magicSampleAll ?: it.magicEraserSampleAll,
+                bgEraserTolerance = bgTol ?: it.bgEraserTolerance,
+                bgEraserLimits = bgLimits ?: it.bgEraserLimits,
+                bgEraserProtectFg = bgProtectFg ?: it.bgEraserProtectFg,
+                adjBrushKind = adjKind ?: it.adjBrushKind,
+                adjBrushSubtract = adjSubtract ?: it.adjBrushSubtract,
+                artHistoryStyle = artStyle ?: it.artHistoryStyle,
+                artHistoryArea = artArea ?: it.artHistoryArea,
+                artHistoryTolerance = artTol ?: it.artHistoryTolerance,
+                healingSampleAll = healingSampleAll ?: it.healingSampleAll
+            )
+        }
+    }
+
+    fun applyPencilStroke(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        val s = _uiState.value
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyPencilStroke(samples, s.brushSize, s.brushOpacity, s.colorHex)
+                _uiState.update { it.copy(docInfo = info) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+            }.onFailure { err ->
+                showStatus("Kalem hatası: ${err.message}", 2200L)
+            }
+        }
+    }
+
+    fun applyMagicEraser(docX: Float, docY: Float) {
+        val s = _uiState.value
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyMagicEraser(
+                    docX, docY, s.magicEraserTolerance, s.magicEraserContiguous, s.magicEraserSampleAll, s.brushOpacity
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+                showStatus("Sihirli silgi uygulandı", 1400L)
+            }.onFailure { err ->
+                showStatus("Sihirli silgi: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyBackgroundEraser(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        val s = _uiState.value
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyBackgroundEraser(
+                    samples, s.brushSize, s.brushHardness, s.bgEraserTolerance, s.bgEraserLimits, s.bgEraserProtectFg
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+            }.onFailure { err ->
+                showStatus("Arka plan silgisi: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyAdjustmentBrush(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        val s = _uiState.value
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyAdjustmentBrush(
+                    samples, s.adjBrushKind, s.adjBrushSubtract, s.brushSize, s.brushHardness, s.brushOpacity
+                )
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+            }.onFailure { err ->
+                showStatus("Ayar fırçası: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyHistoryBrush(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        val s = _uiState.value
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyHistoryBrush(samples, s.brushSize, s.brushHardness, s.brushOpacity)
+                _uiState.update { it.copy(docInfo = info) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+            }.onFailure { err ->
+                showStatus("Geçmiş fırçası: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyArtHistoryBrush(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        val s = _uiState.value
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyArtHistoryBrush(
+                    samples, s.brushSize, s.brushHardness, s.brushOpacity,
+                    s.artHistoryStyle, s.artHistoryArea, s.artHistoryTolerance
+                )
+                _uiState.update { it.copy(docInfo = info) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+            }.onFailure { err ->
+                showStatus("Sanat geçmişi: ${err.message}", 2400L)
+            }
+        }
+    }
+
+    fun applyHealingBrush(samples: List<StrokeSample>) {
+        if (samples.isEmpty()) return
+        val s = _uiState.value
+        val sx = s.cloneSourceX
+        val sy = s.cloneSourceY
+        if (sx == null || sy == null) {
+            _uiState.update { it.copy(pickingCloneSource = true) }
+            showStatus("Önce fotoğraf üzerinde kaynak doku noktasına dokun", 2200L)
+            return
+        }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyHealingBrush(samples, s.brushSize, s.brushHardness, sx, sy, s.healingSampleAll)
+                _uiState.update { it.copy(docInfo = info) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                refreshLayerThumbnails()
+            }.onFailure { err ->
+                showStatus("Düzeltme fırçası: ${err.message}", 2400L)
             }
         }
     }

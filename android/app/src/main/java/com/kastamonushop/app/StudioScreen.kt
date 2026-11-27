@@ -536,7 +536,13 @@ fun StonebridgeStudioScreen(
                             t == ActiveTool.SELECT_BRUSH_ADD ||
                             t == ActiveTool.SELECT_BRUSH_SUB ||
                             t == ActiveTool.SELECT_LASSO ||
-                            t == ActiveTool.SELECT_MAGNETIC_LASSO
+                            t == ActiveTool.SELECT_MAGNETIC_LASSO ||
+                            t == ActiveTool.PENCIL ||
+                            t == ActiveTool.BG_ERASER ||
+                            t == ActiveTool.ADJUST_BRUSH ||
+                            t == ActiveTool.HISTORY_BRUSH ||
+                            t == ActiveTool.ART_HISTORY_BRUSH ||
+                            (t == ActiveTool.HEALING_BRUSH && !vm.uiState.value.pickingCloneSource)
                     },
                     isEyedropperActive = { vm.uiState.value.activeTool == ActiveTool.EYEDROPPER },
                     isRulerEnabled = { vm.uiState.value.rulerEnabled },
@@ -545,10 +551,10 @@ fun StonebridgeStudioScreen(
                     isTextDragActive = { currentPanelState == BottomPanel.TEXT_EDIT },
                     isSelectRectActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_RECT },
                     isSelectWandActive = { vm.uiState.value.activeTool == ActiveTool.SELECT_WAND },
-                    isBucketActive = { val t = vm.uiState.value.activeTool; t == ActiveTool.BUCKET || t == ActiveTool.RED_EYE },
+                    isBucketActive = { val t = vm.uiState.value.activeTool; t == ActiveTool.BUCKET || t == ActiveTool.RED_EYE || t == ActiveTool.MAGIC_ERASER },
                     isCloneSourcePickActive = {
                         val st = vm.uiState.value
-                        st.activeTool == ActiveTool.CLONE_STAMP && st.pickingCloneSource
+                        (st.activeTool == ActiveTool.CLONE_STAMP || st.activeTool == ActiveTool.HEALING_BRUSH) && st.pickingCloneSource
                     },
                     isHandPanActive = { currentHandPanState },
                     onStrokeBegin = { sample ->
@@ -572,6 +578,18 @@ fun StonebridgeStudioScreen(
                             vm.applyLassoSelection(samples, magnetic = (t == ActiveTool.SELECT_MAGNETIC_LASSO))
                         } else if (t == ActiveTool.SELECT_QUICK || t == ActiveTool.SELECT_BRUSH_ADD || t == ActiveTool.SELECT_BRUSH_SUB) {
                             vm.applySelectionStroke(samples)
+                        } else if (t == ActiveTool.PENCIL) {
+                            vm.applyPencilStroke(samples)
+                        } else if (t == ActiveTool.BG_ERASER) {
+                            vm.applyBackgroundEraser(samples)
+                        } else if (t == ActiveTool.ADJUST_BRUSH) {
+                            vm.applyAdjustmentBrush(samples)
+                        } else if (t == ActiveTool.HISTORY_BRUSH) {
+                            vm.applyHistoryBrush(samples)
+                        } else if (t == ActiveTool.ART_HISTORY_BRUSH) {
+                            vm.applyArtHistoryBrush(samples)
+                        } else if (t == ActiveTool.HEALING_BRUSH) {
+                            vm.applyHealingBrush(samples)
                         } else if (t == ActiveTool.REMOVE_TOOL) {
                             vm.applyRemoveTool(samples)
                         } else if (t == ActiveTool.PATCH && samples.size >= 2) {
@@ -598,10 +616,10 @@ fun StonebridgeStudioScreen(
                     onSelectWandTap = { dx, dy -> vm.selectMagicWand(dx, dy) },
                     onBucketTap = { dx, dy ->
                         if (s.showToolPopover) s.showToolPopover = false
-                        if (vm.uiState.value.activeTool == ActiveTool.RED_EYE) {
-                            vm.applyRedEye(dx, dy)
-                        } else {
-                            vm.applyPaintBucket(dx, dy, s.bucketTolerance.roundToInt(), s.bucketContiguous)
+                        when (vm.uiState.value.activeTool) {
+                            ActiveTool.RED_EYE -> vm.applyRedEye(dx, dy)
+                            ActiveTool.MAGIC_ERASER -> vm.applyMagicEraser(dx, dy)
+                            else -> vm.applyPaintBucket(dx, dy, s.bucketTolerance.roundToInt(), s.bucketContiguous)
                         }
                     },
                     onTwoFingerUndo = {
@@ -786,6 +804,15 @@ fun StonebridgeStudioScreen(
             brushSize = state.brushSize,
             zoomProvider = { s.canvasViewRef?.getCurrentZoom() ?: 1f }
         )
+        if (state.symmetryMode != "off") {
+            SymmetryAxisOverlay(
+                mode = state.symmetryMode,
+                canvasViewRef = s.canvasViewRef,
+                docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat(),
+                docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat(),
+                cameraTick = s.cameraTick
+            )
+        }
 
         // v1.0.0 Interactive 4-Corner Draggable & Movable Normal Crop Overlay
         if (s.activePanel == BottomPanel.CROP_RATIO_EDIT) {
@@ -2739,6 +2766,35 @@ private fun RetouchTrailOverlay(
                     join = androidx.compose.ui.graphics.StrokeJoin.Round
                 )
             )
+        }
+    }
+}
+
+
+@Composable
+private fun SymmetryAxisOverlay(
+    mode: String,
+    canvasViewRef: VulkanCanvasView?,
+    docW: Float,
+    docH: Float,
+    cameraTick: Int
+) {
+    if (canvasViewRef == null) return
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        if (cameraTick < 0) return@Canvas
+        val (l, t) = canvasViewRef.docToScreen(0f, 0f)
+        val (r, b) = canvasViewRef.docToScreen(docW, docH)
+        val (cx, cy) = canvasViewRef.docToScreen(docW * 0.5f, docH * 0.5f)
+        val dash = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
+        val col = Color(0xBB00E5FF)
+        if (mode == "vertical" || mode == "dual") {
+            drawLine(col, Offset(cx, t), Offset(cx, b), strokeWidth = 2.2f, pathEffect = dash)
+        }
+        if (mode == "horizontal" || mode == "dual") {
+            drawLine(col, Offset(l, cy), Offset(r, cy), strokeWidth = 2.2f, pathEffect = dash)
+        }
+        if (mode == "diagonal") {
+            drawLine(col, Offset(l, t), Offset(r, b), strokeWidth = 2.2f, pathEffect = dash)
         }
     }
 }

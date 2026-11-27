@@ -63,13 +63,14 @@ internal fun LeftBrushSidebar(
         tool != ActiveTool.BUCKET &&
         tool != ActiveTool.PATCH &&
         tool != ActiveTool.RED_EYE &&
+        tool != ActiveTool.MAGIC_ERASER &&
         tool != ActiveTool.SELECT_RECT &&
         tool != ActiveTool.SELECT_WAND &&
         tool != ActiveTool.SELECT_LASSO &&
         tool != ActiveTool.SELECT_MAGNETIC_LASSO
 
     val (secondaryLabel, secondaryNorm, secondaryReadout) = when (tool) {
-        ActiveTool.BRUSH, ActiveTool.ERASER, ActiveTool.CLONE_STAMP ->
+        ActiveTool.BRUSH, ActiveTool.ERASER, ActiveTool.CLONE_STAMP, ActiveTool.PENCIL, ActiveTool.ADJUST_BRUSH, ActiveTool.HISTORY_BRUSH, ActiveTool.ART_HISTORY_BRUSH, ActiveTool.HEALING_BRUSH ->
             Triple("Opaklık", ((state.brushOpacity - 0.05f) / 0.95f).coerceIn(0f, 1f), "%${(state.brushOpacity * 100f).roundToInt()}")
         ActiveTool.MIXER_BRUSH ->
             Triple("Islaklık", (state.mixerWet / 100f).coerceIn(0f, 1f), "%${state.mixerWet.roundToInt()}")
@@ -155,7 +156,7 @@ internal fun LeftBrushSidebar(
                             .height(92.dp),
                         onChange = { f ->
                             when (tool) {
-                                ActiveTool.BRUSH, ActiveTool.ERASER, ActiveTool.CLONE_STAMP -> {
+                                ActiveTool.BRUSH, ActiveTool.ERASER, ActiveTool.CLONE_STAMP, ActiveTool.PENCIL, ActiveTool.ADJUST_BRUSH, ActiveTool.HISTORY_BRUSH, ActiveTool.ART_HISTORY_BRUSH, ActiveTool.HEALING_BRUSH -> {
                                     val op = (0.05f + f * 0.95f).coerceIn(0.05f, 1f)
                                     vm.updateBrush(opacity = op)
                                     activeDragBadge = "Opaklık: %${(op * 100f).roundToInt()}"
@@ -329,8 +330,20 @@ internal fun CompactDrawBottomBar(
             SlimToolChip(Icons.Default.Brush, "Fırça", state.activeTool == ActiveTool.BRUSH) {
                 vm.setTool(ActiveTool.BRUSH)
             }
+            SlimToolChip(Icons.Default.Edit, "Kalem", state.activeTool == ActiveTool.PENCIL) {
+                vm.setTool(ActiveTool.PENCIL)
+            }
             SlimToolChip(Icons.Default.AutoFixNormal, "Silgi", state.activeTool == ActiveTool.ERASER) {
                 vm.setTool(ActiveTool.ERASER)
+            }
+            SlimToolChip(Icons.Default.AutoFixHigh, "Sih. Silgi", state.activeTool == ActiveTool.MAGIC_ERASER) {
+                vm.setTool(ActiveTool.MAGIC_ERASER)
+            }
+            SlimToolChip(Icons.Default.CleaningServices, "Arka Silgi", state.activeTool == ActiveTool.BG_ERASER) {
+                vm.setTool(ActiveTool.BG_ERASER)
+            }
+            SlimToolChip(Icons.Default.Tune, "Ayar Fırç.", state.activeTool == ActiveTool.ADJUST_BRUSH) {
+                vm.setTool(ActiveTool.ADJUST_BRUSH)
             }
             SlimToolChip(Icons.Default.WaterDrop, "Karıştır", state.activeTool == ActiveTool.MIXER_BRUSH) {
                 vm.setTool(ActiveTool.MIXER_BRUSH)
@@ -343,6 +356,11 @@ internal fun CompactDrawBottomBar(
             }
             SlimToolChip(Icons.Default.Colorize, "Damlalık", state.activeTool == ActiveTool.EYEDROPPER) {
                 vm.setTool(if (state.activeTool == ActiveTool.EYEDROPPER) ActiveTool.BRUSH else ActiveTool.EYEDROPPER)
+            }
+            SlimToolChip(Icons.Default.Flip, if (state.symmetryMode == "off") "Simetri" else "Simetri ✓", state.symmetryMode != "off") {
+                val order = listOf("off", "vertical", "horizontal", "dual", "diagonal")
+                val next = order[(order.indexOf(state.symmetryMode) + 1) % order.size]
+                vm.setSymmetryMode(next)
             }
             SlimToolChip(Icons.Default.Straighten, "Cetvel", state.rulerEnabled) {
                 vm.toggleRuler()
@@ -452,6 +470,15 @@ internal fun CompactRetouchBottomBar(
             }
             SlimToolChip(Icons.Default.Details, "Keskin", state.activeTool == ActiveTool.SHARPEN_BRUSH) {
                 vm.setTool(ActiveTool.SHARPEN_BRUSH)
+            }
+            SlimToolChip(Icons.Default.HealthAndSafety, "Düzelt", state.activeTool == ActiveTool.HEALING_BRUSH) {
+                vm.setTool(ActiveTool.HEALING_BRUSH)
+            }
+            SlimToolChip(Icons.Default.History, "Geçmiş", state.activeTool == ActiveTool.HISTORY_BRUSH) {
+                vm.setTool(ActiveTool.HISTORY_BRUSH)
+            }
+            SlimToolChip(Icons.Default.ColorLens, "Sanat Geç.", state.activeTool == ActiveTool.ART_HISTORY_BRUSH) {
+                vm.setTool(ActiveTool.ART_HISTORY_BRUSH)
             }
             SlimToolChip(Icons.Default.ContentCopy, "Klonla", state.activeTool == ActiveTool.CLONE_STAMP) {
                 vm.setTool(ActiveTool.CLONE_STAMP)
@@ -564,6 +591,13 @@ internal fun ToolSettingsPopoverCard(
                         ActiveTool.PATCH -> "Yama Aracı"
                         ActiveTool.REMOVE_TOOL -> "Kaldırma Aracı"
                         ActiveTool.RED_EYE -> "Kırmızı Göz"
+                        ActiveTool.PENCIL -> "Piksel Kalem"
+                        ActiveTool.MAGIC_ERASER -> "Sihirli Silgi"
+                        ActiveTool.BG_ERASER -> "Arka Plan Silgisi"
+                        ActiveTool.ADJUST_BRUSH -> "Ayar Fırçası"
+                        ActiveTool.HISTORY_BRUSH -> "Geçmiş Fırçası"
+                        ActiveTool.ART_HISTORY_BRUSH -> "Sanat Geçmişi Fırçası"
+                        ActiveTool.HEALING_BRUSH -> "Kaynaklı Düzeltme Fırçası"
                         ActiveTool.CLONE_STAMP -> "Klonlama Damgası"
                         else -> "Rötuş Ayarları"
                     },
@@ -767,6 +801,130 @@ internal fun ToolSettingsPopoverCard(
                     }
                     CompactSliderRow("Karartma", "%${state.redEyeDarken.roundToInt()}", state.redEyeDarken, 10f..100f, defaultValue = 55f) {
                         vm.updateRedEyeParams(darken = it)
+                    }
+                }
+                ActiveTool.MAGIC_ERASER -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ProPill(
+                            selected = state.magicEraserContiguous,
+                            onClick = { vm.updateV183ToolSettings(magicContiguous = !state.magicEraserContiguous) },
+                            label = { Text("Bitişik", fontSize = 11.sp) }
+                        )
+                        ProPill(
+                            selected = state.magicEraserSampleAll,
+                            onClick = { vm.updateV183ToolSettings(magicSampleAll = !state.magicEraserSampleAll) },
+                            label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
+                        )
+                    }
+                    CompactSliderRow("Tolerans", "${state.magicEraserTolerance.roundToInt()}", state.magicEraserTolerance, 0f..255f, defaultValue = 32f) {
+                        vm.updateV183ToolSettings(magicTol = it)
+                    }
+                }
+                ActiveTool.BG_ERASER -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("contiguous" to "Bitişik", "discontiguous" to "Serbest", "findEdges" to "Kenar Bul").forEach { (id, lbl) ->
+                            ProPill(
+                                selected = state.bgEraserLimits == id,
+                                onClick = { vm.updateV183ToolSettings(bgLimits = id) },
+                                label = { Text(lbl, fontSize = 11.sp) }
+                            )
+                        }
+                        ProPill(
+                            selected = state.bgEraserProtectFg,
+                            onClick = { vm.updateV183ToolSettings(bgProtectFg = !state.bgEraserProtectFg) },
+                            label = { Text("Ön Rengi Koru", fontSize = 11.sp) }
+                        )
+                    }
+                    CompactSliderRow("Tolerans", "%${state.bgEraserTolerance.roundToInt()}", state.bgEraserTolerance, 1f..100f, defaultValue = 50f) {
+                        vm.updateV183ToolSettings(bgTol = it)
+                    }
+                }
+                ActiveTool.ADJUST_BRUSH -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ProPill(
+                            selected = !state.adjBrushSubtract,
+                            onClick = { vm.updateV183ToolSettings(adjSubtract = false) },
+                            label = { Text("Ekle (+)", fontSize = 11.sp) }
+                        )
+                        ProPill(
+                            selected = state.adjBrushSubtract,
+                            onClick = { vm.updateV183ToolSettings(adjSubtract = true) },
+                            label = { Text("Maskeden Sil (-)", fontSize = 11.sp) }
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "exposure" to "Pozlama",
+                            "levels" to "Düzeyler",
+                            "curves" to "Eğriler",
+                            "hueSaturation" to "Renk/Doyg.",
+                            "colorBalance" to "Renk Dengesi",
+                            "blackWhite" to "Siyah-Beyaz",
+                            "photoFilter" to "Foto Filtre",
+                            "posterize" to "Poster",
+                            "invert" to "Negatif"
+                        ).forEach { (id, lbl) ->
+                            ProPill(
+                                selected = state.adjBrushKind == id,
+                                onClick = { vm.updateV183ToolSettings(adjKind = id) },
+                                label = { Text(lbl, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+                ActiveTool.ART_HISTORY_BRUSH -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "tightShort" to "Sıkı Kısa",
+                            "tightMedium" to "Sıkı Orta",
+                            "tightLong" to "Sıkı Uzun",
+                            "looseMedium" to "Gevşek Orta",
+                            "looseLong" to "Gevşek Uzun",
+                            "dab" to "Benek",
+                            "tightCurl" to "Sıkı Bukle",
+                            "looseCurl" to "Gevşek Bukle"
+                        ).forEach { (id, lbl) ->
+                            ProPill(
+                                selected = state.artHistoryStyle == id,
+                                onClick = { vm.updateV183ToolSettings(artStyle = id) },
+                                label = { Text(lbl, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                    CompactSliderRow("Alan", "${state.artHistoryArea.roundToInt()}px", state.artHistoryArea, 5f..200f, defaultValue = 50f) {
+                        vm.updateV183ToolSettings(artArea = it)
+                    }
+                    CompactSliderRow("Tolerans", "%${state.artHistoryTolerance.roundToInt()}", state.artHistoryTolerance, 0f..100f, defaultValue = 0f) {
+                        vm.updateV183ToolSettings(artTol = it)
+                    }
+                }
+                ActiveTool.HEALING_BRUSH -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ProPill(
+                            selected = state.pickingCloneSource,
+                            onClick = { vm.startPickCloneSource() },
+                            label = { Text("Kaynak Nokta Seç", fontSize = 11.sp) }
+                        )
+                        ProPill(
+                            selected = state.healingSampleAll,
+                            onClick = { vm.updateV183ToolSettings(healingSampleAll = !state.healingSampleAll) },
+                            label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
+                        )
                     }
                 }
                 ActiveTool.CLONE_STAMP -> {
