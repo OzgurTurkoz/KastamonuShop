@@ -297,7 +297,11 @@ fun StonebridgeStudioScreen(
     }
 
     BackHandler(enabled = true) {
-        if (s.showLayers) {
+        if (s.showSearchPaletteV2) {
+            s.showSearchPaletteV2 = false
+        } else if (s.activeWorkspaceV2 != null) {
+            s.activeWorkspaceV2 = null
+        } else if (s.showLayers) {
             s.showLayers = false
         } else if (s.activePanel != BottomPanel.DOCK) {
             when (s.activePanel) {
@@ -1872,15 +1876,16 @@ fun StonebridgeStudioScreen(
             )
         }
 
-        // Slim Top Bar
+        // Studio v2.0 Minimal Floating OLED Top Bar (with Tek El + Ortala built-in)
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 6.dp)
                 .fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            shape = RoundedCornerShape(18.dp),
+            color = StudioV2Colors.GlassBar,
+            border = androidx.compose.foundation.BorderStroke(1.dp, StudioV2Colors.GlassBorder),
             tonalElevation = 6.dp
         ) {
             Row(
@@ -1959,6 +1964,19 @@ fun StonebridgeStudioScreen(
                             }
                         }
                     }
+                )
+
+                TopBarButton(
+                    icon = Icons.Default.PanTool,
+                    label = "Tek El",
+                    selected = s.singleFingerPanMode,
+                    onClick = { s.singleFingerPanMode = !s.singleFingerPanMode }
+                )
+
+                TopBarButton(
+                    icon = Icons.Default.CenterFocusStrong,
+                    label = "Ortala",
+                    onClick = { fitToSafeArea(s.pendingQuarterTurns, s.activePanel) }
                 )
 
                 TopBarButton(
@@ -2228,51 +2246,6 @@ fun StonebridgeStudioScreen(
                         drawPath(quad, color = accent, style = Stroke(width = 3f))
                         drawLine(accent.copy(alpha = 0.7f), Offset((ox0 + ox1) * 0.5f, (oy0 + oy1) * 0.5f), Offset(tCx, tCy), strokeWidth = 2f)
                         drawCircle(accent, radius = 7f, center = Offset(tCx, tCy))
-                    }
-                }
-            }
-        }
-
-        // Floating 1-Tap Canvas Controls (Ortala + Tek Parmak Kaydır) — always accessible without opening Diğer menu
-        if (!s.showLayers) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(top = 72.dp, end = 10.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xCC181C26),
-                tonalElevation = 4.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = { fitToSafeArea(s.pendingQuarterTurns, s.activePanel) },
-                        modifier = Modifier.size(34.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.CenterFocusStrong,
-                            contentDescription = "Fotoğrafı Ekrana Ortala",
-                            tint = Color(0xFFE3E8F4),
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    IconButton(
-                        onClick = { s.singleFingerPanMode = !s.singleFingerPanMode },
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(if (s.singleFingerPanMode) Color(0xFF4F9CFF) else Color.Transparent)
-                    ) {
-                        Icon(
-                            Icons.Default.PanTool,
-                            contentDescription = "Tek Parmak Kaydır",
-                            tint = if (s.singleFingerPanMode) Color.White else Color(0xFFB8C0D4),
-                            modifier = Modifier.size(17.dp)
-                        )
                     }
                 }
             }
@@ -2674,7 +2647,45 @@ fun StonebridgeStudioScreen(
             )
         }
 
-                // GROUPED 5-CATEGORY BOTTOM CIRCULAR DOCK & COMPACT SUB-MENUS
+        // Studio v2.0 Frosted-Glass Workspace Sheet (opens cleanly above fixed 4+1 dock)
+        val openWs = s.activeWorkspaceV2
+        if (openWs != null && s.activePanel == BottomPanel.DOCK) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x55000000))
+                    .clickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null
+                    ) { s.activeWorkspaceV2 = null }
+            )
+            StudioWorkspaceSheetV2(
+                workspace = openWs,
+                pinnedIds = s.pinnedToolIdsV2,
+                onTogglePin = { id ->
+                    s.pinnedToolIdsV2 = if (id in s.pinnedToolIdsV2) s.pinnedToolIdsV2 - id else s.pinnedToolIdsV2 + id
+                },
+                onSelectTool = { spec ->
+                    s.activeWorkspaceV2 = null
+                    val ctx = StudioLaunchContext(
+                        vm = vm,
+                        state = state,
+                        s = s,
+                        context = context,
+                        onPushGpuMirrorPreview = { mode, ratio -> pushGpuMirrorPreview(mode, ratio) },
+                        onClearGpuPreview = { clearGpuPreview() }
+                    )
+                    spec.onLaunch(ctx)
+                },
+                onDismiss = { s.activeWorkspaceV2 = null },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 84.dp, start = 8.dp, end = 8.dp)
+            )
+        }
+
+        // Studio v2.0 Fixed 4+1 Bottom Dock & Focused Tool Host
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -2688,7 +2699,8 @@ fun StonebridgeStudioScreen(
                     }
                 },
             shape = RoundedCornerShape(22.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+            color = StudioV2Colors.GlassBar,
+            border = androidx.compose.foundation.BorderStroke(1.dp, StudioV2Colors.GlassBorder),
             tonalElevation = 10.dp
         ) {
             StudioBottomPanelHost(
@@ -2716,6 +2728,30 @@ fun StonebridgeStudioScreen(
                 onClearGpuPreview = { clearGpuPreview() },
                 onClearAdjustGpuPreviewOnly = { clearAdjustGpuPreviewOnly() },
                 onPushGpuTransformPreview = { turns, fh, fv -> pushGpuTransformPreview(turns, fh, fv) }
+            )
+        }
+
+        // Studio v2.0 Instant Command Palette (Fuzzy Search across all registered tools)
+        if (s.showSearchPaletteV2) {
+            StudioCommandPaletteV2(
+                pinnedIds = s.pinnedToolIdsV2,
+                onTogglePin = { id ->
+                    s.pinnedToolIdsV2 = if (id in s.pinnedToolIdsV2) s.pinnedToolIdsV2 - id else s.pinnedToolIdsV2 + id
+                },
+                onSelectTool = { spec ->
+                    s.showSearchPaletteV2 = false
+                    s.activeWorkspaceV2 = null
+                    val ctx = StudioLaunchContext(
+                        vm = vm,
+                        state = state,
+                        s = s,
+                        context = context,
+                        onPushGpuMirrorPreview = { mode, ratio -> pushGpuMirrorPreview(mode, ratio) },
+                        onClearGpuPreview = { clearGpuPreview() }
+                    )
+                    spec.onLaunch(ctx)
+                },
+                onDismiss = { s.showSearchPaletteV2 = false }
             )
         }
     }

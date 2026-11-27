@@ -347,4 +347,8 @@ internal class StudioSessionState {
     var selModifyOp by mutableStateOf("expand")
     var selModifyRadius by mutableFloatStateOf(8f)
     var selGrowTolerance by mutableFloatStateOf(32f)
+    // v2.0.0 Studio v2.0 state (fixed 4+1 dock, frosted workspace sheet, command palette)
+    var activeWorkspaceV2 by mutableStateOf<StudioWorkspace?>(null)
+    var showSearchPaletteV2 by mutableStateOf(false)
+    var pinnedToolIdsV2 by mutableStateOf<Set<String>>(ToolRegistryV2.defaultPinnedIds)
 }

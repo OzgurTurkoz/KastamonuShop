@@ -220,18 +220,18 @@ internal fun TopBarButton(
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color.Transparent
+    val bg = if (selected) StudioV2Colors.AmberSoft else Color.Transparent
     val tint = when {
         !enabled -> Color(0xFF5D6170)
-        selected -> MaterialTheme.colorScheme.primary
-        else -> Color.White
+        selected -> StudioV2Colors.Amber
+        else -> StudioV2Colors.TextPrimary
     }
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 5.dp),
+            .padding(horizontal = 4.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(18.dp))
@@ -377,51 +377,67 @@ internal fun ProSleekTrackSlider(
         val pad = 9.dp.toPx()
         val usable = (size.width - pad * 2f).coerceAtLeast(1f)
         val cy = size.height * 0.5f
-        val trackH = 3.dp.toPx()
-        val r = CornerRadius(trackH * 0.5f, trackH * 0.5f)
-        // Base slim track
-        drawRoundRect(
-            color = Color(0xFF353948),
-            topLeft = Offset(pad, cy - trackH * 0.5f),
-            size = Size(usable, trackH),
-            cornerRadius = r
-        )
-        // Center zero tick mark for bipolar ranges (-100..100, -3..3)
+        val tickCount = 24
+        val x0 = pad + minOf(anchorFrac, fraction) * usable
+        val x1 = pad + maxOf(anchorFrac, fraction) * usable
+
+        // Studio v2.0 Fluted DSLR Ruler Ticks
+        for (i in 0..tickCount) {
+            val tf = i.toFloat() / tickCount.toFloat()
+            val tx = pad + tf * usable
+            val isMajor = i % 6 == 0
+            val inActive = tx >= x0 - 1f && tx <= x1 + 1f
+            val halfH = if (isMajor) 6.5.dp.toPx() else 3.5.dp.toPx()
+            drawLine(
+                color = when {
+                    inActive -> Color(0xFFF59E0B)
+                    isMajor -> Color(0x66FFFFFF)
+                    else -> Color(0x2EFFFFFF)
+                },
+                start = Offset(tx, cy - halfH),
+                end = Offset(tx, cy + halfH),
+                strokeWidth = if (isMajor) 1.5.dp.toPx() else 1.dp.toPx()
+            )
+        }
+
+        // Center zero detent tick for bipolar ranges (-100..100, -3..3)
         if (range.start < 0f && range.endInclusive > 0f) {
             val zx = pad + anchorFrac * usable
             drawLine(
-                color = Color(0xFF6B7188),
-                start = Offset(zx, cy - 5.dp.toPx()),
-                end = Offset(zx, cy + 5.dp.toPx()),
-                strokeWidth = 1.5.dp.toPx()
+                color = Color(0xFFF59E0B),
+                start = Offset(zx, cy - 8.5.dp.toPx()),
+                end = Offset(zx, cy + 8.5.dp.toPx()),
+                strokeWidth = 2.dp.toPx()
             )
         }
-        // Active accent segment
-        val x0 = pad + minOf(anchorFrac, fraction) * usable
-        val x1 = pad + maxOf(anchorFrac, fraction) * usable
+
+        // Active amber range bar
+        val trackH = 2.5.dp.toPx()
+        val r = CornerRadius(trackH * 0.5f, trackH * 0.5f)
         if (x1 - x0 > 0.5f) {
             drawRoundRect(
-                color = Color(0xFF5CA8FF),
+                color = Color(0xFFF59E0B),
                 topLeft = Offset(x0, cy - trackH * 0.5f),
                 size = Size(x1 - x0, trackH),
                 cornerRadius = r
             )
         }
-        // Sleek circular thumb
+
+        // Tactile DSLR needle thumb
         val thumbX = pad + fraction * usable
         drawCircle(
-            color = Color(0x555CA8FF),
-            radius = 9.dp.toPx(),
+            color = Color(0x44F59E0B),
+            radius = 9.5.dp.toPx(),
             center = Offset(thumbX, cy)
         )
         drawCircle(
             color = Color.White,
-            radius = 6.5.dp.toPx(),
+            radius = 6.dp.toPx(),
             center = Offset(thumbX, cy)
         )
         drawCircle(
-            color = Color(0xFF3A7AFE),
-            radius = 2.5.dp.toPx(),
+            color = Color(0xFFF59E0B),
+            radius = 2.6.dp.toPx(),
             center = Offset(thumbX, cy)
         )
     }
@@ -461,7 +477,7 @@ internal fun CompactSliderRow(
         )
         Text(
             text = valueText,
-            color = if (isModified) Color(0xFF7BB8FF) else Color(0xFFD6DBE8),
+            color = if (isModified) StudioV2Colors.Amber else StudioV2Colors.TextPrimary,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.End,
@@ -473,14 +489,14 @@ internal fun CompactSliderRow(
             modifier = Modifier
                 .size(24.dp)
                 .clip(CircleShape)
-                .background(if (isModified) Color(0x333A7AFE) else Color.Transparent)
+                .background(if (isModified) StudioV2Colors.AmberSoft else Color.Transparent)
                 .clickable(enabled = isModified) { if (onReset != null) onReset() else onChange(defaultValue) },
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Default.RestartAlt,
                 contentDescription = "Sıfırla",
-                tint = if (isModified) Color(0xFF6BB5FF) else Color(0xFF454959),
+                tint = if (isModified) StudioV2Colors.Amber else Color(0xFF454959),
                 modifier = Modifier.size(14.dp)
             )
         }
