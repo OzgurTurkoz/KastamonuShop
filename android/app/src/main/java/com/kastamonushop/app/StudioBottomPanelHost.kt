@@ -944,7 +944,7 @@ internal fun StudioBottomPanelHost(
                     onPushGpuTransformPreview = onPushGpuTransformPreview
                 )
             }
-
+            }
 }
 
 @Composable
@@ -1966,7 +1966,6 @@ private fun StudioBottomPanelHostPart2(
                     onClose = { s.activePanel = BottomPanel.SELECT_MENU }
                 )
                 else -> Unit
-            }
             }
 
 }
