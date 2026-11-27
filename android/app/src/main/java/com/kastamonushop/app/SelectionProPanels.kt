@@ -254,6 +254,7 @@ internal fun FocusAreaPanel(
 @Composable
 internal fun SelectModifyPanel(
     s: StudioSessionState,
+    onPreview: () -> Unit,
     onApplyModify: () -> Unit,
     onGrow: () -> Unit,
     onSimilar: () -> Unit,
@@ -287,7 +288,7 @@ internal fun SelectModifyPanel(
             ).forEach { (id, lbl) ->
                 ProPill(
                     selected = s.selModifyOp == id,
-                    onClick = { s.selModifyOp = id },
+                    onClick = { s.selModifyOp = id; onPreview() },
                     label = { Text(lbl, fontSize = 11.sp) }
                 )
             }
@@ -299,7 +300,7 @@ internal fun SelectModifyPanel(
             value = s.selModifyRadius,
             range = 1f..100f,
             defaultValue = 8f
-        ) { s.selModifyRadius = it }
+        ) { s.selModifyRadius = it; onPreview() }
 
         Row(
             modifier = Modifier

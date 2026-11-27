@@ -126,7 +126,7 @@ internal fun LeftBrushSidebar(
                     )
                     VerticalEdgeSlider(
                         fraction = sizeNorm,
-                        accentColor = Color(0xFF5CA8FF),
+                        accentColor = StudioV2Colors.Amber,
                         modifier = Modifier
                             .width(24.dp)
                             .height(104.dp),
@@ -392,7 +392,7 @@ internal fun CompactDrawBottomBar(
         // Popover toggle button (Brushes / Dynamics / Tool Options)
         Surface(
             shape = CircleShape,
-            color = if (popoverOpen) Color(0xFF4F9CFF) else Color(0xFF282B36),
+            color = if (popoverOpen) StudioV2Colors.AmberSoft else Color(0x18FFFFFF),
             modifier = Modifier
                 .size(36.dp)
                 .clickable { onTogglePopover() }
@@ -487,7 +487,7 @@ internal fun CompactRetouchBottomBar(
 
         Surface(
             shape = CircleShape,
-            color = if (popoverOpen) Color(0xFF4F9CFF) else Color(0xFF282B36),
+            color = if (popoverOpen) StudioV2Colors.AmberSoft else Color(0x18FFFFFF),
             modifier = Modifier
                 .size(36.dp)
                 .clickable { onTogglePopover() }
@@ -511,29 +511,37 @@ internal fun SlimToolChip(
     selected: Boolean,
     onClick: () -> Unit
 ) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = if (selected) Color(0xFF3A7AFE) else Color(0xFF232630),
+        shape = RoundedCornerShape(13.dp),
+        color = if (selected) StudioV2Colors.AmberSoft else Color(0x16FFFFFF),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (selected) StudioV2Colors.AmberBorder else Color(0x1EFFFFFF)
+        ),
         modifier = Modifier
-            .height(42.dp)
-            .clickable { onClick() }
+            .height(38.dp)
+            .clickable {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                onClick()
+            }
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp),
+            modifier = Modifier.padding(horizontal = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (selected) Color.White else Color(0xFFC8CEE0),
+                tint = if (selected) StudioV2Colors.Amber else StudioV2Colors.TextMuted,
                 modifier = Modifier.size(16.dp)
             )
             Text(
                 text = label,
-                color = if (selected) Color.White else Color(0xFFD5DAE8),
-                fontSize = 11.sp,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) StudioV2Colors.Amber else StudioV2Colors.TextPrimary,
+                fontSize = 11.5.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                 maxLines = 1
             )
         }

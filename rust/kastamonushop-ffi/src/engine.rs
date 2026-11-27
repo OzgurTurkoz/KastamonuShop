@@ -7684,6 +7684,137 @@ impl KastamonuEngine {
         Ok(())
     }
 
+    /// v2.0.1: Live coalesced proxy preview for Görsel Boyutlandır (Image Resize) before Uygula.
+    pub fn update_proxy_image_resize(
+        &self,
+        width: u32,
+        height: u32,
+        resample: String,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let orig_w = proxy.real_size.0.max(1) as f32;
+        let orig_h = proxy.real_size.1.max(1) as f32;
+        let req_w = width.clamp(16, 8192) as f32;
+        let req_h = height.clamp(16, 8192) as f32;
+        let scale_x = req_w / orig_w;
+        let scale_y = req_h / orig_h;
+        let base_w = proxy.base_doc.size.width.max(1) as f32;
+        let base_h = proxy.base_doc.size.height.max(1) as f32;
+        let mut pw = (base_w * scale_x).round().max(16.0);
+        let mut ph = (base_h * scale_y).round().max(16.0);
+        let max_side = pw.max(ph);
+        if max_side > 512.0 {
+            let k = 512.0 / max_side;
+            pw = (pw * k).round().max(16.0);
+            ph = (ph * k).round().max(16.0);
+        }
+        let method = match resample.as_str() {
+            "lanczos" | "bicubic" | "bicubicSharper" | "bicubicSmoother" | "preserveDetails" | "bilinear" | "nearest" => resample.as_str(),
+            _ => "lanczos",
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        let _ = ps.execute(
+            "image.imageSize",
+            json!({
+                "width": pw as u32,
+                "height": ph as u32,
+                "resample": method,
+                "constrainProportions": false
+            }),
+        );
+        proxy.session = ps;
+        Ok(())
+    }
+
+    /// v2.0.1: Live coalesced proxy preview for Seçimi Değiştir (Expand/Contract/Border/Smooth/Feather) before Uygula.
+    pub fn update_proxy_modify_selection(
+        &self,
+        op: String,
+        radius: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let cmd = match op.as_str() {
+            "expand" => "select.modify.expand",
+            "contract" => "select.modify.contract",
+            "border" => "select.modify.border",
+            "smooth" => "select.modify.smooth",
+            "feather" => "select.modify.feather",
+            _ => return Ok(()),
+        };
+        let scaled_r = (radius * proxy.scale).clamp(1.0, 200.0);
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        let _ = ps.execute(cmd, json!({ "radius": scaled_r as f64 }));
+        proxy.session = ps;
+        guard.mark_selection_dirty();
+        Ok(())
+    }
+
+    /// v2.0.1: Live coalesced proxy preview for İçerik Duyarlı Taşıma (Content-Aware Move/Extend) before Uygula.
+    pub fn update_proxy_content_aware_move(
+        &self,
+        dx: f32,
+        dy: f32,
+        mode: String,
+        structure: u8,
+        color: u8,
+        scale_x: f32,
+        scale_y: f32,
+        rotate_deg: f32,
+        sample_all_layers: bool,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let p_scale = proxy.scale;
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if let Some(ds) = ps.active_mut() {
+            let tid = active_id.or_else(|| ds.active_layer());
+            if let Some(id) = tid {
+                let _ = ds.set_active_layer(id);
+                if let Some(layer) = ds.doc_mut().layer_mut(id) {
+                    layer.lock.pixels = false;
+                }
+            }
+        }
+        let valid_mode = if mode == "extend" { "extend" } else { "move" };
+        let _ = ps.execute(
+            "edit.contentAwareMove",
+            json!({
+                "dx": (dx * p_scale) as f64,
+                "dy": (dy * p_scale) as f64,
+                "mode": valid_mode,
+                "structure": structure.clamp(1, 7),
+                "color": color.clamp(0, 10),
+                "scaleX": scale_x.clamp(25.0, 250.0) as f64,
+                "scaleY": scale_y.clamp(25.0, 250.0) as f64,
+                "rotation": rotate_deg.clamp(-180.0, 180.0) as f64,
+                "sampleAllLayers": sample_all_layers
+            }),
+        );
+        proxy.session = ps;
+        Ok(())
+    }
+
     pub fn update_proxy_color_range(
         &self,
         preset: String,
@@ -9894,6 +10025,55 @@ LUT_3D_SIZE 2
         assert!(info1.can_undo);
         let info2 = eng.apply_art_history_brush(pts, 10.0, 0.8, 1.0, "tightMedium".into(), 40.0, 0.0).unwrap();
         assert!(info2.can_undo);
+    }
+
+    #[test]
+    fn test_v201_proxy_image_resize_live() {
+        let eng = test_engine();
+        let rgba = vec![120u8, 140, 160, 255].repeat(120 * 80);
+        eng.open_rgba_bytes("resize.png".into(), 120, 80, rgba).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_image_resize(60, 60, "lanczos".into()).unwrap();
+        let guard = eng.core.lock();
+        let pdoc = guard.proxy_preview.as_ref().unwrap().session.active().unwrap().doc();
+        assert_eq!(pdoc.size.width, pdoc.size.height, "Square resize proxy must update aspect ratio live");
+    }
+
+    #[test]
+    fn test_v201_proxy_modify_selection_live() {
+        let eng = test_engine();
+        let rgba = vec![120u8, 140, 160, 255].repeat(80 * 80);
+        eng.open_rgba_bytes("selmod.png".into(), 80, 80, rgba).unwrap();
+        eng.select_rect(20, 20, 40, 40, false, "replace".into()).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_modify_selection("expand".into(), 8.0).unwrap();
+        let guard = eng.core.lock();
+        let pdoc = guard.proxy_preview.as_ref().unwrap().session.active().unwrap().doc();
+        assert!(pdoc.selection.is_some(), "Proxy modify selection must preserve live selection");
+    }
+
+    #[test]
+    fn test_v201_proxy_content_aware_move_live_on_locked_layer() {
+        let eng = test_engine();
+        let rgba = vec![100u8, 120, 140, 255].repeat(80 * 80);
+        eng.open_rgba_bytes("cam.png".into(), 80, 80, rgba).unwrap();
+        eng.select_rect(10, 10, 24, 24, false, "replace".into()).unwrap();
+        {
+            let mut g = eng.core.lock();
+            if let Some(ds) = g.session.active_mut() {
+                if let Some(id) = ds.active_layer() {
+                    if let Some(layer) = ds.doc_mut().layer_mut(id) {
+                        layer.lock.pixels = true;
+                    }
+                }
+            }
+        }
+        eng.begin_proxy_preview().unwrap();
+        eng.update_proxy_content_aware_move(
+            24.0, 16.0, "move".into(), 4, 0, 100.0, 100.0, 0.0, false
+        ).unwrap();
+        let guard = eng.core.lock();
+        assert!(guard.proxy_preview.is_some(), "Proxy CAM move must succeed on locked layer");
     }
 
     #[test]

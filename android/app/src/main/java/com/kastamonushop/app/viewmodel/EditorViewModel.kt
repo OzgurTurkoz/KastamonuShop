@@ -299,6 +299,18 @@ class EditorViewModel : ViewModel() {
         data class SelectSky(val threshold: Float, val softness: Float, val mode: String, val sampleAllLayers: Boolean) : ProxyJob()
         data class ColorRange(val preset: String, val colorHex: String, val fuzziness: Float, val invert: Boolean, val mode: String, val sampleAllLayers: Boolean) : ProxyJob()
         data class FocusArea(val rangePct: Float, val noisePct: Float, val mode: String, val sampleAllLayers: Boolean) : ProxyJob()
+        data class ImageResize(val width: Int, val height: Int, val resample: String) : ProxyJob()
+        data class ModifySelection(val op: String, val radius: Float) : ProxyJob()
+        data class ContentAwareMove(
+            val dx: Float,
+            val dy: Float,
+            val mode: String,
+            val structure: Int,
+            val color: Int,
+            val scalePct: Float,
+            val rotateDeg: Float,
+            val sampleAllLayers: Boolean
+        ) : ProxyJob()
     }
     private data class StampedProxyJob(val gen: Long, val job: ProxyJob)
     private val proxyGeneration = java.util.concurrent.atomic.AtomicLong(0L)
@@ -1415,6 +1427,20 @@ class EditorViewModel : ViewModel() {
                     )
                     is ProxyJob.FocusArea -> engine.updateProxyFocusArea(
                         job.rangePct, job.noisePct, job.mode, job.sampleAllLayers
+                    )
+                    is ProxyJob.ImageResize -> engine.updateProxyImageResize(
+                        job.width.coerceIn(16, 8192).toUInt(),
+                        job.height.coerceIn(16, 8192).toUInt(),
+                        job.resample
+                    )
+                    is ProxyJob.ModifySelection -> engine.updateProxyModifySelection(
+                        job.op, job.radius
+                    )
+                    is ProxyJob.ContentAwareMove -> engine.updateProxyContentAwareMove(
+                        job.dx, job.dy, job.mode,
+                        job.structure.coerceIn(1, 7).toUByte(),
+                        job.color.coerceIn(0, 10).toUByte(),
+                        job.scalePct, job.scalePct, job.rotateDeg, job.sampleAllLayers
                     )
                 }
                 if (stamped.gen == proxyGeneration.get()) {
@@ -3885,6 +3911,38 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun updateProxyImageResize(width: Int, height: Int, resample: String) {
+        enqueueProxyJob(ProxyJob.ImageResize(width.coerceIn(16, 8192), height.coerceIn(16, 8192), resample))
+    }
+
+    fun updateProxyModifySelection(op: String, radius: Float) {
+        enqueueProxyJob(ProxyJob.ModifySelection(op, kotlin.math.round(radius)))
+    }
+
+    fun updateProxyContentAwareMove(
+        dx: Float,
+        dy: Float,
+        mode: String,
+        structure: Int,
+        color: Int,
+        scalePct: Float,
+        rotateDeg: Float,
+        sampleAllLayers: Boolean
+    ) {
+        enqueueProxyJob(
+            ProxyJob.ContentAwareMove(
+                kotlin.math.round(dx),
+                kotlin.math.round(dy),
+                mode,
+                structure.coerceIn(1, 7),
+                color.coerceIn(0, 10),
+                kotlin.math.round(scalePct),
+                kotlin.math.round(rotateDeg),
+                sampleAllLayers
+            )
+        )
+    }
+
     fun updateProxySelectSky(threshold: Float, softness: Float, mode: String, sampleAllLayers: Boolean) {
         enqueueProxyJob(ProxyJob.SelectSky(kotlin.math.round(threshold), kotlin.math.round(softness), mode, sampleAllLayers))
     }
@@ -3952,9 +4010,11 @@ class EditorViewModel : ViewModel() {
     }
 
     fun applyModifySelection(op: String, radius: Float) {
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
+                engine.endProxyPreview()
                 val info = engine.modifySelection(op, radius)
                 val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
                 _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }

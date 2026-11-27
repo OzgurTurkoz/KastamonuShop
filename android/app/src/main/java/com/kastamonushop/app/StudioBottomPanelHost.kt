@@ -191,6 +191,7 @@ internal fun StudioBottomPanelHost(
                         s.camMoveStructure = 4f; s.camMoveColor = 0f
                         s.camMoveScale = 100f; s.camMoveRotate = 0f; s.camMoveSampleAll = false
                         vm.setTool(ActiveTool.NONE)
+                        vm.beginProxyPreview()
                         s.activePanel = BottomPanel.CONTENT_AWARE_MOVE_EDIT
                     },
                     onOpenSelectSky = {
@@ -213,6 +214,8 @@ internal fun StudioBottomPanelHost(
                     },
                     onOpenSelectModify = {
                         vm.setTool(ActiveTool.NONE)
+                        vm.beginProxyPreview()
+                        vm.updateProxyModifySelection(s.selModifyOp, s.selModifyRadius)
                         s.activePanel = BottomPanel.SELECT_MODIFY_EDIT
                     },
                     onClose = { vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK }
@@ -838,6 +841,7 @@ private fun StudioBottomPanelHostPart2(
                                     s.resizeHeightText = dh0.toString()
                                     s.resizeLockAspect = true
                                     s.resizeResample = "lanczos"
+                                    vm.beginProxyPreview()
                                     s.activePanel = BottomPanel.IMAGE_RESIZE_EDIT
                                 }
                             )
@@ -1321,10 +1325,18 @@ private fun StudioBottomPanelHostPart2(
                     },
                     onToggleLock = { s.resizeLockAspect = !s.resizeLockAspect },
                     onPreset = { pw, ph ->
-                        s.resizeWidthText = pw.coerceIn(16, 8192).toString()
-                        s.resizeHeightText = ph.coerceIn(16, 8192).toString()
+                        val cw = pw.coerceIn(16, 8192)
+                        val ch = ph.coerceIn(16, 8192)
+                        s.resizeWidthText = cw.toString()
+                        s.resizeHeightText = ch.toString()
+                        vm.updateProxyImageResize(cw, ch, s.resizeResample)
                     },
-                    onResample = { s.resizeResample = it },
+                    onResample = {
+                        s.resizeResample = it
+                        val cw = s.resizeWidthText.toIntOrNull() ?: (state.docInfo?.width?.toInt() ?: 1080)
+                        val ch = s.resizeHeightText.toIntOrNull() ?: (state.docInfo?.height?.toInt() ?: 1080)
+                        vm.updateProxyImageResize(cw, ch, it)
+                    },
                     onClose = { s.activePanel = BottomPanel.CROP_MENU },
                     onApply = {
                         val tw = s.resizeWidthText.toIntOrNull()?.coerceIn(16, 8192) ?: (state.docInfo?.width?.toInt() ?: 1080)
@@ -1704,12 +1716,20 @@ private fun StudioBottomPanelHostPart2(
                 )
                 BottomPanel.CONTENT_AWARE_MOVE_EDIT -> ContentAwareMovePanel(
                     s = s,
+                    onPreview = {
+                        vm.updateProxyContentAwareMove(
+                            s.camMoveDx, s.camMoveDy, s.camMoveMode,
+                            s.camMoveStructure.roundToInt(), s.camMoveColor.roundToInt(),
+                            s.camMoveScale, s.camMoveRotate, s.camMoveSampleAll
+                        )
+                    },
                     onReset = {
                         s.camMoveDx = 0f; s.camMoveDy = 0f; s.camMoveMode = "move"
                         s.camMoveStructure = 4f; s.camMoveColor = 0f
                         s.camMoveScale = 100f; s.camMoveRotate = 0f; s.camMoveSampleAll = false
+                        vm.resetProxyPreview()
                     },
-                    onClose = { s.activePanel = BottomPanel.SELECT_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
                     onApply = {
                         vm.applyContentAwareMove(
                             s.camMoveDx, s.camMoveDy, s.camMoveMode,
@@ -1763,19 +1783,24 @@ private fun StudioBottomPanelHostPart2(
                 )
                 BottomPanel.SELECT_MODIFY_EDIT -> SelectModifyPanel(
                     s = s,
+                    onPreview = {
+                        vm.updateProxyModifySelection(s.selModifyOp, s.selModifyRadius)
+                    },
                     onApplyModify = {
                         vm.applyModifySelection(s.selModifyOp, s.selModifyRadius)
                         s.activePanel = BottomPanel.SELECT_MENU
                     },
                     onGrow = {
+                        vm.endProxyPreview()
                         vm.applyGrowOrSimilarSelection(similar = false, tolerance = s.selGrowTolerance)
                         s.activePanel = BottomPanel.SELECT_MENU
                     },
                     onSimilar = {
+                        vm.endProxyPreview()
                         vm.applyGrowOrSimilarSelection(similar = true, tolerance = s.selGrowTolerance)
                         s.activePanel = BottomPanel.SELECT_MENU
                     },
-                    onClose = { s.activePanel = BottomPanel.SELECT_MENU }
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
                 )
                 else -> Unit
             }

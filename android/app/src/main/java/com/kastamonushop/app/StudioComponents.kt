@@ -298,7 +298,11 @@ internal fun ProPill(
 ) {
     Surface(
         shape = RoundedCornerShape(11.dp),
-        color = if (selected) Color(0xFF3A7AFE) else Color(0xFF232632),
+        color = if (selected) StudioV2Colors.AmberSoft else Color(0x16FFFFFF),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (selected) StudioV2Colors.AmberBorder else Color(0x1CFFFFFF)
+        ),
         modifier = modifier
             .height(32.dp)
             .clickable(onClick = onClick)
@@ -308,7 +312,7 @@ internal fun ProPill(
             contentAlignment = Alignment.Center
         ) {
             CompositionLocalProvider(
-                LocalContentColor provides if (selected) Color.White else Color(0xFFC8CEE0)
+                LocalContentColor provides if (selected) StudioV2Colors.Amber else StudioV2Colors.TextPrimary
             ) {
                 label()
             }
@@ -557,10 +561,14 @@ internal fun BottomEditorHeader(
             Button(
                 onClick = onApply,
                 shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = StudioV2Colors.Amber,
+                    contentColor = Color(0xFF0A0B0E)
+                ),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                 modifier = Modifier.height(30.dp)
             ) {
-                Text(applyLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(applyLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

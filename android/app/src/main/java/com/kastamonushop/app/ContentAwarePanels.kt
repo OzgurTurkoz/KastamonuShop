@@ -127,6 +127,7 @@ internal fun ContentAwareFillPanel(
 @Composable
 internal fun ContentAwareMovePanel(
     s: StudioSessionState,
+    onPreview: () -> Unit,
     onReset: () -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
@@ -152,17 +153,17 @@ internal fun ContentAwareMovePanel(
         ) {
             ProPill(
                 selected = s.camMoveMode == "move",
-                onClick = { s.camMoveMode = "move" },
+                onClick = { s.camMoveMode = "move"; onPreview() },
                 label = { Text("Taşı", fontSize = 11.sp) }
             )
             ProPill(
                 selected = s.camMoveMode == "extend",
-                onClick = { s.camMoveMode = "extend" },
+                onClick = { s.camMoveMode = "extend"; onPreview() },
                 label = { Text("Çoğalt (Extend)", fontSize = 11.sp) }
             )
             ProPill(
                 selected = s.camMoveSampleAll,
-                onClick = { s.camMoveSampleAll = !s.camMoveSampleAll },
+                onClick = { s.camMoveSampleAll = !s.camMoveSampleAll; onPreview() },
                 label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
             )
             ProPill(
@@ -178,7 +179,7 @@ internal fun ContentAwareMovePanel(
             value = s.camMoveStructure,
             range = 1f..7f,
             defaultValue = 4f
-        ) { s.camMoveStructure = it }
+        ) { s.camMoveStructure = it; onPreview() }
 
         CompactSliderRow(
             label = "Renk Uyumu",

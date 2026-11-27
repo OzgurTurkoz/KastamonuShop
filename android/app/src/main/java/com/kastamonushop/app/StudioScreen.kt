@@ -323,7 +323,8 @@ fun StonebridgeStudioScreen(
                     }
                     s.activePanel = BottomPanel.DOCK
                 }
-                BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT, BottomPanel.IMAGE_RESIZE_EDIT -> s.activePanel = BottomPanel.CROP_MENU
+                BottomPanel.CROP_RATIO_EDIT, BottomPanel.PERSPECTIVE_CROP_EDIT -> s.activePanel = BottomPanel.CROP_MENU
+                BottomPanel.IMAGE_RESIZE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU }
                 BottomPanel.PUPPET_WARP_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.EFFECT_MENU }
                 BottomPanel.LAYER_TRANSFORM -> { vm.clearActiveLayerPreview(); s.activePanel = BottomPanel.DOCK }
                 BottomPanel.LAYER_FX_EDIT, BottomPanel.BLEND_IF_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK }
@@ -335,12 +336,12 @@ fun StonebridgeStudioScreen(
                 BottomPanel.QUICK_ACTIONS_MENU -> s.activePanel = BottomPanel.DOCK
                 BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE -> { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU }
                 BottomPanel.CONTENT_AWARE_FILL_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
-                BottomPanel.CONTENT_AWARE_MOVE_EDIT -> s.activePanel = BottomPanel.SELECT_MENU
+                BottomPanel.CONTENT_AWARE_MOVE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
                 BottomPanel.CONTENT_AWARE_SCALE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU }
                 BottomPanel.SELECT_COLOR_RANGE_EDIT, BottomPanel.SELECT_SKY_EDIT, BottomPanel.SELECT_FOCUS_AREA_EDIT -> {
                     vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU
                 }
-                BottomPanel.SELECT_MODIFY_EDIT -> s.activePanel = BottomPanel.SELECT_MENU
+                BottomPanel.SELECT_MODIFY_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
                 BottomPanel.TEXT_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK }
                 BottomPanel.SELECT_MENU, BottomPanel.DRAW_MENU, BottomPanel.RETOUCH_MENU, BottomPanel.LAYER_MASK_EDIT -> {
                     vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK
@@ -419,6 +420,9 @@ fun StonebridgeStudioScreen(
             s.activePanel == BottomPanel.RADIAL_BLUR_EDIT ||
             s.activePanel == BottomPanel.HSL_MIXER_LIVE ||
             s.activePanel == BottomPanel.POSTER_THRESH_LIVE ||
+            s.activePanel == BottomPanel.IMAGE_RESIZE_EDIT ||
+            s.activePanel == BottomPanel.SELECT_MODIFY_EDIT ||
+            s.activePanel == BottomPanel.CONTENT_AWARE_MOVE_EDIT ||
             s.activePanel == BottomPanel.FILTER_GALLERY_EDIT ||
             s.activePanel == BottomPanel.LIGHT_DISTORT_EDIT ||
             s.activePanel == BottomPanel.TEXT_EDIT ||
@@ -2217,7 +2221,15 @@ fun StonebridgeStudioScreen(
                         .fillMaxSize()
                         .then(
                             if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(bounds, z) {
-                                detectDragGestures { change, dragAmount ->
+                                detectDragGestures(
+                                    onDragEnd = {
+                                        vm.updateProxyContentAwareMove(
+                                            s.camMoveDx, s.camMoveDy, s.camMoveMode,
+                                            s.camMoveStructure.roundToInt(), s.camMoveColor.roundToInt(),
+                                            s.camMoveScale, s.camMoveRotate, s.camMoveSampleAll
+                                        )
+                                    }
+                                ) { change, dragAmount ->
                                     change.consume()
                                     s.camMoveDx += dragAmount.x / z
                                     s.camMoveDy += dragAmount.y / z

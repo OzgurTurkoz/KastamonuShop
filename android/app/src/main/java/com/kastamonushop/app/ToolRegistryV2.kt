@@ -456,6 +456,7 @@ internal object ToolRegistryV2 {
             s.camMoveStructure = 4f; s.camMoveColor = 0f
             s.camMoveScale = 100f; s.camMoveRotate = 0f; s.camMoveSampleAll = false
             vm.setTool(ActiveTool.NONE)
+            vm.beginProxyPreview()
             s.activePanel = BottomPanel.CONTENT_AWARE_MOVE_EDIT
         },
         StudioToolSpec(
@@ -594,6 +595,8 @@ internal object ToolRegistryV2 {
             pipeline = EnginePipeline.INSTANT_OP
         ) {
             vm.setTool(ActiveTool.NONE)
+            vm.beginProxyPreview()
+            vm.updateProxyModifySelection(s.selModifyOp, s.selModifyRadius)
             s.activePanel = BottomPanel.SELECT_MODIFY_EDIT
         },
         StudioToolSpec(
@@ -657,6 +660,7 @@ internal object ToolRegistryV2 {
             s.resizeHeightText = dh0.toString()
             s.resizeLockAspect = true
             s.resizeResample = "lanczos"
+            vm.beginProxyPreview()
             s.activePanel = BottomPanel.IMAGE_RESIZE_EDIT
         },
         StudioToolSpec(
