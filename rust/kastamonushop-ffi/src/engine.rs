@@ -7792,7 +7792,7 @@ impl KastamonuEngine {
             if let Some(id) = tid {
                 let _ = ds.set_active_layer(Some(id));
                 if let Some(layer) = ds.doc_mut().layer_mut(id) {
-                    layer.locks.pixels = false;
+                    Arc::make_mut(layer).locks.pixels = false;
                 }
             }
         }
@@ -10063,7 +10063,7 @@ LUT_3D_SIZE 2
             if let Some(ds) = g.session.active_mut() {
                 if let Some(id) = ds.active_layer() {
                     if let Some(layer) = ds.doc_mut().layer_mut(id) {
-                        layer.locks.pixels = true;
+                        Arc::make_mut(layer).locks.pixels = true;
                     }
                 }
             }
