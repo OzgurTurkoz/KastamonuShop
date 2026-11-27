@@ -125,7 +125,7 @@ internal fun ColorRangePanel(
         ProColorWheelDialog(
             initialHex = s.crColorHex,
             onDismiss = { showColorPicker = false },
-            onConfirm = { hex ->
+            onConfirm = { hex, _ ->
                 s.crColorHex = hex
                 showColorPicker = false
             }
