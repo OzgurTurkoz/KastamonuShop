@@ -7729,6 +7729,7 @@ impl KastamonuEngine {
                 "constrainProportions": false
             }),
         );
+        proxy.real_size = (width.clamp(16, 8192), height.clamp(16, 8192));
         proxy.session = ps;
         Ok(())
     }

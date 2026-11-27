@@ -155,6 +155,17 @@ class EditorViewModel : ViewModel() {
     private var statusAutoHideJob: Job? = null
 
     private val paintExecutor = Executors.newSingleThreadExecutor()
+    private val renderExecutor = Executors.newSingleThreadExecutor()
+    private val renderScheduled = AtomicBoolean(false)
+
+    private fun requestRenderFrame() {
+        if (renderScheduled.compareAndSet(false, true)) {
+            renderExecutor.execute {
+                renderScheduled.set(false)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
     private val pendingLock = Any()
     private val pendingSamples = ArrayList<StrokeSample>(64)
     @Volatile
@@ -2162,32 +2173,38 @@ class EditorViewModel : ViewModel() {
             val isDab = isLiveDabTool(curTool)
             val isClone = curTool == ActiveTool.CLONE_STAMP
             val isMixer = curTool == ActiveTool.MIXER_BRUSH
-            val isHeavy = isMixer || isDab
-            val filtered = if (isHeavy) {
-                val minStep = (st.brushSize * 0.22f).coerceIn(4f, 52f)
-                val minStepSq = minStep * minStep
-                val out = ArrayList<StrokeSample>(batch.size)
-                var prev = lastDispatchedSample
-                for (pt in batch) {
-                    if (prev == null) {
-                        out.add(pt)
+            val isHeavy = isMixer || isDab || isClone
+            val minStep = when {
+                isHeavy -> (st.brushSize * 0.22f).coerceIn(4f, 52f)
+                st.brushSize >= 16f -> (st.brushSize * 0.14f).coerceIn(2.0f, 26f)
+                else -> 1.5f
+            }
+            val minStepSq = minStep * minStep
+            val filtered = ArrayList<StrokeSample>(batch.size)
+            var prev = lastDispatchedSample
+            for (pt in batch) {
+                if (prev == null) {
+                    filtered.add(pt)
+                    prev = pt
+                } else {
+                    val dx = pt.x - prev.x
+                    val dy = pt.y - prev.y
+                    if (dx * dx + dy * dy >= minStepSq) {
+                        filtered.add(pt)
                         prev = pt
-                    } else {
-                        val dx = pt.x - prev.x
-                        val dy = pt.y - prev.y
-                        if (dx * dx + dy * dy >= minStepSq) {
-                            out.add(pt)
-                            prev = pt
-                        }
                     }
                 }
-                if (out.isNotEmpty()) {
-                    lastDispatchedSample = out.last()
+            }
+            // Always preserve exact finger tip endpoint if batch moved
+            val batchLast = batch.lastOrNull()
+            if (batchLast != null && (filtered.isEmpty() || filtered.last() !== batchLast)) {
+                val p = prev
+                if (p == null || ((batchLast.x - p.x) * (batchLast.x - p.x) + (batchLast.y - p.y) * (batchLast.y - p.y) >= 1f)) {
+                    filtered.add(batchLast)
                 }
-                out
-            } else {
-                lastDispatchedSample = batch.lastOrNull() ?: lastDispatchedSample
-                batch
+            }
+            if (filtered.isNotEmpty()) {
+                lastDispatchedSample = filtered.last()
             }
             if (filtered.isEmpty()) continue
             runCatching {
@@ -2197,7 +2214,7 @@ class EditorViewModel : ViewModel() {
                     isDab -> engine.pushLiveDab(filtered)
                     else -> engine.pushLiveStroke(filtered)
                 }
-                NativeSurfaceBridge.nativeRenderFrame()
+                requestRenderFrame()
             }
         }
     }

@@ -1310,6 +1310,11 @@ private fun StudioBottomPanelHostPart2(
                                 s.resizeHeightText = ((nw.toFloat() * oh / ow).roundToInt().coerceIn(16, 8192)).toString()
                             }
                         }
+                        val cw = s.resizeWidthText.toIntOrNull()
+                        val ch = s.resizeHeightText.toIntOrNull()
+                        if (cw != null && ch != null && cw >= 16 && ch >= 16) {
+                            vm.updateProxyImageResize(cw.coerceIn(16, 8192), ch.coerceIn(16, 8192), s.resizeResample)
+                        }
                     },
                     onHeightText = { txt ->
                         val clean = txt.filter { it.isDigit() }.take(4)
@@ -1321,6 +1326,11 @@ private fun StudioBottomPanelHostPart2(
                             if (nh != null && nh > 0) {
                                 s.resizeWidthText = ((nh.toFloat() * ow / oh).roundToInt().coerceIn(16, 8192)).toString()
                             }
+                        }
+                        val cw = s.resizeWidthText.toIntOrNull()
+                        val ch = s.resizeHeightText.toIntOrNull()
+                        if (cw != null && ch != null && cw >= 16 && ch >= 16) {
+                            vm.updateProxyImageResize(cw.coerceIn(16, 8192), ch.coerceIn(16, 8192), s.resizeResample)
                         }
                     },
                     onToggleLock = { s.resizeLockAspect = !s.resizeLockAspect },
@@ -1337,7 +1347,7 @@ private fun StudioBottomPanelHostPart2(
                         val ch = s.resizeHeightText.toIntOrNull() ?: (state.docInfo?.height?.toInt() ?: 1080)
                         vm.updateProxyImageResize(cw, ch, it)
                     },
-                    onClose = { s.activePanel = BottomPanel.CROP_MENU },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU },
                     onApply = {
                         val tw = s.resizeWidthText.toIntOrNull()?.coerceIn(16, 8192) ?: (state.docInfo?.width?.toInt() ?: 1080)
                         val th = s.resizeHeightText.toIntOrNull()?.coerceIn(16, 8192) ?: (state.docInfo?.height?.toInt() ?: 1080)
