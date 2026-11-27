@@ -28,6 +28,7 @@ import kotlin.math.roundToInt
 @Composable
 internal fun ColorRangePanel(
     s: StudioSessionState,
+    onPreview: () -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
@@ -80,7 +81,7 @@ internal fun ColorRangePanel(
             presets.forEach { (id, lbl) ->
                 ProPill(
                     selected = s.crPreset == id,
-                    onClick = { s.crPreset = id },
+                    onClick = { s.crPreset = id; onPreview() },
                     label = { Text(lbl, fontSize = 11.sp, maxLines = 1) }
                 )
             }
@@ -92,7 +93,7 @@ internal fun ColorRangePanel(
             value = s.crFuzziness,
             range = 0f..200f,
             defaultValue = 40f
-        ) { s.crFuzziness = it }
+        ) { s.crFuzziness = it; onPreview() }
 
         Row(
             modifier = Modifier
@@ -104,18 +105,18 @@ internal fun ColorRangePanel(
             listOf("replace" to "Yeni", "add" to "Ekle", "subtract" to "Çıkar").forEach { (id, lbl) ->
                 ProPill(
                     selected = s.crMode == id,
-                    onClick = { s.crMode = id },
+                    onClick = { s.crMode = id; onPreview() },
                     label = { Text(lbl, fontSize = 11.sp) }
                 )
             }
             ProPill(
                 selected = s.crInvert,
-                onClick = { s.crInvert = !s.crInvert },
+                onClick = { s.crInvert = !s.crInvert; onPreview() },
                 label = { Text("Ters Çevir", fontSize = 11.sp) }
             )
             ProPill(
                 selected = s.crSampleAll,
-                onClick = { s.crSampleAll = !s.crSampleAll },
+                onClick = { s.crSampleAll = !s.crSampleAll; onPreview() },
                 label = { Text("Tüm Katm.", fontSize = 11.sp) }
             )
         }
@@ -128,6 +129,7 @@ internal fun ColorRangePanel(
             onConfirm = { hex, _ ->
                 s.crColorHex = hex
                 showColorPicker = false
+                onPreview()
             }
         )
     }
@@ -136,6 +138,7 @@ internal fun ColorRangePanel(
 @Composable
 internal fun SelectSkyPanel(
     s: StudioSessionState,
+    onPreview: () -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
@@ -157,7 +160,7 @@ internal fun SelectSkyPanel(
             value = s.skyThreshold,
             range = 0f..100f,
             defaultValue = 50f
-        ) { s.skyThreshold = it }
+        ) { s.skyThreshold = it; onPreview() }
 
         CompactSliderRow(
             label = "Yumuşaklık",
@@ -165,7 +168,7 @@ internal fun SelectSkyPanel(
             value = s.skySoftness,
             range = 0f..100f,
             defaultValue = 50f
-        ) { s.skySoftness = it }
+        ) { s.skySoftness = it; onPreview() }
 
         Row(
             modifier = Modifier
@@ -177,13 +180,13 @@ internal fun SelectSkyPanel(
             listOf("replace" to "Yeni", "add" to "Ekle", "subtract" to "Çıkar").forEach { (id, lbl) ->
                 ProPill(
                     selected = s.skyMode == id,
-                    onClick = { s.skyMode = id },
+                    onClick = { s.skyMode = id; onPreview() },
                     label = { Text(lbl, fontSize = 11.sp) }
                 )
             }
             ProPill(
                 selected = s.skySampleAll,
-                onClick = { s.skySampleAll = !s.skySampleAll },
+                onClick = { s.skySampleAll = !s.skySampleAll; onPreview() },
                 label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
             )
         }
@@ -193,6 +196,7 @@ internal fun SelectSkyPanel(
 @Composable
 internal fun FocusAreaPanel(
     s: StudioSessionState,
+    onPreview: () -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
@@ -214,7 +218,7 @@ internal fun FocusAreaPanel(
             value = s.focusRange,
             range = 0f..100f,
             defaultValue = 50f
-        ) { s.focusRange = it }
+        ) { s.focusRange = it; onPreview() }
 
         CompactSliderRow(
             label = "Gürültü",
@@ -222,7 +226,7 @@ internal fun FocusAreaPanel(
             value = s.focusNoise,
             range = 0f..100f,
             defaultValue = 0f
-        ) { s.focusNoise = it }
+        ) { s.focusNoise = it; onPreview() }
 
         Row(
             modifier = Modifier
@@ -234,13 +238,13 @@ internal fun FocusAreaPanel(
             listOf("replace" to "Yeni", "add" to "Ekle", "subtract" to "Çıkar").forEach { (id, lbl) ->
                 ProPill(
                     selected = s.focusMode == id,
-                    onClick = { s.focusMode = id },
+                    onClick = { s.focusMode = id; onPreview() },
                     label = { Text(lbl, fontSize = 11.sp) }
                 )
             }
             ProPill(
                 selected = s.focusSampleAll,
-                onClick = { s.focusSampleAll = !s.focusSampleAll },
+                onClick = { s.focusSampleAll = !s.focusSampleAll; onPreview() },
                 label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
             )
         }

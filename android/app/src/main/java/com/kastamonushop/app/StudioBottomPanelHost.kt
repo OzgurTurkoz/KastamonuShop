@@ -1,5 +1,7 @@
 package com.kastamonushop.app
 
+import androidx.compose.animation.togetherWith
+
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -119,7 +121,18 @@ internal fun StudioBottomPanelHost(
                     .getOrDefault(Color.Red)
             }
 
-            when (s.activePanel) {
+            androidx.compose.animation.AnimatedContent(
+                targetState = s.activePanel,
+                transitionSpec = {
+                    (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(140)) +
+                        androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(160)) { it / 6 })
+                        .togetherWith(
+                            androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(90))
+                        )
+                },
+                label = "bottom_panel_transition"
+            ) { panel ->
+            when (panel) {
                 BottomPanel.DOCK -> {
                     Row(
                         modifier = Modifier
@@ -370,21 +383,27 @@ internal fun StudioBottomPanelHost(
                     },
                     onOpenSelectSky = {
                         vm.setTool(ActiveTool.NONE)
+                        vm.beginProxyPreview()
+                        vm.updateProxySelectSky(s.skyThreshold, s.skySoftness, s.skyMode, s.skySampleAll)
                         s.activePanel = BottomPanel.SELECT_SKY_EDIT
                     },
                     onOpenColorRange = {
                         vm.setTool(ActiveTool.NONE)
+                        vm.beginProxyPreview()
+                        vm.updateProxyColorRange(s.crPreset, s.crColorHex, s.crFuzziness, s.crInvert, s.crMode, s.crSampleAll)
                         s.activePanel = BottomPanel.SELECT_COLOR_RANGE_EDIT
                     },
                     onOpenFocusArea = {
                         vm.setTool(ActiveTool.NONE)
+                        vm.beginProxyPreview()
+                        vm.updateProxyFocusArea(s.focusRange, s.focusNoise, s.focusMode, s.focusSampleAll)
                         s.activePanel = BottomPanel.SELECT_FOCUS_AREA_EDIT
                     },
                     onOpenSelectModify = {
                         vm.setTool(ActiveTool.NONE)
                         s.activePanel = BottomPanel.SELECT_MODIFY_EDIT
                     },
-                    onClose = { s.activePanel = BottomPanel.DOCK }
+                    onClose = { vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK }
                 )
 
                 BottomPanel.TEXT_EDIT -> {
@@ -1162,7 +1181,7 @@ private fun StudioBottomPanelHostPart2(
                 }
 
                 BottomPanel.FILTER_MENU -> FilterMenuPanel(
-                    onClose = { s.activePanel = BottomPanel.DOCK },
+                    onClose = { vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK },
                     onBlur = { s.blurRadiusVal = 0f; vm.beginProxyPreview(); s.activePanel = BottomPanel.BLUR_EDIT },
                     onSharpen = { s.sharpenAmountVal = 0f; vm.beginProxyPreview(); s.activePanel = BottomPanel.SHARPEN_EDIT },
                     onMotion = {
@@ -1201,7 +1220,7 @@ private fun StudioBottomPanelHostPart2(
                     onApply = { vm.applySharpenFast(s.sharpenAmountVal); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.QUICK_ACTIONS_MENU -> QuickActionsPanel(
-                    onClose = { s.activePanel = BottomPanel.DOCK },
+                    onClose = { vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK },
                     onRemoveBg = { vm.smartRemoveBackground(); s.activePanel = BottomPanel.DOCK },
                     onPortraitBlur = { vm.smartPortraitBlur(18f); s.activePanel = BottomPanel.DOCK },
                     onObjectRemove = {
@@ -1777,7 +1796,7 @@ private fun StudioBottomPanelHostPart2(
                         onInvert = { vm.invertActiveLayerMask() },
                         onApplyMask = { vm.applyActiveLayerMask(); s.activePanel = BottomPanel.DOCK },
                         onDeleteMask = { vm.deleteActiveLayerMask() },
-                        onClose = { s.activePanel = BottomPanel.DOCK }
+                        onClose = { vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK }
                     )
                 }
                 BottomPanel.BLEND_IF_EDIT -> {
@@ -1905,7 +1924,8 @@ private fun StudioBottomPanelHostPart2(
                 )
                 BottomPanel.SELECT_COLOR_RANGE_EDIT -> ColorRangePanel(
                     s = s,
-                    onClose = { s.activePanel = BottomPanel.SELECT_MENU },
+                    onPreview = { vm.updateProxyColorRange(s.crPreset, s.crColorHex, s.crFuzziness, s.crInvert, s.crMode, s.crSampleAll) },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
                     onApply = {
                         vm.applyColorRange(s.crPreset, s.crColorHex, s.crFuzziness, s.crInvert, s.crMode, s.crSampleAll)
                         s.activePanel = BottomPanel.SELECT_MENU
@@ -1913,7 +1933,8 @@ private fun StudioBottomPanelHostPart2(
                 )
                 BottomPanel.SELECT_SKY_EDIT -> SelectSkyPanel(
                     s = s,
-                    onClose = { s.activePanel = BottomPanel.SELECT_MENU },
+                    onPreview = { vm.updateProxySelectSky(s.skyThreshold, s.skySoftness, s.skyMode, s.skySampleAll) },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
                     onApply = {
                         vm.applySelectSky(s.skyThreshold, s.skySoftness, s.skyMode, s.skySampleAll)
                         s.activePanel = BottomPanel.SELECT_MENU
@@ -1921,7 +1942,8 @@ private fun StudioBottomPanelHostPart2(
                 )
                 BottomPanel.SELECT_FOCUS_AREA_EDIT -> FocusAreaPanel(
                     s = s,
-                    onClose = { s.activePanel = BottomPanel.SELECT_MENU },
+                    onPreview = { vm.updateProxyFocusArea(s.focusRange, s.focusNoise, s.focusMode, s.focusSampleAll) },
+                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU },
                     onApply = {
                         vm.applyFocusArea(s.focusRange, s.focusNoise, s.focusMode, s.focusSampleAll)
                         s.activePanel = BottomPanel.SELECT_MENU
@@ -1944,6 +1966,7 @@ private fun StudioBottomPanelHostPart2(
                     onClose = { s.activePanel = BottomPanel.SELECT_MENU }
                 )
                 else -> Unit
+            }
             }
 
 }

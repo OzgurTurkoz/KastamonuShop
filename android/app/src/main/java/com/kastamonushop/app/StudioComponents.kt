@@ -331,6 +331,8 @@ internal fun ProSleekTrackSlider(
     } else {
         0f
     }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var wasAtDefault by remember { mutableStateOf(kotlin.math.abs(value - defaultValue) < span * 0.015f) }
     val latestOnChange by rememberUpdatedState(onChange)
     androidx.compose.foundation.Canvas(
         modifier = modifier
@@ -340,7 +342,13 @@ internal fun ProSleekTrackSlider(
                     val pad = 9.dp.toPx()
                     val usable = (size.width - pad * 2f).coerceAtLeast(1f)
                     val f = ((x - pad) / usable).coerceIn(0f, 1f)
-                    latestOnChange(range.start + f * span)
+                    val next = range.start + f * span
+                    val nearDefault = kotlin.math.abs(next - defaultValue) < span * 0.015f
+                    if (nearDefault && !wasAtDefault) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                    }
+                    wasAtDefault = nearDefault
+                    latestOnChange(next)
                 }
                 detectTapGestures { pos -> emitX(pos.x) }
             }
@@ -349,7 +357,13 @@ internal fun ProSleekTrackSlider(
                     val pad = 9.dp.toPx()
                     val usable = (size.width - pad * 2f).coerceAtLeast(1f)
                     val f = ((x - pad) / usable).coerceIn(0f, 1f)
-                    latestOnChange(range.start + f * span)
+                    val next = range.start + f * span
+                    val nearDefault = kotlin.math.abs(next - defaultValue) < span * 0.015f
+                    if (nearDefault && !wasAtDefault) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                    }
+                    wasAtDefault = nearDefault
+                    latestOnChange(next)
                 }
                 detectDragGestures(
                     onDragStart = { pos -> emitX(pos.x) },

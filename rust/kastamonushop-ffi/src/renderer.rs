@@ -112,6 +112,7 @@ pub struct VulkanRenderer {
     sel_texture: wgpu::Texture,
     sel_tex_size: (u32, u32),
     has_selection: bool,
+    is_quick_mask: bool,
     cached_blit_bg: Option<wgpu::BindGroup>,
     doc_tex_size: (u32, u32),
     display_doc_size: (u32, u32),
@@ -338,6 +339,7 @@ impl VulkanRenderer {
             sel_texture,
             sel_tex_size: (1, 1),
             has_selection: false,
+            is_quick_mask: false,
             cached_blit_bg: None,
             doc_tex_size: (0, 0),
             display_doc_size: (1, 1),
@@ -417,7 +419,7 @@ impl VulkanRenderer {
                 if self.has_selection { 1.0 } else { 0.0 },
                 self.sel_tex_size.0 as f32,
                 self.sel_tex_size.1 as f32,
-                0.0,
+                if self.is_quick_mask { 1.0 } else { 0.0 },
             ],
             curve_pts: [
                 preview.curve_shadow,
@@ -607,15 +609,26 @@ impl VulkanRenderer {
     }
 
     fn sync_selection_texture(&mut self, doc: &Document) {
-        let Some(sel) = doc.selection.as_ref() else {
+        let (sel, is_qm) = if let Some(qm) = doc.quick_mask.as_ref() {
+            (&qm.surface, true)
+        } else if let Some(sel) = doc.selection.as_ref() {
+            (sel, false)
+        } else {
             self.has_selection = false;
+            self.is_quick_mask = false;
             return;
         };
-        let bounds = sel.content_bounds();
+        let bounds = if is_qm {
+            photocraft_geom::Rect::new(0, 0, doc.size.width as i32, doc.size.height as i32)
+        } else {
+            sel.content_bounds()
+        };
         if bounds.is_empty() {
             self.has_selection = false;
+            self.is_quick_mask = false;
             return;
         }
+        self.is_quick_mask = is_qm;
         let doc_w = doc.size.width.max(1);
         let doc_h = doc.size.height.max(1);
         let max_dim = 768u32;

@@ -429,6 +429,9 @@ impl EngineCore {
         self.force_full_redraw = true;
         self.pending_dirty = None;
         self.render_generation = self.render_generation.wrapping_add(1);
+        if self.session.active().is_some_and(|ds| ds.doc().quick_mask.is_some()) {
+            self.selection_generation = self.selection_generation.wrapping_add(1);
+        }
     }
 
     pub fn mark_region_dirty(&mut self, rect: Rect) {
@@ -439,6 +442,9 @@ impl EngineCore {
             });
         }
         self.render_generation = self.render_generation.wrapping_add(1);
+        if self.session.active().is_some_and(|ds| ds.doc().quick_mask.is_some()) {
+            self.selection_generation = self.selection_generation.wrapping_add(1);
+        }
     }
 
     pub fn take_dirty_state(&mut self) -> (bool, Option<Rect>) {
@@ -816,6 +822,14 @@ fn ensure_proxy_preview_locked(guard: &mut EngineCore) -> Result<(), EngineError
             "image.imageSize",
             json!({ "width": pw, "height": ph, "resample": "bilinear" }),
         );
+    }
+    // Unlock pixel locks on proxy clone once so ALL 17+ live proxy filters work on locked Background layers
+    if let Some(locked_ids) = ps.active().map(|ds| {
+        ds.doc().layers.iter().filter(|l| l.locks.pixels).map(|l| l.id.0).collect::<Vec<_>>()
+    }) {
+        for lid in locked_ids {
+        let _ = ps.execute("layer.setProps", json!({ "layer": lid, "locks": { "pixels": false } }));
+        }
     }
     let base_doc = ps
         .active()
@@ -2669,6 +2683,14 @@ impl KastamonuEngine {
                 json!({ "width": pw, "height": ph, "resample": "bilinear" }),
             );
         }
+        // Unlock pixel locks on proxy clone once so ALL 17+ live proxy filters work on locked Background layers
+        if let Some(locked_ids) = ps.active().map(|ds| {
+            ds.doc().layers.iter().filter(|l| l.locks.pixels).map(|l| l.id.0).collect::<Vec<_>>()
+        }) {
+            for lid in locked_ids {
+                let _ = ps.execute("layer.setProps", json!({ "layer": lid, "locks": { "pixels": false } }));
+            }
+        }
         let base_doc = ps
             .active()
             .map(|ds| Arc::clone(ds.doc()))
@@ -2820,6 +2842,14 @@ impl KastamonuEngine {
                 "image.imageSize",
                 json!({ "width": pw, "height": ph, "resample": "bilinear" }),
             );
+        }
+        // Unlock pixel locks on proxy clone once so ALL 17+ live proxy filters work on locked Background layers
+        if let Some(locked_ids) = ps.active().map(|ds| {
+            ds.doc().layers.iter().filter(|l| l.locks.pixels).map(|l| l.id.0).collect::<Vec<_>>()
+        }) {
+            for lid in locked_ids {
+                let _ = ps.execute("layer.setProps", json!({ "layer": lid, "locks": { "pixels": false } }));
+            }
         }
         let base_doc = ps
             .active()
@@ -6274,7 +6304,7 @@ impl KastamonuEngine {
         }
         res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
         let _ = guard.session.execute("select.deselect", json!({}));
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7287,7 +7317,7 @@ impl KastamonuEngine {
             guard.session.set_active_layer(prev_active);
         }
         res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7417,7 +7447,7 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7449,7 +7479,7 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7474,7 +7504,7 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7508,7 +7538,7 @@ impl KastamonuEngine {
             .session
             .execute("select.colorRange", params)
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7533,7 +7563,7 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7557,7 +7587,7 @@ impl KastamonuEngine {
             .session
             .execute(cmd, json!({ "radius": r as f64 }))
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7580,7 +7610,7 @@ impl KastamonuEngine {
                 }),
             )
             .map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         self.info_from_locked(&guard)
     }
 
@@ -7595,8 +7625,117 @@ impl KastamonuEngine {
             .session
             .active()
             .is_some_and(|ds| ds.doc().quick_mask.is_some());
-        guard.mark_full_dirty();
+        guard.mark_selection_dirty();
         Ok(active)
+    }
+
+
+
+    pub fn is_quick_mask_active(&self) -> bool {
+        let guard = self.core.lock();
+        guard
+            .session
+            .active()
+            .is_some_and(|ds| ds.doc().quick_mask.is_some())
+    }
+
+    pub fn update_proxy_select_sky(
+        &self,
+        threshold: f32,
+        softness: f32,
+        mode: String,
+        sample_all_layers: bool,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        let _ = ps.execute(
+            "select.sky",
+            json!({
+                "threshold": threshold.clamp(0.0, 100.0) as f64,
+                "softness": softness.clamp(0.0, 100.0) as f64,
+                "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" },
+                "sampleAllLayers": sample_all_layers
+            }),
+        );
+        proxy.session = ps;
+        guard.mark_selection_dirty();
+        Ok(())
+    }
+
+    pub fn update_proxy_color_range(
+        &self,
+        preset: String,
+        color_hex: String,
+        fuzziness: f32,
+        invert: bool,
+        mode: String,
+        sample_all_layers: bool,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        let valid_preset = match preset.as_str() {
+            "sampledColors" | "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas"
+            | "highlights" | "midtones" | "shadows" | "skinTones" | "outOfGamut" => preset.as_str(),
+            _ => "sampledColors",
+        };
+        let mut params = json!({
+            "select": valid_preset,
+            "fuzziness": fuzziness.clamp(0.0, 200.0) as f64,
+            "invert": invert,
+            "sampleAllLayers": sample_all_layers,
+            "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" }
+        });
+        if valid_preset == "sampledColors" && !color_hex.trim().is_empty() {
+            params["color"] = json!(color_hex.trim());
+        }
+        let _ = ps.execute("select.colorRange", params);
+        proxy.session = ps;
+        guard.mark_selection_dirty();
+        Ok(())
+    }
+
+    pub fn update_proxy_focus_area(
+        &self,
+        range_pct: f32,
+        noise_pct: f32,
+        mode: String,
+        sample_all_layers: bool,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        let _ = ps.execute(
+            "select.focusArea",
+            json!({
+                "range": (range_pct / 100.0).clamp(0.0, 1.0) as f64,
+                "noise": (noise_pct / 100.0).clamp(0.0, 1.0) as f64,
+                "sampleAllLayers": sample_all_layers,
+                "mode": match mode.as_str() { "add" | "subtract" | "intersect" => mode.as_str(), _ => "replace" }
+            }),
+        );
+        proxy.session = ps;
+        guard.mark_selection_dirty();
+        Ok(())
     }
 
 }

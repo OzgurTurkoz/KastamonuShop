@@ -330,7 +330,18 @@ fun StonebridgeStudioScreen(
                 BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT, BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.LIGHT_DISTORT_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.FILTER_MENU }
                 BottomPanel.QUICK_ACTIONS_MENU -> s.activePanel = BottomPanel.DOCK
                 BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE -> { vm.endProxyPreview(); s.activePanel = BottomPanel.ADJUST_MENU }
-                else -> s.activePanel = BottomPanel.DOCK
+                BottomPanel.CONTENT_AWARE_FILL_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU }
+                BottomPanel.CONTENT_AWARE_MOVE_EDIT -> s.activePanel = BottomPanel.SELECT_MENU
+                BottomPanel.CONTENT_AWARE_SCALE_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.CROP_MENU }
+                BottomPanel.SELECT_COLOR_RANGE_EDIT, BottomPanel.SELECT_SKY_EDIT, BottomPanel.SELECT_FOCUS_AREA_EDIT -> {
+                    vm.endProxyPreview(); s.activePanel = BottomPanel.SELECT_MENU
+                }
+                BottomPanel.SELECT_MODIFY_EDIT -> s.activePanel = BottomPanel.SELECT_MENU
+                BottomPanel.TEXT_EDIT -> { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK }
+                BottomPanel.SELECT_MENU, BottomPanel.DRAW_MENU, BottomPanel.RETOUCH_MENU, BottomPanel.LAYER_MASK_EDIT -> {
+                    vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK
+                }
+                else -> { vm.setTool(ActiveTool.NONE); s.activePanel = BottomPanel.DOCK }
             }
         } else {
             s.showExitSaveDialog = true
@@ -407,7 +418,7 @@ fun StonebridgeStudioScreen(
             s.activePanel == BottomPanel.FILTER_GALLERY_EDIT ||
             s.activePanel == BottomPanel.LIGHT_DISTORT_EDIT ||
             s.activePanel == BottomPanel.TEXT_EDIT ||
-            s.activePanel == BottomPanel.PUPPET_WARP_EDIT || s.activePanel == BottomPanel.BLEND_IF_EDIT || s.activePanel == BottomPanel.LENS_CORRECTION_EDIT || s.activePanel == BottomPanel.LUT_IMPORT_EDIT || s.activePanel == BottomPanel.CONTENT_AWARE_FILL_EDIT || s.activePanel == BottomPanel.CONTENT_AWARE_SCALE_EDIT
+            s.activePanel == BottomPanel.PUPPET_WARP_EDIT || s.activePanel == BottomPanel.BLEND_IF_EDIT || s.activePanel == BottomPanel.LENS_CORRECTION_EDIT || s.activePanel == BottomPanel.LUT_IMPORT_EDIT || s.activePanel == BottomPanel.CONTENT_AWARE_FILL_EDIT || s.activePanel == BottomPanel.CONTENT_AWARE_SCALE_EDIT || s.activePanel == BottomPanel.SELECT_COLOR_RANGE_EDIT || s.activePanel == BottomPanel.SELECT_SKY_EDIT || s.activePanel == BottomPanel.SELECT_FOCUS_AREA_EDIT
         if (!isProxyPanel) {
             vm.endProxyPreview()
         }
@@ -823,7 +834,7 @@ fun StonebridgeStudioScreen(
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(docW, docH, s.cropFreeMode, s.selectedCropPreset) {
+                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(docW, docH, s.cropFreeMode, s.selectedCropPreset) {
                             awaitPointerEventScope {
                                 while (true) {
                                     val firstDown = awaitFirstDown(requireUnconsumed = false)
@@ -929,7 +940,7 @@ fun StonebridgeStudioScreen(
                                     }
                                 }
                             }
-                        }
+                        })
                 ) {
                     val dim = Color(0x88000000)
                     drawRect(dim, topLeft = Offset(0f, 0f), size = Size(size.width, top.coerceAtLeast(0f)))
@@ -1021,7 +1032,7 @@ fun StonebridgeStudioScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(boxL, boxT, boxW, boxH) {
+                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(boxL, boxT, boxW, boxH) {
                             detectDragGestures(
                                 onDragStart = { pos ->
                                     val ys = floatArrayOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
@@ -1059,7 +1070,7 @@ fun StonebridgeStudioScreen(
                                     }
                                 }
                             )
-                        }
+                        })
                 ) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         // Dashed outer frame over the photo
@@ -1132,7 +1143,7 @@ fun StonebridgeStudioScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(docW, docH, _tick) {
+                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(docW, docH, _tick) {
                             detectDragGestures(
                                 onDragStart = { pos ->
                                     val pts = listOf(toScreen(s.pTl), toScreen(s.pTr), toScreen(s.pBr), toScreen(s.pBl))
@@ -1166,7 +1177,7 @@ fun StonebridgeStudioScreen(
                                     }
                                 }
                             )
-                        }
+                        })
                 ) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val quad = Path().apply {
@@ -1236,7 +1247,7 @@ fun StonebridgeStudioScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(b, z, s.layerLockAspect) {
+                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(b, z, s.layerLockAspect) {
                             awaitPointerEventScope {
                                 while (true) {
                                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -1337,7 +1348,7 @@ fun StonebridgeStudioScreen(
                                     }
                                 }
                             }
-                        }
+                        })
                 ) {
                     val boxWDp = with(density) { boxW.toDp() }
                     val boxHDp = with(density) { boxH.toDp() }
@@ -1574,7 +1585,7 @@ fun StonebridgeStudioScreen(
                 androidx.compose.foundation.Canvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(docW, docH, s.gradStyle, s.gradStartHex, s.gradEndHex, s.gradOpacity) {
+                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(docW, docH, s.gradStyle, s.gradStartHex, s.gradEndHex, s.gradOpacity) {
                             detectDragGestures(
                                 onDragStart = { pos ->
                                     val dA = kotlin.math.hypot(pos.x - ax, pos.y - ay)
@@ -1609,7 +1620,7 @@ fun StonebridgeStudioScreen(
                                     )
                                 }
                             )
-                        }
+                        })
                 ) {
                     drawLine(Color.White.copy(alpha = 0.85f), Offset(ax, ay), Offset(bx, by), strokeWidth = 3f)
                     drawCircle(Color.White, radius = 16f, center = Offset(ax, ay))
@@ -1630,7 +1641,7 @@ fun StonebridgeStudioScreen(
                 androidx.compose.foundation.Canvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(docW, docH, s.shapeKind, s.shapeFillHex, s.shapeStrokeHex, s.shapeStrokeWidth, s.shapeCornerRadius, s.shapeSides) {
+                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(docW, docH, s.shapeKind, s.shapeFillHex, s.shapeStrokeHex, s.shapeStrokeWidth, s.shapeCornerRadius, s.shapeSides) {
                             var dragMode = 5 // 1=TL, 2=TR, 3=BR, 4=BL, 5=rigid move
                             var lastDocX = 0f
                             var lastDocY = 0f
@@ -1703,7 +1714,7 @@ fun StonebridgeStudioScreen(
                                     )
                                 }
                             )
-                        }
+                        })
                 ) {
                     val _camT = s.cameraTick
                     if (_camT < 0) return@Canvas

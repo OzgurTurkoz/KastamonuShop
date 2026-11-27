@@ -277,6 +277,9 @@ class EditorViewModel : ViewModel() {
             val amount: Float,
             val protectSkinTones: Boolean
         ) : ProxyJob()
+        data class SelectSky(val threshold: Float, val softness: Float, val mode: String, val sampleAllLayers: Boolean) : ProxyJob()
+        data class ColorRange(val preset: String, val colorHex: String, val fuzziness: Float, val invert: Boolean, val mode: String, val sampleAllLayers: Boolean) : ProxyJob()
+        data class FocusArea(val rangePct: Float, val noisePct: Float, val mode: String, val sampleAllLayers: Boolean) : ProxyJob()
     }
     private data class StampedProxyJob(val gen: Long, val job: ProxyJob)
     private val proxyGeneration = java.util.concurrent.atomic.AtomicLong(0L)
@@ -1375,6 +1378,15 @@ class EditorViewModel : ViewModel() {
                     )
                     is ProxyJob.ContentAwareScale -> engine.updateProxyContentAwareScale(
                         job.scaleX, job.scaleY, job.amount, job.protectSkinTones
+                    )
+                    is ProxyJob.SelectSky -> engine.updateProxySelectSky(
+                        job.threshold, job.softness, job.mode, job.sampleAllLayers
+                    )
+                    is ProxyJob.ColorRange -> engine.updateProxyColorRange(
+                        job.preset, job.colorHex, job.fuzziness, job.invert, job.mode, job.sampleAllLayers
+                    )
+                    is ProxyJob.FocusArea -> engine.updateProxyFocusArea(
+                        job.rangePct, job.noisePct, job.mode, job.sampleAllLayers
                     )
                 }
                 if (stamped.gen == proxyGeneration.get()) {
@@ -2602,15 +2614,20 @@ class EditorViewModel : ViewModel() {
 
     fun undo() {
         dismissCompareOriginal()
+        invalidateProxyQueue()
         paintExecutor.execute {
             runCatching {
                 val info = engine.undo()
                 val layers = engine.getLayers()
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                val qm = runCatching { engine.isQuickMaskActive() }.getOrDefault(false)
                 val ids = layers.map { it.id }.toSet()
                 _uiState.update {
                     it.copy(
                         docInfo = info,
                         layers = layers,
+                        selectionBounds = bounds,
+                        quickMaskMode = qm,
                         bwLayerId = it.bwLayerId?.takeIf { id -> id in ids },
                         invertLayerId = it.invertLayerId?.takeIf { id -> id in ids }
                     )
@@ -2623,15 +2640,20 @@ class EditorViewModel : ViewModel() {
 
     fun redo() {
         dismissCompareOriginal()
+        invalidateProxyQueue()
         paintExecutor.execute {
             runCatching {
                 val info = engine.redo()
                 val layers = engine.getLayers()
+                val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
+                val qm = runCatching { engine.isQuickMaskActive() }.getOrDefault(false)
                 val ids = layers.map { it.id }.toSet()
                 _uiState.update {
                     it.copy(
                         docInfo = info,
                         layers = layers,
+                        selectionBounds = bounds,
+                        quickMaskMode = qm,
                         bwLayerId = it.bwLayerId?.takeIf { id -> id in ids },
                         invertLayerId = it.invertLayerId?.takeIf { id -> id in ids }
                     )
@@ -3494,7 +3516,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun selectBrushPreset(name: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        paintExecutor.execute {
             runCatching { engine.selectBrushPreset(name) }.onSuccess { summary ->
                 _uiState.update {
                     it.copy(
@@ -3598,7 +3620,7 @@ class EditorViewModel : ViewModel() {
 
     fun applyRedEye(docX: Float, docY: Float) {
         val s = _uiState.value
-        viewModelScope.launch(Dispatchers.IO) {
+        paintExecutor.execute {
             runCatching {
                 val info = engine.applyRedEye(docX, docY, s.redEyePupilSize, s.redEyeDarken)
                 _uiState.update { it.copy(docInfo = info) }
@@ -3619,7 +3641,7 @@ class EditorViewModel : ViewModel() {
 
     fun applyLayerStyleStack(effectsJson: String) {
         invalidateProxyQueue()
-        viewModelScope.launch(Dispatchers.IO) {
+        paintExecutor.execute {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {
                 val info = engine.applyLayerStyleStack(effectsJson)
@@ -3635,7 +3657,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun copyActiveLayerStyle() {
-        viewModelScope.launch(Dispatchers.IO) {
+        paintExecutor.execute {
             runCatching { engine.copyActiveLayerStyle() }.onSuccess { count ->
                 _uiState.update { it.copy(hasCopiedStyle = true) }
                 showStatus("$count katman efekti kopyalandı")
@@ -3646,7 +3668,7 @@ class EditorViewModel : ViewModel() {
     }
 
     fun pasteLayerStyleToActive() {
-        viewModelScope.launch(Dispatchers.IO) {
+        paintExecutor.execute {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {
                 val info = engine.pasteLayerStyleToActive()
@@ -3826,10 +3848,16 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun updateProxySelectSky(threshold: Float, softness: Float, mode: String, sampleAllLayers: Boolean) {
+        enqueueProxyJob(ProxyJob.SelectSky(kotlin.math.round(threshold), kotlin.math.round(softness), mode, sampleAllLayers))
+    }
+
     fun applySelectSky(threshold: Float, softness: Float, mode: String, sampleAllLayers: Boolean) {
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
+                engine.endProxyPreview()
                 val info = engine.selectSky(threshold, softness, mode, sampleAllLayers)
                 val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
                 _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
@@ -3842,10 +3870,16 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun updateProxyColorRange(preset: String, colorHex: String, fuzziness: Float, invert: Boolean, mode: String, sampleAllLayers: Boolean) {
+        enqueueProxyJob(ProxyJob.ColorRange(preset, colorHex, kotlin.math.round(fuzziness), invert, mode, sampleAllLayers))
+    }
+
     fun applyColorRange(preset: String, colorHex: String, fuzziness: Float, invert: Boolean, mode: String, sampleAllLayers: Boolean) {
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
+                engine.endProxyPreview()
                 val info = engine.selectColorRange(preset, colorHex, fuzziness, invert, mode, sampleAllLayers)
                 val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
                 _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
@@ -3858,10 +3892,16 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun updateProxyFocusArea(rangePct: Float, noisePct: Float, mode: String, sampleAllLayers: Boolean) {
+        enqueueProxyJob(ProxyJob.FocusArea(kotlin.math.round(rangePct), kotlin.math.round(noisePct), mode, sampleAllLayers))
+    }
+
     fun applyFocusArea(rangePct: Float, noisePct: Float, mode: String, sampleAllLayers: Boolean) {
+        invalidateProxyQueue()
         _uiState.update { it.copy(isBusy = true) }
         paintExecutor.execute {
             runCatching {
+                engine.endProxyPreview()
                 val info = engine.selectFocusArea(rangePct, noisePct, mode, sampleAllLayers)
                 val bounds = runCatching { engine.getSelectionBounds() }.getOrNull()
                 _uiState.update { it.copy(docInfo = info, selectionBounds = bounds, isBusy = false) }
