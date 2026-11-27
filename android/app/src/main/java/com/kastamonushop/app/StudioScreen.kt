@@ -773,13 +773,15 @@ fun StonebridgeStudioScreen(
             }
             val strokeW = ((state.brushSize * (viewRef?.getCurrentZoom() ?: 1f)).coerceIn(4f, 360f))
             Canvas(modifier = Modifier.fillMaxSize()) {
-                if (s.retouchTrailPoints.size == 1) {
-                    drawCircle(trailColor, radius = strokeW * 0.5f, center = s.retouchTrailPoints[0])
+                val trail = s.retouchTrailPoints
+                if (trail.isEmpty()) return@Canvas
+                if (trail.size == 1) {
+                    drawCircle(trailColor, radius = strokeW * 0.5f, center = trail[0])
                 } else {
                     val p = Path().apply {
-                        moveTo(s.retouchTrailPoints[0].x, s.retouchTrailPoints[0].y)
-                        for (i in 1 until s.retouchTrailPoints.size) {
-                            lineTo(s.retouchTrailPoints[i].x, s.retouchTrailPoints[i].y)
+                        moveTo(trail[0].x, trail[0].y)
+                        for (i in 1 until trail.size) {
+                            lineTo(trail[i].x, trail[i].y)
                         }
                     }
                     drawPath(
