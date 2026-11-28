@@ -1709,9 +1709,12 @@ impl KastamonuEngine {
 
         let (aid, doc_w, doc_h, text_bounds) = {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
-            let id = ds.active_layer().ok_or(EngineError::NoActiveLayer)?;
+            let id = ds.active_layer().ok_or_else(|| EngineError::InvalidParams { detail: "Aktif katman bulunamadı".into() })?;
             let d = ds.doc();
-            let b = d.layer(id).map(|l| l.bounds());
+            let b = d.layer(id).map(|l| match &l.content {
+                LayerContent::Raster(surf) => surf.content_bounds(),
+                _ => d.bounds(),
+            });
             (id, d.size.width.max(1) as f32, d.size.height.max(1) as f32, b)
         };
 
