@@ -1994,7 +1994,7 @@ fun StonebridgeStudioScreen(
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(14.dp))
-                                .clickable { vm.invertSelection() }
+                                .clickable { vm.selectInverse() }
                                 .padding(horizontal = 6.dp, vertical = 3.dp)
                         )
                     }
