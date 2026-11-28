@@ -1365,12 +1365,17 @@ internal fun StudioBottomPanelHost(
                     }
                 )
                 BottomPanel.LIQUIFY_EDIT -> LiquifyEditPanel(
-                    tool = s.liquifyTool, onTool = { s.liquifyTool = it },
+                    tool = s.liquifyTool, onTool = { s.liquifyTool = it; s.liquifyLassoPoints = emptyList() },
                     size = s.liquifySize, onSize = { s.liquifySize = it },
                     pressure = s.liquifyPressure, onPressure = { s.liquifyPressure = it },
-                    onReset = { vm.resetLiquify() },
-                    onClose = { vm.cancelLiquify(); s.liquifyCursorScreen = null; s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
-                    onApply = { s.liquifyCursorScreen = null; vm.commitLiquify(); s.activePanel = BottomPanel.DOCK }
+                    density = s.liquifyDensity, onDensity = { s.liquifyDensity = it },
+                    rate = s.liquifyRate, onRate = { s.liquifyRate = it },
+                    pinEdges = s.liquifyPinEdges, onPinEdges = { s.liquifyPinEdges = it; vm.setLiquifyPinEdges(it) },
+                    reconstructPct = s.liquifyReconstructPct, onReconstructAll = { s.liquifyReconstructPct = it; vm.liquifyReconstructAll(it) },
+                    onMaskAction = { vm.liquifyMaskAction(it) },
+                    onReset = { s.liquifyReconstructPct = 0f; s.liquifyLassoPoints = emptyList(); vm.resetLiquify() },
+                    onClose = { vm.cancelLiquify(); s.liquifyCursorScreen = null; s.liquifyLassoPoints = emptyList(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onApply = { s.liquifyCursorScreen = null; s.liquifyLassoPoints = emptyList(); vm.commitLiquify(); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.EFFECT_MENU -> {
                     Row(
@@ -1691,22 +1696,28 @@ internal fun StudioBottomPanelHost(
                 BottomPanel.CONTENT_AWARE_FILL_EDIT -> ContentAwareFillPanel(
                     s = s,
                     onPreview = {
-                        vm.updateProxyContentAwareFill(
+                        vm.updateProxyContentAwareFillPro(
                             s.cafSampling, s.cafColorAdaptation, s.cafRotationAdaptation,
-                            s.cafScale, s.cafMirror, s.cafSampleAllLayers, s.cafOutput
+                            s.cafScale, s.cafMirror, s.cafSampleAllLayers, s.cafStrokes
                         )
                     },
                     onReset = {
                         s.cafSampling = "auto"; s.cafColorAdaptation = "default"
                         s.cafRotationAdaptation = "none"; s.cafScale = false
                         s.cafMirror = false; s.cafSampleAllLayers = false; s.cafOutput = "current"
+                        s.cafBrushActive = false; s.cafStrokes = emptyList(); s.cafActiveScreenStroke = emptyList()
                         vm.resetProxyPreview()
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onClose = {
+                        s.cafBrushActive = false; s.cafStrokes = emptyList(); s.cafActiveScreenStroke = emptyList()
+                        vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
+                    },
                     onApply = {
-                        vm.applyContentAwareFill(
+                        val strokes = s.cafStrokes
+                        s.cafBrushActive = false; s.cafStrokes = emptyList(); s.cafActiveScreenStroke = emptyList()
+                        vm.applyContentAwareFillPro(
                             s.cafSampling, s.cafColorAdaptation, s.cafRotationAdaptation,
-                            s.cafScale, s.cafMirror, s.cafSampleAllLayers, s.cafOutput
+                            s.cafScale, s.cafMirror, s.cafSampleAllLayers, s.cafOutput, strokes
                         )
                         s.activePanel = BottomPanel.DOCK
                     }
@@ -1739,15 +1750,21 @@ internal fun StudioBottomPanelHost(
                 BottomPanel.CONTENT_AWARE_SCALE_EDIT -> ContentAwareScalePanel(
                     s = s,
                     onPreview = {
-                        vm.updateProxyContentAwareScale(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones)
+                        vm.updateProxyContentAwareScalePro(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones, s.casProtectStrokes)
                     },
                     onReset = {
                         s.casScaleX = 100f; s.casScaleY = 100f; s.casAmount = 100f; s.casProtectSkinTones = true
+                        s.casBrushActive = false; s.casProtectStrokes = emptyList(); s.casActiveScreenStroke = emptyList()
                         vm.resetProxyPreview()
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onClose = {
+                        s.casBrushActive = false; s.casProtectStrokes = emptyList(); s.casActiveScreenStroke = emptyList()
+                        vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
+                    },
                     onApply = {
-                        vm.applyContentAwareScale(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones)
+                        val strokes = s.casProtectStrokes
+                        s.casBrushActive = false; s.casProtectStrokes = emptyList(); s.casActiveScreenStroke = emptyList()
+                        vm.applyContentAwareScalePro(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones, strokes)
                         s.activePanel = BottomPanel.DOCK
                     }
                 )

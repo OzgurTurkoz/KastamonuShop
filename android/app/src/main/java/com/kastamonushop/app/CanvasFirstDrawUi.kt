@@ -755,26 +755,63 @@ internal fun ToolSettingsPopoverCard(
                     }
                 }
                 ActiveTool.PATCH -> {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ProPill(
-                            selected = state.patchMode == "source",
-                            onClick = { vm.updatePatchMode("source") },
-                            label = { Text("Kaynak Modu", fontSize = 11.sp) }
-                        )
-                        ProPill(
-                            selected = state.patchMode == "destination",
-                            onClick = { vm.updatePatchMode("destination") },
-                            label = { Text("Hedef Modu", fontSize = 11.sp) }
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ProPill(selected = state.patchMode == "source", onClick = { vm.updatePatchMode("source") }, label = { Text("Kaynak", fontSize = 11.sp) })
+                        ProPill(selected = state.patchMode == "destination", onClick = { vm.updatePatchMode("destination") }, label = { Text("Hedef", fontSize = 11.sp) })
+                        ProPill(selected = state.patchContentAware, onClick = { vm.updatePatchPro(contentAware = !state.patchContentAware) }, label = { Text(if (state.patchContentAware) "İçerik Duyarlı ✓" else "İçerik Duyarlı", fontSize = 11.sp) })
+                        ProPill(selected = state.patchSampleAll, onClick = { vm.updatePatchPro(sampleAll = !state.patchSampleAll) }, label = { Text("Tüm Katmanlar", fontSize = 11.sp) })
                     }
-                    Text(
-                        text = if (state.selectionBounds == null)
-                            "Önce Seçim aracıyla kusurlu alanı seç, sonra Yama ile temiz dokuya sürükle."
-                        else
-                            "Seçim hazır · seçili alanı temiz doku üzerine sürükleyip bırak.",
-                        color = Color(0xFFAEB4C4),
-                        fontSize = 11.sp
-                    )
+                    if (state.patchContentAware) {
+                        CompactSliderRow("Yapı", "${state.patchStructure}", state.patchStructure.toFloat(), 1f..7f, defaultValue = 4f) {
+                            vm.updatePatchPro(structure = it.roundToInt())
+                        }
+                        CompactSliderRow("Renk Uyumu", "${state.patchColor}", state.patchColor.toFloat(), 0f..10f, defaultValue = 0f) {
+                            vm.updatePatchPro(color = it.roundToInt())
+                        }
+                    }
+                }
+                ActiveTool.SPOT_HEAL -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("contentAware" to "İçerik Duyarlı", "proximityMatch" to "Yakınlık", "createTexture" to "Doku Oluştur").forEach { (id, lbl) ->
+                            ProPill(selected = state.spotHealType == id, onClick = { vm.updateSpotHealPro(type = id) }, label = { Text(lbl, fontSize = 11.sp) })
+                        }
+                        ProPill(selected = state.spotHealSampleAll, onClick = { vm.updateSpotHealPro(sampleAll = !state.spotHealSampleAll) }, label = { Text("Tüm Katmanlar", fontSize = 11.sp) })
+                    }
+                    CompactSliderRow("Sertlik", "%${(state.brushHardness * 100f).roundToInt()}", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
+                        vm.updateBrush(hardness = it)
+                    }
+                }
+                ActiveTool.DODGE, ActiveTool.BURN -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("shadows" to "Gölgeler", "midtones" to "Orta Ton", "highlights" to "Parlaklar").forEach { (id, lbl) ->
+                            ProPill(selected = state.retouchRange == id, onClick = { vm.updateRetouchPro(range = id) }, label = { Text(lbl, fontSize = 11.sp) })
+                        }
+                        ProPill(selected = state.retouchProtectTones, onClick = { vm.updateRetouchPro(protectTones = !state.retouchProtectTones) }, label = { Text("Tonları Koru", fontSize = 11.sp) })
+                    }
+                    CompactSliderRow("Sertlik", "%${(state.brushHardness * 100f).roundToInt()}", state.brushHardness, 0f..1f, defaultValue = 0.5f) {
+                        vm.updateBrush(hardness = it)
+                    }
+                }
+                ActiveTool.SMUDGE -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ProPill(selected = state.smudgeFingerPainting, onClick = { vm.updateRetouchPro(fingerPainting = !state.smudgeFingerPainting) }, label = { Text("Parmak Boyama", fontSize = 11.sp) })
+                        ProPill(selected = state.retouchSampleAll, onClick = { vm.updateRetouchPro(sampleAll = !state.retouchSampleAll) }, label = { Text("Tüm Katmanlar", fontSize = 11.sp) })
+                    }
+                }
+                ActiveTool.SHARPEN_BRUSH -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ProPill(selected = state.sharpenProtectDetail, onClick = { vm.updateRetouchPro(protectDetail = !state.sharpenProtectDetail) }, label = { Text("Detayı Koru", fontSize = 11.sp) })
+                        ProPill(selected = state.retouchSampleAll, onClick = { vm.updateRetouchPro(sampleAll = !state.retouchSampleAll) }, label = { Text("Tüm Katmanlar", fontSize = 11.sp) })
+                    }
                 }
                 ActiveTool.REMOVE_TOOL -> {
                     Text(
@@ -922,31 +959,66 @@ internal fun ToolSettingsPopoverCard(
                     }
                 }
                 ActiveTool.HEALING_BRUSH -> {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ProPill(
-                            selected = state.pickingCloneSource,
-                            onClick = { vm.startPickHealingSource() },
-                            label = { Text("Kaynak Nokta Seç", fontSize = 11.sp) }
-                        )
-                        ProPill(
-                            selected = state.healingSampleAll,
-                            onClick = { vm.updateV183ToolSettings(healingSampleAll = !state.healingSampleAll) },
-                            label = { Text("Tüm Katmanlar", fontSize = 11.sp) }
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ProPill(selected = state.pickingCloneSource, onClick = { vm.startPickHealingSource() }, label = { Text("Kaynak Seç", fontSize = 11.sp) })
+                        ProPill(selected = state.healingAligned, onClick = { vm.updateHealingPro(aligned = !state.healingAligned) }, label = { Text(if (state.healingAligned) "Hizalı ✓" else "Hizalı", fontSize = 11.sp) })
+                        listOf("current" to "Katman", "currentAndBelow" to "Altı Dahil", "all" to "Tümü").forEach { (id, lbl) ->
+                            ProPill(selected = state.healingSampleLayer == id, onClick = { vm.updateHealingPro(sampleLayer = id) }, label = { Text(lbl, fontSize = 10.5.sp) })
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("normal" to "Normal", "replace" to "Değiştir", "multiply" to "Çoğalt", "screen" to "Ekran", "darken" to "Koyu", "lighten" to "Açık").forEach { (id, lbl) ->
+                            ProPill(selected = state.healingMode == id, onClick = { vm.updateHealingPro(mode = id) }, label = { Text(lbl, fontSize = 10.5.sp) })
+                        }
                     }
                 }
                 ActiveTool.CLONE_STAMP -> {
-                    OutlinedButton(
-                        onClick = {
-                            vm.requestPickCloneSource()
-                            onDismiss()
-                        },
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                        modifier = Modifier.height(34.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (state.cloneSourceDoc == null) "Kaynak Noktası Seç" else "Kaynağı Değiştir", fontSize = 11.sp)
+                        OutlinedButton(
+                            onClick = { vm.requestPickCloneSource(); onDismiss() },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Kaynak", fontSize = 10.5.sp)
+                        }
+                        for (slot in 0..4) {
+                            ProPill(
+                                selected = state.cloneSlot == slot,
+                                onClick = { vm.updateCloneSourcePro(slot = slot) },
+                                label = { Text("${slot + 1}", fontSize = 11.sp) }
+                            )
+                        }
+                        ProPill(selected = state.cloneAligned, onClick = { vm.updateCloneSourcePro(aligned = !state.cloneAligned) }, label = { Text(if (state.cloneAligned) "Hizalı ✓" else "Hizalı", fontSize = 10.5.sp) })
+                        ProPill(selected = state.cloneFlipH, onClick = { vm.updateCloneSourcePro(flipH = !state.cloneFlipH) }, label = { Text("Yatay", fontSize = 10.5.sp) })
+                        ProPill(selected = state.cloneFlipV, onClick = { vm.updateCloneSourcePro(flipV = !state.cloneFlipV) }, label = { Text("Dikey", fontSize = 10.5.sp) })
+                        ProPill(selected = state.cloneOverlay, onClick = { vm.updateCloneSourcePro(overlay = !state.cloneOverlay) }, label = { Text("Bindirme", fontSize = 10.5.sp) })
+                        ProPill(selected = false, onClick = { vm.resetCloneSourceTransform() }, label = { Text("Sıfırla", fontSize = 10.5.sp, color = Color(0xFFFF8A8A)) })
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        listOf("current" to "Katman", "currentAndBelow" to "Altı Dahil", "all" to "Tüm Katmanlar").forEach { (id, lbl) ->
+                            ProPill(selected = state.cloneSampleLayer == id, onClick = { vm.updateCloneSourcePro(sampleLayer = id) }, label = { Text(lbl, fontSize = 10.5.sp) })
+                        }
+                    }
+                    CompactSliderRow("Ölçek", "%${state.cloneScale.roundToInt()}", state.cloneScale, 25f..300f, defaultValue = 100f) {
+                        vm.updateCloneSourcePro(scale = it)
+                    }
+                    CompactSliderRow("Döndür", "${state.cloneAngle.roundToInt()}°", state.cloneAngle, -180f..180f, defaultValue = 0f) {
+                        vm.updateCloneSourcePro(angle = it)
                     }
                     CompactSliderRow("Sertlik", "%${(state.brushHardness * 100f).roundToInt()}", state.brushHardness, 0f..1f, defaultValue = 0.85f) {
                         vm.updateBrush(hardness = it)

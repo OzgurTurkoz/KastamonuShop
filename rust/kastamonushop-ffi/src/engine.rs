@@ -224,6 +224,13 @@ pub struct AutoLevelsResult {
     pub blue_white: f32,
 }
 
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct CafSamplingStrokeInput {
+    pub add: bool,
+    pub size: f32,
+    pub points: Vec<StrokeSample>,
+}
+
 
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct StrokeSample {
@@ -303,6 +310,7 @@ struct ActiveLiquifySession {
     current_stroke: LiquifyStroke,
     undo_stack: Vec<LiquifyField>,
     redo_stack: Vec<LiquifyField>,
+    pin_edges: bool,
 }
 
 impl ActiveLiquifySession {
@@ -324,20 +332,52 @@ impl ActiveLiquifySession {
         };
         let rw = x1 - x0;
         let rh = y1 - y0;
+        let has_freeze = self.field.freeze.iter().any(|&v| v > 0.01);
+        let sx_doc = self.bounds.width().max(1) as f64 / self.proxy.w.max(1) as f64;
+        let sy_doc = self.bounds.height().max(1) as f64 / self.proxy.h.max(1) as f64;
         let mut fbuf = vec![0.0f32; rw * rh * 4];
         for y in y0..y1 {
             let src_row = y * self.proxy.w;
             let dst_row = (y - y0) * rw;
+            let doc_y = self.bounds.y0 as f64 + (y as f64 + 0.5) * sy_doc;
             for x in x0..x1 {
                 let p = self.proxy_rgba[src_row + x];
                 let di = (dst_row + (x - x0)) * 4;
-                fbuf[di] = p[0] as f32 / 255.0;
-                fbuf[di + 1] = p[1] as f32 / 255.0;
-                fbuf[di + 2] = p[2] as f32 / 255.0;
+                let mut r = p[0] as f32 / 255.0;
+                let mut g = p[1] as f32 / 255.0;
+                let mut b = p[2] as f32 / 255.0;
+                if has_freeze {
+                    let doc_x = self.bounds.x0 as f64 + (x as f64 + 0.5) * sx_doc;
+                    let fz = self.field.freeze_at(doc_x, doc_y).clamp(0.0, 1.0);
+                    if fz > 0.01 {
+                        let a = fz * 0.44;
+                        r = r * (1.0 - a) + 0.96 * a;
+                        g = g * (1.0 - a) + 0.16 * a;
+                        b = b * (1.0 - a) + 0.24 * a;
+                    }
+                }
+                fbuf[di] = r;
+                fbuf[di + 1] = g;
+                fbuf[di + 2] = b;
                 fbuf[di + 3] = p[3] as f32 / 255.0;
             }
         }
         surf.write_region(Rect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32), &fbuf);
+    }
+
+    fn apply_pin_edges_if_enabled(&mut self) {
+        if !self.pin_edges { return; }
+        let w = self.field.w;
+        let h = self.field.h;
+        if w < 2 || h < 2 { return; }
+        for x in 0..w {
+            self.field.d[x] = [0.0, 0.0];
+            self.field.d[(h - 1) * w + x] = [0.0, 0.0];
+        }
+        for y in 0..h {
+            self.field.d[y * w] = [0.0, 0.0];
+            self.field.d[y * w + (w - 1)] = [0.0, 0.0];
+        }
     }
 }
 
@@ -349,6 +389,9 @@ fn parse_liquify_tool(name: &str) -> LiquifyTool {
         "twirlCcw" => LiquifyTool::TwirlCcw,
         "smooth" => LiquifyTool::Smooth,
         "reconstruct" => LiquifyTool::Reconstruct,
+        "pushLeft" => LiquifyTool::PushLeft,
+        "freeze" => LiquifyTool::Freeze,
+        "thaw" => LiquifyTool::Thaw,
         _ => LiquifyTool::ForwardWarp,
     }
 }
@@ -3956,6 +3999,7 @@ impl KastamonuEngine {
             current_stroke: LiquifyStroke::new(LiquifyTool::ForwardWarp, 120.0),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            pin_edges: true,
         });
         guard.mark_full_dirty();
         Ok(())
@@ -4004,6 +4048,7 @@ impl KastamonuEngine {
         let pt = [x as f64, y as f64, 1.0];
         let prev = liq.last_point.unwrap_or(pt);
         let dirty = liq.field.stroke_segment(&liq.current_stroke, prev, pt);
+        liq.apply_pin_edges_if_enabled();
         liq.last_point = Some(pt);
         if !dirty.is_empty() {
             let pr = liq.proxy.proxy_rect(dirty);
@@ -4019,6 +4064,122 @@ impl KastamonuEngine {
         if let Some(liq) = guard.live_liquify.as_mut() {
             liq.last_point = None;
         }
+    }
+
+    pub fn liquify_stroke_begin_pro(
+        &self,
+        tool: String,
+        size: f32,
+        pressure: f32,
+        density: f32,
+        rate: f32,
+        x: f32,
+        y: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(());
+        };
+        let mut st = LiquifyStroke::new(parse_liquify_tool(&tool), size.clamp(12.0, 600.0) as f64);
+        st.pressure = pressure.clamp(5.0, 100.0) as f64;
+        st.density = density.clamp(10.0, 100.0) as f64;
+        st.rate = rate.clamp(5.0, 100.0) as f64;
+        if liq.undo_stack.len() >= 20 {
+            liq.undo_stack.remove(0);
+        }
+        liq.undo_stack.push(liq.field.clone());
+        liq.redo_stack.clear();
+        let pt = [x as f64, y as f64, 1.0];
+        let dirty = liq.field.stroke_begin(&st, pt);
+        liq.apply_pin_edges_if_enabled();
+        liq.current_stroke = st;
+        liq.last_point = Some(pt);
+        if !dirty.is_empty() {
+            let pr = liq.proxy.proxy_rect(dirty);
+            liq.proxy.render(&liq.field, pr, &mut liq.proxy_rgba);
+            liq.sync_proxy_rect_to_preview_doc(pr);
+            guard.mark_region_dirty(Rect::new(pr[0] as i32, pr[1] as i32, pr[2] as i32, pr[3] as i32));
+        }
+        Ok(())
+    }
+
+    pub fn set_liquify_pin_edges(&self, pin: bool) {
+        let mut guard = self.core.lock();
+        if let Some(liq) = guard.live_liquify.as_mut() {
+            liq.pin_edges = pin;
+            if pin {
+                liq.apply_pin_edges_if_enabled();
+                let full = [0, 0, liq.proxy.w, liq.proxy.h];
+                liq.proxy.render(&liq.field, full, &mut liq.proxy_rgba);
+                liq.sync_proxy_rect_to_preview_doc(full);
+                guard.mark_full_dirty();
+            }
+        }
+    }
+
+    pub fn liquify_mask_action(&self, action: String) -> Result<LiquifyHistoryState, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(LiquifyHistoryState { can_undo: false, can_redo: false });
+        };
+        let tool = match action.as_str() {
+            "freezeAll" => LiquifyTool::FreezeAll,
+            "invertFreeze" => LiquifyTool::InvertFreeze,
+            _ => LiquifyTool::ThawAll,
+        };
+        if liq.undo_stack.len() >= 20 { liq.undo_stack.remove(0); }
+        liq.undo_stack.push(liq.field.clone());
+        liq.redo_stack.clear();
+        let st = LiquifyStroke::new(tool, 1.0);
+        let _ = liq.field.apply_stroke(&st);
+        let full = [0, 0, liq.proxy.w, liq.proxy.h];
+        liq.proxy.render(&liq.field, full, &mut liq.proxy_rgba);
+        liq.sync_proxy_rect_to_preview_doc(full);
+        let state = LiquifyHistoryState { can_undo: !liq.undo_stack.is_empty(), can_redo: false };
+        guard.mark_full_dirty();
+        Ok(state)
+    }
+
+    pub fn liquify_reconstruct_all(&self, amount_pct: f32) -> Result<LiquifyHistoryState, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(LiquifyHistoryState { can_undo: false, can_redo: false });
+        };
+        if liq.undo_stack.len() >= 20 { liq.undo_stack.remove(0); }
+        liq.undo_stack.push(liq.field.clone());
+        liq.redo_stack.clear();
+        let mut st = LiquifyStroke::new(LiquifyTool::ReconstructAll, 1.0);
+        st.amount = Some(amount_pct.clamp(0.0, 100.0) as f64);
+        let _ = liq.field.apply_stroke(&st);
+        let full = [0, 0, liq.proxy.w, liq.proxy.h];
+        liq.proxy.render(&liq.field, full, &mut liq.proxy_rgba);
+        liq.sync_proxy_rect_to_preview_doc(full);
+        let state = LiquifyHistoryState { can_undo: !liq.undo_stack.is_empty(), can_redo: false };
+        guard.mark_full_dirty();
+        Ok(state)
+    }
+
+    pub fn liquify_lasso_mask(&self, points: Vec<StrokeSample>, freeze: bool) -> Result<LiquifyHistoryState, EngineError> {
+        let mut guard = self.core.lock();
+        let Some(liq) = guard.live_liquify.as_mut() else {
+            return Ok(LiquifyHistoryState { can_undo: false, can_redo: false });
+        };
+        if points.len() < 3 {
+            return Ok(LiquifyHistoryState { can_undo: !liq.undo_stack.is_empty(), can_redo: !liq.redo_stack.is_empty() });
+        }
+        if liq.undo_stack.len() >= 20 { liq.undo_stack.remove(0); }
+        liq.undo_stack.push(liq.field.clone());
+        liq.redo_stack.clear();
+        let mut st = LiquifyStroke::new(LiquifyTool::LassoMask, 1.0);
+        st.amount = Some(if freeze { 1.0 } else { 0.0 });
+        st.points = points.iter().map(|p| vec![p.x as f64, p.y as f64]).collect();
+        let _ = liq.field.apply_stroke(&st);
+        let full = [0, 0, liq.proxy.w, liq.proxy.h];
+        liq.proxy.render(&liq.field, full, &mut liq.proxy_rgba);
+        liq.sync_proxy_rect_to_preview_doc(full);
+        let state = LiquifyHistoryState { can_undo: !liq.undo_stack.is_empty(), can_redo: false };
+        guard.mark_full_dirty();
+        Ok(state)
     }
 
     pub fn reset_liquify_session(&self) -> Result<(), EngineError> {
@@ -9034,6 +9195,552 @@ impl KastamonuEngine {
         self.info_from_locked(&guard)
     }
 
+
+    // ==================== v2.4.0 PARÇA 3: CLONE SOURCE 5-SLOT, RETOUCH PRO, CAF & CAS PRO ====================
+
+    pub fn configure_clone_source(
+        &self,
+        slot: u32,
+        scale_x: f32,
+        scale_y: f32,
+        rotation_deg: f32,
+        flip_h: bool,
+        flip_v: bool,
+        show_overlay: bool,
+        overlay_opacity: f32,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let idx = slot.min(4);
+        let _ = guard.session.execute("cloneSource.select", json!({ "index": idx }));
+        let _ = guard.session.execute(
+            "cloneSource.set",
+            json!({
+                "index": idx,
+                "scale": [scale_x.clamp(10.0, 400.0) as f64, scale_y.clamp(10.0, 400.0) as f64],
+                "rotation": rotation_deg.clamp(-180.0, 180.0) as f64,
+                "flipH": flip_h,
+                "flipV": flip_v,
+                "select": true
+            }),
+        );
+        let _ = guard.session.execute(
+            "cloneSource.overlay",
+            json!({
+                "show": show_overlay,
+                "opacity": overlay_opacity.clamp(5.0, 100.0) as f64
+            }),
+        );
+        Ok(())
+    }
+
+    pub fn reset_clone_source_transform(&self, slot: u32) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let _ = guard.session.execute("cloneSource.resetTransform", json!({ "index": slot.min(4) }));
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_clone_stamp_pro(
+        &self,
+        points: Vec<StrokeSample>,
+        src_x: f32,
+        src_y: f32,
+        size: f32,
+        hardness: f32,
+        opacity: f32,
+        aligned: bool,
+        sample_layer: String,
+        mode: String,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Klon darbesi boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev)
+                .ok_or_else(|| EngineError::CommandFailed { detail: "Klonlanacak katman bulunamadı".into() })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let sample_str = match sample_layer.as_str() {
+            "all" | "currentAndBelow" => sample_layer.as_str(),
+            _ => "current",
+        };
+        let mode_str = match mode.as_str() {
+            "multiply" | "screen" | "overlay" | "darken" | "lighten" | "color" => mode.as_str(),
+            _ => "normal",
+        };
+        let pts: Vec<Value> = points.iter().map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64])).collect();
+        let res = guard.session.execute(
+            "paint.cloneStamp",
+            json!({
+                "points": pts,
+                "source": [src_x as f64, src_y as f64],
+                "size": size.clamp(4.0, 400.0) as f64,
+                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "opacity": opacity.clamp(0.05, 1.0) as f64,
+                "aligned": aligned,
+                "sampleLayer": sample_str,
+                "mode": mode_str
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_healing_brush_pro(
+        &self,
+        points: Vec<StrokeSample>,
+        size: f32,
+        hardness: f32,
+        src_x: f32,
+        src_y: f32,
+        aligned: bool,
+        sample_layer: String,
+        mode: String,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Onarım darbesi boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev)
+                .ok_or_else(|| EngineError::CommandFailed { detail: "Onarım katmanı bulunamadı".into() })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let sample_str = match sample_layer.as_str() {
+            "all" | "currentAndBelow" => sample_layer.as_str(),
+            _ => "current",
+        };
+        let mode_str = match mode.as_str() {
+            "replace" | "multiply" | "screen" | "darken" | "lighten" | "color" => mode.as_str(),
+            _ => "normal",
+        };
+        let pts: Vec<Value> = points.iter().map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64])).collect();
+        let res = guard.session.execute(
+            "paint.healingBrush",
+            json!({
+                "points": pts,
+                "source": [src_x as f64, src_y as f64],
+                "size": size.clamp(4.0, 400.0) as f64,
+                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "aligned": aligned,
+                "sampleLayer": sample_str,
+                "mode": mode_str
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn apply_spot_healing_pro(
+        &self,
+        points: Vec<StrokeSample>,
+        size: f32,
+        hardness: f32,
+        spot_type: String,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Nokta düzeltme darbesi boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev)
+                .ok_or_else(|| EngineError::CommandFailed { detail: "Fotoğraf katmanı bulunamadı".into() })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let stype = match spot_type.as_str() {
+            "createTexture" | "proximityMatch" => spot_type.as_str(),
+            _ => "contentAware",
+        };
+        let pts: Vec<Value> = points.iter().map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64])).collect();
+        let res = guard.session.execute(
+            "paint.spotHealing",
+            json!({
+                "points": pts,
+                "size": size.clamp(4.0, 400.0) as f64,
+                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "type": stype,
+                "sampleAllLayers": sample_all_layers
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_patch_tool_pro(
+        &self,
+        dx: i32,
+        dy: i32,
+        mode: String,
+        content_aware: bool,
+        structure: u32,
+        color: u32,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev)
+                .ok_or_else(|| EngineError::CommandFailed { detail: "Yama katmanı bulunamadı".into() })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let safe_mode = if mode == "destination" { "destination" } else { "source" };
+        let res = guard.session.execute(
+            "paint.patch",
+            json!({
+                "offset": [dx, dy],
+                "mode": safe_mode,
+                "contentAware": content_aware,
+                "structure": structure.clamp(1, 7),
+                "color": color.clamp(0, 10),
+                "sampleAllLayers": sample_all_layers
+            }),
+        );
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_retouch_pro(
+        &self,
+        tool: String,
+        points: Vec<StrokeSample>,
+        size: f32,
+        hardness: f32,
+        strength: f32,
+        range: String,
+        protect_tones: bool,
+        finger_painting: bool,
+        protect_detail: bool,
+        sample_all_layers: bool,
+    ) -> Result<DocumentInfo, EngineError> {
+        if points.is_empty() {
+            return Err(EngineError::InvalidParams { detail: "Rötuş darbesi boş".into() });
+        }
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev)
+                .ok_or_else(|| EngineError::CommandFailed { detail: "Rötuş katmanı bulunamadı".into() })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let pts: Vec<Value> = points.iter().map(|p| json!([p.x as f64, p.y as f64, p.pressure.clamp(0.1, 1.0) as f64])).collect();
+        let range_str = match range.as_str() {
+            "shadows" | "highlights" => range.as_str(),
+            _ => "midtones",
+        };
+        let s_pct = strength.clamp(1.0, 100.0) as f64;
+        let (cmd, params) = match tool.as_str() {
+            "dodge" => ("paint.dodge", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "range": range_str, "exposure": s_pct, "protectTones": protect_tones })),
+            "burn" => ("paint.burn", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "range": range_str, "exposure": s_pct, "protectTones": protect_tones })),
+            "smudge" => ("paint.smudge", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "strength": s_pct, "fingerPainting": finger_painting, "sampleAllLayers": sample_all_layers })),
+            "sharpen_brush" => ("paint.sharpen", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "strength": s_pct, "protectDetail": protect_detail, "sampleAllLayers": sample_all_layers })),
+            _ => ("paint.blur", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "strength": s_pct, "sampleAllLayers": sample_all_layers })),
+        };
+        let res = guard.session.execute(cmd, params);
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_proxy_content_aware_fill_pro(
+        &self,
+        sampling: String,
+        color_adaptation: String,
+        rotation_adaptation: String,
+        scale: bool,
+        mirror: bool,
+        sample_all_layers: bool,
+        sampling_strokes: Vec<CafSamplingStrokeInput>,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let sc = proxy.scale;
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if let Some((target_id, was_locked)) = ps.active().and_then(|ds| find_primary_photo_raster_layer(ds.doc(), active_id)) {
+            ps.set_active_layer(Some(target_id));
+            if was_locked {
+                let _ = ps.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+            }
+        }
+        let has_add = sampling_strokes.iter().any(|st| st.add && !st.points.is_empty());
+        let eff_sampling = if sampling == "custom" && has_add {
+            "custom"
+        } else if sampling == "rectangular" {
+            "rectangular"
+        } else {
+            "auto"
+        };
+        let mut params = json!({
+            "sampling": eff_sampling,
+            "colorAdaptation": match color_adaptation.as_str() { "none" | "default" | "high" | "veryHigh" => color_adaptation.as_str(), _ => "default" },
+            "rotationAdaptation": match rotation_adaptation.as_str() { "none" | "low" | "medium" | "high" | "full" => rotation_adaptation.as_str(), _ => "none" },
+            "scale": scale,
+            "mirror": mirror,
+            "sampleAllLayers": sample_all_layers,
+            "output": "current",
+        });
+        if !sampling_strokes.is_empty() {
+            let strokes_json: Vec<Value> = sampling_strokes.iter().filter(|st| !st.points.is_empty()).map(|st| {
+                let pts: Vec<Value> = st.points.iter().map(|p| json!([(p.x * sc) as f64, (p.y * sc) as f64])).collect();
+                json!({ "add": st.add, "size": (st.size * sc).clamp(4.0, 300.0) as f64, "points": pts })
+            }).collect();
+            if !strokes_json.is_empty() {
+                params["samplingStrokes"] = Value::Array(strokes_json);
+            }
+        }
+        let _ = ps.execute("edit.contentAwareFill", params);
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_content_aware_fill_pro(
+        &self,
+        sampling: String,
+        color_adaptation: String,
+        rotation_adaptation: String,
+        scale: bool,
+        mirror: bool,
+        sample_all_layers: bool,
+        output: String,
+        sampling_strokes: Vec<CafSamplingStrokeInput>,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev)
+                .ok_or_else(|| EngineError::CommandFailed { detail: "Dolgu katmanı bulunamadı".into() })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let has_add = sampling_strokes.iter().any(|st| st.add && !st.points.is_empty());
+        let eff_sampling = if sampling == "custom" && has_add {
+            "custom"
+        } else if sampling == "rectangular" {
+            "rectangular"
+        } else {
+            "auto"
+        };
+        let out_str = match output.as_str() { "new" | "duplicate" => output.as_str(), _ => "current" };
+        let mut params = json!({
+            "sampling": eff_sampling,
+            "colorAdaptation": match color_adaptation.as_str() { "none" | "default" | "high" | "veryHigh" => color_adaptation.as_str(), _ => "default" },
+            "rotationAdaptation": match rotation_adaptation.as_str() { "none" | "low" | "medium" | "high" | "full" => rotation_adaptation.as_str(), _ => "none" },
+            "scale": scale,
+            "mirror": mirror,
+            "sampleAllLayers": sample_all_layers,
+            "output": out_str,
+        });
+        if !sampling_strokes.is_empty() {
+            let strokes_json: Vec<Value> = sampling_strokes.iter().filter(|st| !st.points.is_empty()).map(|st| {
+                let pts: Vec<Value> = st.points.iter().map(|p| json!([p.x as f64, p.y as f64])).collect();
+                json!({ "add": st.add, "size": st.size.clamp(4.0, 500.0) as f64, "points": pts })
+            }).collect();
+            if !strokes_json.is_empty() {
+                params["samplingStrokes"] = Value::Array(strokes_json);
+            }
+        }
+        let res = guard.session.execute("edit.contentAwareFill", params);
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if out_str == "current" && prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
+    pub fn update_proxy_content_aware_scale_pro(
+        &self,
+        scale_x: f32,
+        scale_y: f32,
+        amount: f32,
+        protect_skin_tones: bool,
+        protect_strokes: Vec<CafSamplingStrokeInput>,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let sc = proxy.scale;
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if let Some((target_id, was_locked)) = ps.active().and_then(|ds| find_primary_photo_raster_layer(ds.doc(), active_id)) {
+            ps.set_active_layer(Some(target_id));
+            if was_locked {
+                let _ = ps.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+            }
+        }
+        let has_protect = paint_cas_protect_channel(&mut ps, &protect_strokes, sc);
+        let mut params = json!({
+            "scaleX": scale_x.clamp(40.0, 200.0) as f64,
+            "scaleY": scale_y.clamp(40.0, 200.0) as f64,
+            "amount": amount.clamp(0.0, 100.0) as f64,
+            "protectSkinTones": protect_skin_tones
+        });
+        if has_protect {
+            params["protect"] = json!("__cas_protect");
+        }
+        let _ = ps.execute("edit.contentAwareScale", params);
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
+    pub fn apply_content_aware_scale_pro(
+        &self,
+        scale_x: f32,
+        scale_y: f32,
+        amount: f32,
+        protect_skin_tones: bool,
+        protect_strokes: Vec<CafSamplingStrokeInput>,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.live_stroke = None;
+        guard.proxy_preview = None;
+        let (prev_active, target_id, was_locked) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let prev = ds.active_layer();
+            let (id, locked) = find_primary_photo_raster_layer(ds.doc(), prev)
+                .ok_or_else(|| EngineError::CommandFailed { detail: "Ölçeklenecek katman bulunamadı".into() })?;
+            (prev, id, locked)
+        };
+        guard.session.set_active_layer(Some(target_id));
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": false } }));
+        }
+        let has_protect = paint_cas_protect_channel(&mut guard.session, &protect_strokes, 1.0);
+        let mut params = json!({
+            "scaleX": scale_x.clamp(40.0, 200.0) as f64,
+            "scaleY": scale_y.clamp(40.0, 200.0) as f64,
+            "amount": amount.clamp(0.0, 100.0) as f64,
+            "protectSkinTones": protect_skin_tones
+        });
+        if has_protect {
+            params["protect"] = json!("__cas_protect");
+        }
+        let res = guard.session.execute("edit.contentAwareScale", params);
+        if has_protect {
+            if let Some(ds) = guard.session.active_mut() {
+                let doc = Arc::make_mut(ds.doc_mut());
+                doc.channels.retain(|c| c.name != "__cas_protect");
+            }
+        }
+        if was_locked {
+            let _ = guard.session.execute("layer.setProps", json!({ "layer": target_id.0, "locks": { "pixels": true } }));
+        }
+        if prev_active.is_some() {
+            guard.session.set_active_layer(prev_active);
+        }
+        res.map_err(|e| EngineError::CommandFailed { detail: e.to_string() })?;
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     pub fn apply_healing_brush(
         &self,
         points: Vec<StrokeSample>,
@@ -9163,6 +9870,56 @@ fn build_blend_if_params(this_black: u8, this_white: u8, under_black: u8, under_
             "underlying": [ub0, ub1, uw0, uw1]
         }]
     })
+}
+
+
+fn paint_cas_protect_channel(sess: &mut Session, strokes: &[CafSamplingStrokeInput], sc: f32) -> bool {
+    if strokes.is_empty() || strokes.iter().all(|s| s.points.is_empty()) {
+        return false;
+    }
+    if sess.execute("channel.new", json!({ "name": "__cas_protect" })).is_err() {
+        return false;
+    }
+    if let Some(ds) = sess.active_mut() {
+        let doc = Arc::make_mut(ds.doc_mut());
+        let dw = doc.size.width.max(1) as i32;
+        let dh = doc.size.height.max(1) as i32;
+        if let Some(ch) = doc.channels.iter_mut().find(|c| c.name == "__cas_protect") {
+            for st in strokes {
+                let rad = ((st.size * sc * 0.5).clamp(2.0, 220.0)).ceil() as i32;
+                let r2 = (rad * rad) as f32;
+                let val = if st.add { 1.0f32 } else { 0.0f32 };
+                for pt in &st.points {
+                    let cx = (pt.x * sc).round() as i32;
+                    let cy = (pt.y * sc).round() as i32;
+                    let x0 = (cx - rad).clamp(0, dw - 1);
+                    let y0 = (cy - rad).clamp(0, dh - 1);
+                    let x1 = (cx + rad + 1).clamp(x0 + 1, dw);
+                    let y1 = (cy + rad + 1).clamp(y0 + 1, dh);
+                    let rw = (x1 - x0) as usize;
+                    let rh = (y1 - y0) as usize;
+                    let rect = Rect::new(x0, y0, x1, y1);
+                    let mut buf = ch.surface.read_region(rect);
+                    let cstride = (ch.surface.channels() as usize).max(1);
+                    if buf.len() >= rw * rh * cstride {
+                        for dy in 0..rh {
+                            let py = y0 + dy as i32;
+                            for dx in 0..rw {
+                                let px = x0 + dx as i32;
+                                let d2 = ((px - cx) * (px - cx) + (py - cy) * (py - cy)) as f32;
+                                if d2 <= r2 {
+                                    buf[(dy * rw + dx) * cstride] = val;
+                                }
+                            }
+                        }
+                        ch.surface.write_region(rect, &buf);
+                    }
+                }
+            }
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -10949,6 +11706,126 @@ LUT_3D_SIZE 2
             }).count();
             assert!(diff_px > 100, "{kind} must visibly mutate pixels (got diff_px={diff_px})");
         }
+    }
+
+
+    #[test]
+    fn test_v240_liquify_freeze_pin_reconstruct_lasso() {
+        let eng = test_engine();
+        let mut rgba = Vec::with_capacity(96 * 96 * 4);
+        for y in 0..96u8 {
+            for x in 0..96u8 {
+                rgba.extend_from_slice(&[x * 2, y * 2, 120, 255]);
+            }
+        }
+        eng.open_rgba_bytes("liq_pro.png".into(), 96, 96, rgba).unwrap();
+        eng.begin_liquify_session().unwrap();
+        eng.set_liquify_pin_edges(true);
+
+        eng.liquify_mask_action("freezeAll".into()).unwrap();
+        eng.liquify_stroke_begin_pro("forwardWarp".into(), 40.0, 90.0, 70.0, 80.0, 48.0, 48.0).unwrap();
+        eng.liquify_stroke_move(64.0, 48.0).unwrap();
+        eng.liquify_stroke_end();
+        {
+            let g = eng.core.lock();
+            let liq = g.live_liquify.as_ref().unwrap();
+            assert!(liq.field.max_displacement() < 0.05, "FreezeAll must block warp displacement");
+        }
+
+        eng.liquify_mask_action("thawAll".into()).unwrap();
+        eng.liquify_stroke_begin_pro("pushLeft".into(), 40.0, 90.0, 70.0, 80.0, 48.0, 48.0).unwrap();
+        eng.liquify_stroke_move(48.0, 72.0).unwrap();
+        eng.liquify_stroke_end();
+        {
+            let g = eng.core.lock();
+            let liq = g.live_liquify.as_ref().unwrap();
+            assert!(liq.field.max_displacement() > 0.5, "PushLeft after ThawAll must displace field");
+            assert_eq!(liq.field.d[0], [0.0, 0.0], "PinEdges must lock border");
+        }
+        eng.liquify_reconstruct_all(100.0).unwrap();
+        {
+            let g = eng.core.lock();
+            let liq = g.live_liquify.as_ref().unwrap();
+            assert!(liq.field.max_displacement() < 0.05, "ReconstructAll(100) must restore field");
+        }
+
+        let poly = vec![
+            StrokeSample { x: 20.0, y: 20.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 70.0, y: 20.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 70.0, y: 70.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 20.0, y: 70.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        eng.liquify_lasso_mask(poly, true).unwrap();
+        {
+            let g = eng.core.lock();
+            let liq = g.live_liquify.as_ref().unwrap();
+            assert!(liq.field.freeze_at(45.0, 45.0) > 0.9, "LassoMask must freeze interior");
+        }
+        eng.cancel_liquify_session();
+    }
+
+    #[test]
+    fn test_v240_clone_source_and_retouch_pro_real_pixel_diff() {
+        let eng = test_engine();
+        let mut rgba = Vec::with_capacity(64 * 64 * 4);
+        for y in 0..64u8 {
+            for x in 0..64u8 {
+                let r = if x < 32 { 220 } else { 40 };
+                let g = if y < 32 { 60 } else { 200 };
+                rgba.extend_from_slice(&[r, g, 110, 255]);
+            }
+        }
+        eng.open_rgba_bytes("retouch_pro.png".into(), 64, 64, rgba).unwrap();
+
+        eng.configure_clone_source(1, 100.0, 100.0, 15.0, true, false, true, 50.0).unwrap();
+        let pts = vec![
+            StrokeSample { x: 48.0, y: 48.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            StrokeSample { x: 52.0, y: 48.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+        ];
+        let before = { let g = eng.core.lock(); photocraft_compose::flatten(g.active_document().unwrap().as_ref()).px.clone() };
+        let info = eng.apply_clone_stamp_pro(pts.clone(), 16.0, 16.0, 14.0, 0.8, 1.0, true, "current".into(), "normal".into()).unwrap();
+        assert!(info.can_undo);
+        let after = { let g = eng.core.lock(); photocraft_compose::flatten(g.active_document().unwrap().as_ref()).px.clone() };
+        let diff = before.iter().zip(after.iter()).filter(|(a, b)| (a[0] - b[0]).abs() > 0.02 || (a[1] - b[1]).abs() > 0.02).count();
+        assert!(diff > 10, "Clone stamp pro must mutate pixels (diff={diff})");
+        eng.reset_clone_source_transform(1).unwrap();
+
+        let info2 = eng.apply_healing_brush_pro(pts.clone(), 14.0, 0.7, 16.0, 16.0, false, "all".into(), "normal".into()).unwrap();
+        assert!(info2.can_undo);
+        let info3 = eng.apply_spot_healing_pro(pts.clone(), 14.0, 0.8, "proximityMatch".into(), false).unwrap();
+        assert!(info3.can_undo);
+        let info4 = eng.apply_retouch_pro("dodge".into(), pts.clone(), 16.0, 0.5, 65.0, "shadows".into(), true, false, false, false).unwrap();
+        assert!(info4.can_undo);
+        let info5 = eng.apply_retouch_pro("smudge".into(), pts.clone(), 16.0, 0.5, 60.0, "midtones".into(), true, true, false, false).unwrap();
+        assert!(info5.can_undo);
+        let info6 = eng.apply_retouch_pro("sharpen_brush".into(), pts, 16.0, 0.5, 60.0, "midtones".into(), true, false, true, false).unwrap();
+        assert!(info6.can_undo);
+    }
+
+    #[test]
+    fn test_v240_caf_sampling_strokes_and_cas_protect_mask() {
+        let eng = test_engine();
+        let mut rgba = Vec::with_capacity(64 * 64 * 4);
+        for y in 0..64u8 {
+            for x in 0..64u8 {
+                rgba.extend_from_slice(&[80u8.saturating_add(x * 2), 110u8.saturating_add(y), 140, 255]);
+            }
+        }
+        eng.open_rgba_bytes("caf_cas.png".into(), 64, 64, rgba).unwrap();
+        eng.select_rect(24, 24, 16, 16, false, "replace".into()).unwrap();
+        let strokes = vec![CafSamplingStrokeInput {
+            add: true,
+            size: 16.0,
+            points: vec![
+                StrokeSample { x: 8.0, y: 8.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+                StrokeSample { x: 20.0, y: 8.0, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0 },
+            ],
+        }];
+        let info_caf = eng.apply_content_aware_fill_pro("custom".into(), "default".into(), "none".into(), false, false, false, "current".into(), strokes.clone()).unwrap();
+        assert!(info_caf.can_undo);
+        eng.clear_selection().unwrap();
+        let info_cas = eng.apply_content_aware_scale_pro(85.0, 100.0, 100.0, true, strokes).unwrap();
+        assert!(info_cas.can_undo);
     }
 
 }

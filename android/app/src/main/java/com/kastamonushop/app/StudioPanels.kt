@@ -377,22 +377,75 @@ internal fun LiquifyEditPanel(
     tool: String, onTool: (String) -> Unit,
     size: Float, onSize: (Float) -> Unit,
     pressure: Float, onPressure: (Float) -> Unit,
+    density: Float, onDensity: (Float) -> Unit,
+    rate: Float, onRate: (Float) -> Unit,
+    pinEdges: Boolean, onPinEdges: (Boolean) -> Unit,
+    reconstructPct: Float, onReconstructAll: (Float) -> Unit,
+    onMaskAction: (String) -> Unit,
     onReset: () -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("Sıvılaştırma (Liquify)", "Fotoğraf üzerinde parmağınla it, şişir veya bük", "Uygula", onClose, onApply)
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            listOf("forwardWarp" to "İt", "bloat" to "Şişir", "pucker" to "Büz", "twirlCw" to "Burgu", "smooth" to "Yumuşat", "reconstruct" to "Geri Al").forEach { (id, lbl) ->
+    var focusParam by remember { mutableIntStateOf(0) } // 0=Boyut, 1=Güç, 2=Yoğunluk, 3=Hız, 4=Geri Oluştur
+    val tools = listOf(
+        "forwardWarp" to "İt",
+        "pushLeft" to "Sola İt",
+        "bloat" to "Şişir",
+        "pucker" to "Büz",
+        "twirlCw" to "Burgu",
+        "smooth" to "Yumuşat",
+        "reconstruct" to "Geri Al",
+        "freeze" to "Dondur",
+        "thaw" to "Çöz",
+        "lassoFreeze" to "Kement Dondur"
+    )
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        BottomEditorHeader(
+            title = "Sıvılaştır Pro (Liquify)",
+            subtitle = when (tool) {
+                "freeze" -> "Korunacak alanları kırmızıyla boya"
+                "thaw" -> "Dondurma maskesini sil"
+                "lassoFreeze" -> "Dondurulacak bölgenin etrafını çiz"
+                else -> "Fotoğraf üzerinde parmağınla şekillendir"
+            },
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = onApply
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            tools.forEach { (id, lbl) ->
                 ProPill(selected = tool == id, onClick = { onTool(id) }, label = { Text(lbl, fontSize = 11.sp) })
             }
-            OutlinedButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp), modifier = Modifier.height(32.dp)) {
-                Text("Sıfırla", fontSize = 11.sp)
-            }
         }
-        BrushSizeSliderRow("Boyut", size, minPx = 20f, maxPx = 400f, defaultPx = 120f, onChange = onSize)
-        CompactSliderRow("Güç", "%${pressure.roundToInt()}", pressure, 10f..100f, 75f, onChange = onPressure)
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf("Boyut", "Güç", "Yoğunluk", "Hız", "Geri Oluştur").forEachIndexed { i, lbl ->
+                ProPill(selected = focusParam == i, onClick = { focusParam = i }, label = { Text(lbl, fontSize = 10.5.sp) })
+            }
+            ProPill(
+                selected = pinEdges,
+                onClick = { onPinEdges(!pinEdges) },
+                label = { Text(if (pinEdges) "Kenar Sabit ✓" else "Kenar Sabit", fontSize = 10.5.sp) }
+            )
+            ProPill(selected = false, onClick = { onMaskAction("freezeAll") }, label = { Text("Tümü Dondur", fontSize = 10.5.sp) })
+            ProPill(selected = false, onClick = { onMaskAction("thawAll") }, label = { Text("Maske Sil", fontSize = 10.5.sp) })
+            ProPill(selected = false, onClick = { onMaskAction("invertFreeze") }, label = { Text("Ters Çevir", fontSize = 10.5.sp) })
+            ProPill(selected = false, onClick = onReset, label = { Text("Sıfırla", fontSize = 10.5.sp, color = Color(0xFFFF8A8A)) })
+        }
+        when (focusParam) {
+            0 -> BrushSizeSliderRow("Boyut", size, minPx = 20f, maxPx = 400f, defaultPx = 120f, onChange = onSize)
+            1 -> CompactSliderRow("Güç", "%${pressure.roundToInt()}", pressure, 10f..100f, 75f, onChange = onPressure)
+            2 -> CompactSliderRow("Yoğunluk", "%${density.roundToInt()}", density, 10f..100f, 65f, onChange = onDensity)
+            3 -> CompactSliderRow("Hız", "%${rate.roundToInt()}", rate, 5f..100f, 75f, onChange = onRate)
+            else -> CompactSliderRow("Geri Oluştur", "%${reconstructPct.roundToInt()}", reconstructPct, 0f..100f, 0f, onChange = onReconstructAll)
+        }
     }
 }
 

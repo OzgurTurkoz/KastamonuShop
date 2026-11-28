@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.kastamonushop_ffi.AutoLevelsResult
+import uniffi.kastamonushop_ffi.CafSamplingStrokeInput
 import uniffi.kastamonushop_ffi.DocumentInfo
 import uniffi.kastamonushop_ffi.HistogramData
 import uniffi.kastamonushop_ffi.SampledColorInfo
@@ -151,7 +152,31 @@ data class EditorUiState(
     val artHistoryArea: Float = 65f,
     val artHistoryTolerance: Float = 0f,
     val healingSampleAll: Boolean = false,
-    val histogram: HistogramData? = null
+    val histogram: HistogramData? = null,
+    // v2.4.0 Parça 3: 5-Slot Clone Source, Healing/SpotHeal/Patch/Retouch Pro
+    val cloneSlot: Int = 0,
+    val cloneScale: Float = 100f,
+    val cloneAngle: Float = 0f,
+    val cloneFlipH: Boolean = false,
+    val cloneFlipV: Boolean = false,
+    val cloneOverlay: Boolean = true,
+    val cloneAligned: Boolean = true,
+    val cloneSampleLayer: String = "current",
+    val cloneBlendMode: String = "normal",
+    val healingAligned: Boolean = true,
+    val healingSampleLayer: String = "current",
+    val healingMode: String = "normal",
+    val spotHealType: String = "contentAware",
+    val spotHealSampleAll: Boolean = false,
+    val patchContentAware: Boolean = false,
+    val patchStructure: Int = 4,
+    val patchColor: Int = 0,
+    val patchSampleAll: Boolean = false,
+    val retouchRange: String = "midtones",
+    val retouchProtectTones: Boolean = true,
+    val smudgeFingerPainting: Boolean = false,
+    val sharpenProtectDetail: Boolean = true,
+    val retouchSampleAll: Boolean = false
 )
 
 class EditorViewModel : ViewModel() {
@@ -2475,7 +2500,15 @@ class EditorViewModel : ViewModel() {
         paintExecutor.execute {
             try {
                 runCatching {
-                    val info = engine.applyRetouchStroke(toolKey, samples, s.brushSize, s.brushHardness, s.retouchStrength)
+                    val info = if (toolKey == "spot_heal") {
+                        engine.applySpotHealingPro(samples, s.brushSize, s.brushHardness, s.spotHealType, s.spotHealSampleAll)
+                    } else {
+                        engine.applyRetouchPro(
+                            toolKey, samples, s.brushSize, s.brushHardness, s.retouchStrength,
+                            s.retouchRange, s.retouchProtectTones, s.smudgeFingerPainting,
+                            s.sharpenProtectDetail, s.retouchSampleAll
+                        )
+                    }
                     val layers = engine.getLayers()
                     _uiState.update { it.copy(docInfo = info, layers = layers) }
                     NativeSurfaceBridge.nativeRenderFrame()
@@ -3842,7 +3875,7 @@ class EditorViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isBusy = true) }
             runCatching {
-                val info = engine.applyPatchTool(dx, dy, s.patchMode)
+                val info = engine.applyPatchToolPro(dx, dy, s.patchMode, s.patchContentAware, s.patchStructure.toUInt(), s.patchColor.toUInt(), s.patchSampleAll)
                 val layers = engine.getLayers()
                 _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
                 NativeSurfaceBridge.nativeRenderFrame()
@@ -4417,7 +4450,7 @@ class EditorViewModel : ViewModel() {
         }
         paintExecutor.execute {
             runCatching {
-                val info = engine.applyHealingBrush(samples, s.brushSize, s.brushHardness, src.first, src.second, s.healingSampleAll)
+                val info = engine.applyHealingBrushPro(samples, s.brushSize, s.brushHardness, src.first, src.second, s.healingAligned, s.healingSampleLayer, s.healingMode)
                 _uiState.update { it.copy(docInfo = info) }
                 NativeSurfaceBridge.nativeRenderFrame()
                 refreshLayerThumbnails()
@@ -4426,4 +4459,191 @@ class EditorViewModel : ViewModel() {
             }
         }
     }
+
+    // ==================== v2.4.0 PARÇA 3: LIQUIFY PRO, CLONE SOURCE 5-SLOT, RETOUCH PRO, CAF/CAS PRO ====================
+
+    fun onLiquifyStartPro(tool: String, size: Float, pressure: Float, density: Float, rate: Float, docX: Float, docY: Float) {
+        paintExecutor.execute {
+            runCatching {
+                engine.liquifyStrokeBeginPro(tool, size, pressure, density, rate, docX, docY)
+                val hist = engine.getLiquifyHistoryState()
+                _uiState.update { it.copy(liquifyCanUndo = hist.canUndo, liquifyCanRedo = hist.canRedo) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun setLiquifyPinEdges(pin: Boolean) {
+        paintExecutor.execute {
+            runCatching {
+                engine.setLiquifyPinEdges(pin)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun liquifyMaskAction(action: String) {
+        paintExecutor.execute {
+            runCatching {
+                val hist = engine.liquifyMaskAction(action)
+                _uiState.update { it.copy(liquifyCanUndo = hist.canUndo, liquifyCanRedo = hist.canRedo) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun liquifyReconstructAll(amountPct: Float) {
+        paintExecutor.execute {
+            runCatching {
+                val hist = engine.liquifyReconstructAll(amountPct)
+                _uiState.update { it.copy(liquifyCanUndo = hist.canUndo, liquifyCanRedo = hist.canRedo) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun liquifyLassoMask(points: List<StrokeSample>, freeze: Boolean) {
+        if (points.size < 3) return
+        paintExecutor.execute {
+            runCatching {
+                val hist = engine.liquifyLassoMask(points, freeze)
+                _uiState.update { it.copy(liquifyCanUndo = hist.canUndo, liquifyCanRedo = hist.canRedo) }
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun updateCloneSourcePro(
+        slot: Int = _uiState.value.cloneSlot,
+        scale: Float = _uiState.value.cloneScale,
+        angle: Float = _uiState.value.cloneAngle,
+        flipH: Boolean = _uiState.value.cloneFlipH,
+        flipV: Boolean = _uiState.value.cloneFlipV,
+        overlay: Boolean = _uiState.value.cloneOverlay,
+        aligned: Boolean = _uiState.value.cloneAligned,
+        sampleLayer: String = _uiState.value.cloneSampleLayer,
+        blendMode: String = _uiState.value.cloneBlendMode
+    ) {
+        _uiState.update {
+            it.copy(
+                cloneSlot = slot.coerceIn(0, 4),
+                cloneScale = scale.coerceIn(25f, 300f),
+                cloneAngle = angle.coerceIn(-180f, 180f),
+                cloneFlipH = flipH,
+                cloneFlipV = flipV,
+                cloneOverlay = overlay,
+                cloneAligned = aligned,
+                cloneSampleLayer = sampleLayer,
+                cloneBlendMode = blendMode
+            )
+        }
+        paintExecutor.execute {
+            runCatching {
+                engine.configureCloneSource(slot.toUInt(), scale, scale, angle, flipH, flipV, overlay, 50f)
+            }
+        }
+    }
+
+    fun resetCloneSourceTransform() {
+        val slot = _uiState.value.cloneSlot
+        _uiState.update { it.copy(cloneScale = 100f, cloneAngle = 0f, cloneFlipH = false, cloneFlipV = false) }
+        paintExecutor.execute {
+            runCatching { engine.resetCloneSourceTransform(slot.toUInt()) }
+        }
+    }
+
+    fun updateHealingPro(aligned: Boolean = _uiState.value.healingAligned, sampleLayer: String = _uiState.value.healingSampleLayer, mode: String = _uiState.value.healingMode) {
+        _uiState.update { it.copy(healingAligned = aligned, healingSampleLayer = sampleLayer, healingMode = mode, healingSampleAll = sampleLayer != "current") }
+    }
+
+    fun updateSpotHealPro(type: String = _uiState.value.spotHealType, sampleAll: Boolean = _uiState.value.spotHealSampleAll) {
+        _uiState.update { it.copy(spotHealType = type, spotHealSampleAll = sampleAll) }
+    }
+
+    fun updatePatchPro(contentAware: Boolean = _uiState.value.patchContentAware, structure: Int = _uiState.value.patchStructure, color: Int = _uiState.value.patchColor, sampleAll: Boolean = _uiState.value.patchSampleAll) {
+        _uiState.update { it.copy(patchContentAware = contentAware, patchStructure = structure.coerceIn(1, 7), patchColor = color.coerceIn(0, 10), patchSampleAll = sampleAll) }
+    }
+
+    fun updateRetouchPro(
+        range: String = _uiState.value.retouchRange,
+        protectTones: Boolean = _uiState.value.retouchProtectTones,
+        fingerPainting: Boolean = _uiState.value.smudgeFingerPainting,
+        protectDetail: Boolean = _uiState.value.sharpenProtectDetail,
+        sampleAll: Boolean = _uiState.value.retouchSampleAll
+    ) {
+        _uiState.update {
+            it.copy(
+                retouchRange = range,
+                retouchProtectTones = protectTones,
+                smudgeFingerPainting = fingerPainting,
+                sharpenProtectDetail = protectDetail,
+                retouchSampleAll = sampleAll
+            )
+        }
+    }
+
+    fun updateProxyContentAwareFillPro(
+        sampling: String, colorAdaptation: String, rotationAdaptation: String,
+        scale: Boolean, mirror: Boolean, sampleAllLayers: Boolean,
+        strokes: List<CafSamplingStrokeInput>
+    ) {
+        paintExecutor.execute {
+            runCatching {
+                engine.updateProxyContentAwareFillPro(sampling, colorAdaptation, rotationAdaptation, scale, mirror, sampleAllLayers, strokes)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun applyContentAwareFillPro(
+        sampling: String, colorAdaptation: String, rotationAdaptation: String,
+        scale: Boolean, mirror: Boolean, sampleAllLayers: Boolean, output: String,
+        strokes: List<CafSamplingStrokeInput>
+    ) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyContentAwareFillPro(sampling, colorAdaptation, rotationAdaptation, scale, mirror, sampleAllLayers, output, strokes)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("İçeriğe Uygun Dolgu uygulandı", 2200L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Dolgu hatası: ${err.message}", 3200L)
+            }
+        }
+    }
+
+    fun updateProxyContentAwareScalePro(
+        scaleX: Float, scaleY: Float, amount: Float, protectSkinTones: Boolean,
+        protectStrokes: List<CafSamplingStrokeInput>
+    ) {
+        paintExecutor.execute {
+            runCatching {
+                engine.updateProxyContentAwareScalePro(scaleX, scaleY, amount, protectSkinTones, protectStrokes)
+                NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    fun applyContentAwareScalePro(
+        scaleX: Float, scaleY: Float, amount: Float, protectSkinTones: Boolean,
+        protectStrokes: List<CafSamplingStrokeInput>
+    ) {
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                val info = engine.applyContentAwareScalePro(scaleX, scaleY, amount, protectSkinTones, protectStrokes)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("İçeriğe Uygun Ölçek uygulandı", 2200L)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Ölçekleme hatası: ${err.message}", 3200L)
+            }
+        }
+    }
+
 }

@@ -1929,7 +1929,7 @@ fun StonebridgeStudioScreen(
                                                 singleStrokeActive = true
                                                 s.liquifyCursorScreen = pos
                                                 val (dx0, dy0) = viewRef.screenToDoc(downPos.x, downPos.y)
-                                                vm.onLiquifyStart(s.liquifyTool, s.liquifySize, s.liquifyPressure, 55f, dx0, dy0)
+                                                vm.onLiquifyStartPro(s.liquifyTool, s.liquifySize, s.liquifyPressure, s.liquifyDensity, s.liquifyRate, dx0, dy0)
                                                 val (dx, dy) = viewRef.screenToDoc(pos.x, pos.y)
                                                 vm.onLiquifyMove(dx, dy)
                                             }
@@ -1952,6 +1952,202 @@ fun StonebridgeStudioScreen(
                         drawCircle(Color(0x884F9CFF), radius = (rPx - 2f).coerceAtLeast(4f), center = cur, style = Stroke(width = 1.2f))
                     }
                 }
+            }
+        }
+
+        // v2.4.0 Parça 3 (Blok 1): Global 1-Tap Floating Selection Pill — clear or invert selection from ANY tool!
+        if (state.selectionBounds != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .padding(top = 60.dp, end = 12.dp),
+                contentAlignment = Alignment.TopEnd
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xE6141720),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x66F59E0B)),
+                    shadowElevation = 6.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { vm.clearSelection() }
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Seçimi Kaldır", tint = Color(0xFFFF8A8A), modifier = Modifier.size(14.dp))
+                            Text("Seçimi Kaldır", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Box(Modifier.width(1.dp).height(14.dp).background(Color(0x33FFFFFF)))
+                        Text(
+                            "Ters Çevir",
+                            color = Color(0xFFF59E0B),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { vm.invertSelection() }
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // v2.4.0 Parça 3 (Blok 2): Liquify Lasso Freeze Touch Overlay
+        if (s.activePanel == BottomPanel.LIQUIFY_EDIT && s.liquifyTool == "lassoFreeze" && !s.singleFingerPanMode) {
+            val viewRef = s.canvasViewRef
+            if (viewRef != null) {
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(viewRef, s.liquifyTool) {
+                            detectDragGestures(
+                                onDragStart = { pos -> s.liquifyLassoPoints = listOf(pos) },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val prev = s.liquifyLassoPoints.lastOrNull()
+                                    if (prev == null || kotlin.math.hypot((change.position.x - prev.x).toDouble(), (change.position.y - prev.y).toDouble()) > 6.0) {
+                                        s.liquifyLassoPoints = s.liquifyLassoPoints + change.position
+                                    }
+                                },
+                                onDragEnd = {
+                                    val pts = s.liquifyLassoPoints
+                                    s.liquifyLassoPoints = emptyList()
+                                    if (pts.size >= 3) {
+                                        val docPts = pts.map { p ->
+                                            val (dx, dy) = viewRef.screenToDoc(p.x, p.y)
+                                            uniffi.kastamonushop_ffi.StrokeSample(dx, dy, 1f, 0f, 0f)
+                                        }
+                                        vm.liquifyLassoMask(docPts, freeze = true)
+                                    }
+                                },
+                                onDragCancel = { s.liquifyLassoPoints = emptyList() }
+                            )
+                        }
+                ) {
+                    if (s.liquifyLassoPoints.size >= 2) {
+                        val path = Path().apply {
+                            moveTo(s.liquifyLassoPoints.first().x, s.liquifyLassoPoints.first().y)
+                            s.liquifyLassoPoints.drop(1).forEach { lineTo(it.x, it.y) }
+                        }
+                        drawPath(path, color = Color(0xFFFF4D6D), style = Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))))
+                    }
+                }
+            }
+        }
+
+        // v2.4.0 Parça 3 (Blok 5a): CAF Green/Red Sampling Brush Overlay
+        if (s.activePanel == BottomPanel.CONTENT_AWARE_FILL_EDIT && s.cafBrushActive && !s.singleFingerPanMode) {
+            val viewRef = s.canvasViewRef
+            if (viewRef != null) {
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(viewRef, s.cafBrushAdd, s.cafBrushSize) {
+                            detectDragGestures(
+                                onDragStart = { pos -> s.cafActiveScreenStroke = listOf(pos) },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    s.cafActiveScreenStroke = s.cafActiveScreenStroke + change.position
+                                },
+                                onDragEnd = {
+                                    val pts = s.cafActiveScreenStroke
+                                    s.cafActiveScreenStroke = emptyList()
+                                    if (pts.isNotEmpty()) {
+                                        val docPts = pts.map { p ->
+                                            val (dx, dy) = viewRef.screenToDoc(p.x, p.y)
+                                            uniffi.kastamonushop_ffi.StrokeSample(dx, dy, 1f, 0f, 0f)
+                                        }
+                                        val entry = uniffi.kastamonushop_ffi.CafSamplingStrokeInput(s.cafBrushAdd, s.cafBrushSize, docPts)
+                                        s.cafStrokes = (s.cafStrokes + entry).takeLast(32)
+                                        if (s.cafBrushAdd && s.cafSampling != "custom") s.cafSampling = "custom"
+                                        vm.updateProxyContentAwareFillPro(
+                                            s.cafSampling, s.cafColorAdaptation, s.cafRotationAdaptation,
+                                            s.cafScale, s.cafMirror, s.cafSampleAllLayers, s.cafStrokes
+                                        )
+                                    }
+                                },
+                                onDragCancel = { s.cafActiveScreenStroke = emptyList() }
+                            )
+                        }
+                ) {
+                    val col = if (s.cafBrushAdd) Color(0x664ADE80) else Color(0x66FF5252)
+                    val rPx = (s.cafBrushSize * 0.5f * viewRef.getCurrentZoom()).coerceIn(8f, 120f)
+                    s.cafActiveScreenStroke.forEach { pt -> drawCircle(col, radius = rPx, center = pt) }
+                }
+            }
+        }
+
+        // v2.4.0 Parça 3 (Blok 5b): CAS Blue Protect Mask Brush Overlay
+        if (s.activePanel == BottomPanel.CONTENT_AWARE_SCALE_EDIT && s.casBrushActive && !s.singleFingerPanMode) {
+            val viewRef = s.canvasViewRef
+            if (viewRef != null) {
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(viewRef, s.casBrushAdd, s.casBrushSize) {
+                            detectDragGestures(
+                                onDragStart = { pos -> s.casActiveScreenStroke = listOf(pos) },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    s.casActiveScreenStroke = s.casActiveScreenStroke + change.position
+                                },
+                                onDragEnd = {
+                                    val pts = s.casActiveScreenStroke
+                                    s.casActiveScreenStroke = emptyList()
+                                    if (pts.isNotEmpty()) {
+                                        val docPts = pts.map { p ->
+                                            val (dx, dy) = viewRef.screenToDoc(p.x, p.y)
+                                            uniffi.kastamonushop_ffi.StrokeSample(dx, dy, 1f, 0f, 0f)
+                                        }
+                                        val entry = uniffi.kastamonushop_ffi.CafSamplingStrokeInput(s.casBrushAdd, s.casBrushSize, docPts)
+                                        s.casProtectStrokes = (s.casProtectStrokes + entry).takeLast(32)
+                                        vm.updateProxyContentAwareScalePro(s.casScaleX, s.casScaleY, s.casAmount, s.casProtectSkinTones, s.casProtectStrokes)
+                                    }
+                                },
+                                onDragCancel = { s.casActiveScreenStroke = emptyList() }
+                            )
+                        }
+                ) {
+                    val col = if (s.casBrushAdd) Color(0x6660A5FA) else Color(0x66FF5252)
+                    val rPx = (s.casBrushSize * 0.5f * viewRef.getCurrentZoom()).coerceIn(8f, 120f)
+                    s.casActiveScreenStroke.forEach { pt -> drawCircle(col, radius = rPx, center = pt) }
+                }
+            }
+        }
+
+        // v2.4.0 Parça 3 (Blok 5c): Content-Aware Move Direct Finger Drag on Canvas
+        if (s.activePanel == BottomPanel.CONTENT_AWARE_MOVE_EDIT && !s.singleFingerPanMode) {
+            val viewRef = s.canvasViewRef
+            if (viewRef != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(viewRef, s.camMoveMode, s.camMoveStructure, s.camMoveColor, s.camMoveScale, s.camMoveRotate, s.camMoveSampleAll) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val zoom = viewRef.getCurrentZoom().coerceAtLeast(0.1f)
+                                    s.camMoveDx = (s.camMoveDx + dragAmount.x / zoom).coerceIn(-1200f, 1200f)
+                                    s.camMoveDy = (s.camMoveDy + dragAmount.y / zoom).coerceIn(-1200f, 1200f)
+                                    vm.updateProxyContentAwareMove(
+                                        s.camMoveDx, s.camMoveDy, s.camMoveMode,
+                                        s.camMoveStructure.roundToInt(), s.camMoveColor.roundToInt(),
+                                        s.camMoveScale, s.camMoveRotate, s.camMoveSampleAll
+                                    )
+                                }
+                            )
+                        }
+                )
             }
         }
 

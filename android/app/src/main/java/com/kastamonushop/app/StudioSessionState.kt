@@ -528,6 +528,26 @@ internal class StudioSessionState {
     var gmUseMid by mutableStateOf(true)
     var gmReverse by mutableStateOf(false)
     var gmPresetIdx by mutableIntStateOf(0)
+
+    // v2.4.0 Parça 3: Liquify Pro (Density, Rate, Pin Edges, ReconstructAll, Lasso Freeze)
+    var liquifyDensity by mutableFloatStateOf(65f)
+    var liquifyRate by mutableFloatStateOf(75f)
+    var liquifyPinEdges by mutableStateOf(true)
+    var liquifyLassoPoints by mutableStateOf<List<Offset>>(emptyList())
+    var liquifyReconstructPct by mutableFloatStateOf(0f)
+
+    // v2.4.0 Parça 3: CAF Sampling Brush (Green Mask) & CAS Protect Brush (Blue Mask)
+    var cafBrushActive by mutableStateOf(false)
+    var cafBrushAdd by mutableStateOf(true)
+    var cafBrushSize by mutableFloatStateOf(80f)
+    var cafStrokes by mutableStateOf<List<uniffi.kastamonushop_ffi.CafSamplingStrokeInput>>(emptyList())
+    var cafActiveScreenStroke by mutableStateOf<List<Offset>>(emptyList())
+
+    var casBrushActive by mutableStateOf(false)
+    var casBrushAdd by mutableStateOf(true)
+    var casBrushSize by mutableFloatStateOf(90f)
+    var casProtectStrokes by mutableStateOf<List<uniffi.kastamonushop_ffi.CafSamplingStrokeInput>>(emptyList())
+    var casActiveScreenStroke by mutableStateOf<List<Offset>>(emptyList())
     fun resetGradientMapPro() {
         gmShadowHex = "#141B3A"; gmMidHex = "#B84A39"; gmHighHex = "#F7D488"
         gmUseMid = true; gmReverse = false; gmPresetIdx = 0

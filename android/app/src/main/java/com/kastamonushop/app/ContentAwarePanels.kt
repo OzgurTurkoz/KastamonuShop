@@ -49,11 +49,32 @@ internal fun ContentAwareFillPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Örnek:", fontSize = 10.sp, color = Color(0xFF9AA4BD))
-            listOf("auto" to "Otomatik", "rectangular" to "Dikdörtgen").forEach { (id, lbl) ->
+            listOf("auto" to "Otomatik", "rectangular" to "Dikdörtgen", "custom" to "Özel Fırça").forEach { (id, lbl) ->
                 ProPill(
                     selected = s.cafSampling == id,
-                    onClick = { s.cafSampling = id; onPreview() },
+                    onClick = {
+                        s.cafSampling = id
+                        s.cafBrushActive = (id == "custom")
+                        onPreview()
+                    },
                     label = { Text(lbl, fontSize = 11.sp, maxLines = 1) }
+                )
+            }
+            ProPill(
+                selected = s.cafBrushActive && s.cafBrushAdd,
+                onClick = { s.cafBrushActive = true; s.cafBrushAdd = true },
+                label = { Text("+ Alan Boya", fontSize = 10.5.sp, color = Color(0xFF4ADE80)) }
+            )
+            ProPill(
+                selected = s.cafBrushActive && !s.cafBrushAdd,
+                onClick = { s.cafBrushActive = true; s.cafBrushAdd = false },
+                label = { Text("- Hariç Tut", fontSize = 10.5.sp, color = Color(0xFFFF8A8A)) }
+            )
+            if (s.cafStrokes.isNotEmpty()) {
+                ProPill(
+                    selected = false,
+                    onClick = { s.cafStrokes = emptyList(); onPreview() },
+                    label = { Text("Maske Sil", fontSize = 10.5.sp, color = Color(0xFFFFB74D)) }
                 )
             }
             Text("Renk:", fontSize = 10.sp, color = Color(0xFF9AA4BD))
@@ -220,12 +241,34 @@ internal fun ContentAwareScalePanel(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         BottomEditorHeader(
-            title = "İçerik Duyarlı Ölçekleme",
-            subtitle = "",
+            title = "İçerik Duyarlı Ölçekleme Pro",
+            subtitle = if (s.casBrushActive) "Korunacak kişi/nesnenin üstünü maviyle boya" else "Ölçekle veya Koruma Maskesi boya",
             applyLabel = "Uygula",
             onClose = onClose,
             onApply = onApply
         )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ProPill(
+                selected = s.casBrushActive && s.casBrushAdd,
+                onClick = { s.casBrushActive = !(s.casBrushActive && s.casBrushAdd); s.casBrushAdd = true },
+                label = { Text(if (s.casBrushActive && s.casBrushAdd) "Koruma Boya ✓" else "Koruma Boya", fontSize = 10.5.sp, color = Color(0xFF60A5FA)) }
+            )
+            ProPill(
+                selected = s.casBrushActive && !s.casBrushAdd,
+                onClick = { s.casBrushActive = !(s.casBrushActive && !s.casBrushAdd); s.casBrushAdd = false },
+                label = { Text("Maske Sil", fontSize = 10.5.sp) }
+            )
+            if (s.casProtectStrokes.isNotEmpty()) {
+                ProPill(
+                    selected = false,
+                    onClick = { s.casProtectStrokes = emptyList(); onPreview() },
+                    label = { Text("Temizle (${s.casProtectStrokes.size})", fontSize = 10.5.sp, color = Color(0xFFFF8A8A)) }
+                )
+            }
+        }
 
         CompactSliderRow(
             label = "Genişlik",
