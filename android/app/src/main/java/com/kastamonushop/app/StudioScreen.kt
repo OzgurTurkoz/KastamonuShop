@@ -1072,6 +1072,10 @@ fun StonebridgeStudioScreen(
                                         val nx = ((pos.x - boxL) / boxW).coerceIn(0f, 1f)
                                         bestIdx = (nx * 4f).roundToInt().coerceIn(0, 4)
                                     }
+                                    if (bestIdx in 0..4) {
+                                        s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                        s.curveRedoStack = emptyList()
+                                    }
                                     s.draggingCurveNode = bestIdx
                                 },
                                 onDragEnd = { s.draggingCurveNode = -1 },
@@ -1082,29 +1086,18 @@ fun StonebridgeStudioScreen(
                                         change.consume()
                                         val ny = ((boxB - change.position.y) / boxH).coerceIn(0f, 1f)
                                         when (s.curveChannelIdx) {
-                                            1 -> {
-                                                s.curveRedPts = s.curveRedPts.toMutableList().apply { this[idx] = ny }
-                                                vm.updateProxyAdjustment("curves", buildAllChannelsJson())
-                                            }
-                                            2 -> {
-                                                s.curveGreenPts = s.curveGreenPts.toMutableList().apply { this[idx] = ny }
-                                                vm.updateProxyAdjustment("curves", buildAllChannelsJson())
-                                            }
-                                            3 -> {
-                                                s.curveBluePts = s.curveBluePts.toMutableList().apply { this[idx] = ny }
-                                                vm.updateProxyAdjustment("curves", buildAllChannelsJson())
-                                            }
-                                            else -> {
-                                                when (idx) {
-                                                    0 -> s.curveBlackVal = ny
-                                                    1 -> s.curveShadowVal = ny
-                                                    2 -> s.curveMidVal = ny
-                                                    3 -> s.curveHighVal = ny
-                                                    4 -> s.curveWhiteVal = ny
-                                                }
-                                                pushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                                            1 -> s.curveRedPts = s.curveRedPts.toMutableList().apply { this[idx] = ny }
+                                            2 -> s.curveGreenPts = s.curveGreenPts.toMutableList().apply { this[idx] = ny }
+                                            3 -> s.curveBluePts = s.curveBluePts.toMutableList().apply { this[idx] = ny }
+                                            else -> when (idx) {
+                                                0 -> s.curveBlackVal = ny
+                                                1 -> s.curveShadowVal = ny
+                                                2 -> s.curveMidVal = ny
+                                                3 -> s.curveHighVal = ny
+                                                4 -> s.curveWhiteVal = ny
                                             }
                                         }
+                                        vm.updateProxyAdjustment("curves", buildAllChannelsJson())
                                     }
                                 }
                             )
@@ -1539,9 +1532,28 @@ fun StonebridgeStudioScreen(
                                 vertical = if (s.textBgEnabled) (s.textBgPadding * 0.35f).coerceIn(4f, 20f).dp else 6.dp
                             )
                     ) {
-                        Text(
-                            text = displayTxt,
-                            color = if (s.textWarpStyle == "none") previewColor else Color.Transparent,
+                        val strokePreviewColor = remember(s.textStrokeColor) {
+                            runCatching { Color(AndroidColor.parseColor(s.textStrokeColor)) }.getOrDefault(Color.Black)
+                        }
+                        val shadowPreviewColor = remember(s.textShadowColor) {
+                            runCatching { Color(AndroidColor.parseColor(s.textShadowColor)).copy(alpha = 0.85f) }.getOrDefault(Color(0xD9000000))
+                        }
+                        val glowPreviewColor = remember(s.textGlowColor) {
+                            runCatching { Color(AndroidColor.parseColor(s.textGlowColor)) }.getOrDefault(Color(0xFF38BDF8))
+                        }
+                        val gradEndPreviewColor = remember(s.textGradientEndColor) {
+                            runCatching { Color(AndroidColor.parseColor(s.textGradientEndColor)) }.getOrDefault(Color(0xFFF59E0B))
+                        }
+                        val baseAlign = when (s.textAlign) {
+                            "left" -> TextAlign.Start
+                            "right" -> TextAlign.End
+                            else -> TextAlign.Center
+                        }
+                        val baseMod = Modifier.graphicsLayer(
+                            scaleX = (s.textHScale / 100f).coerceIn(0.5f, 2.0f),
+                            scaleY = (s.textVScale / 100f).coerceIn(0.5f, 2.0f)
+                        )
+                        val baseStyle = androidx.compose.ui.text.TextStyle(
                             fontFamily = previewFont,
                             fontSize = previewSp.sp,
                             fontWeight = if (s.textBold) FontWeight.Bold else FontWeight.Normal,
@@ -1549,17 +1561,71 @@ fun StonebridgeStudioScreen(
                             textDecoration = deco,
                             letterSpacing = (s.textTracking / 1000f * previewSp).coerceIn(-4f, 24f).sp,
                             lineHeight = (previewSp * s.textLineHeight.coerceIn(0.8f, 2.4f)).sp,
-                            textAlign = when (s.textAlign) {
-                                "left" -> TextAlign.Start
-                                "right" -> TextAlign.End
-                                else -> TextAlign.Center
-                            },
-                            maxLines = if (s.textVertical) 16 else 5,
-                            modifier = Modifier.graphicsLayer(
-                                scaleX = (s.textHScale / 100f).coerceIn(0.5f, 2.0f),
-                                scaleY = (s.textVScale / 100f).coerceIn(0.5f, 2.0f)
-                            )
+                            textAlign = baseAlign
                         )
+                        val visibleFill = s.textWarpStyle == "none"
+                        Box(contentAlignment = Alignment.Center) {
+                            // Layer 1: Live Neon Outer Glow
+                            if (visibleFill && s.textGlowSize > 0.4f) {
+                                Text(
+                                    text = displayTxt,
+                                    style = baseStyle.copy(
+                                        color = glowPreviewColor.copy(alpha = 0.75f),
+                                        shadow = androidx.compose.ui.graphics.Shadow(
+                                            color = glowPreviewColor,
+                                            offset = Offset.Zero,
+                                            blurRadius = (s.textGlowSize * currentZoom * 1.4f).coerceIn(4f, 64f)
+                                        )
+                                    ),
+                                    maxLines = if (s.textVertical) 16 else 6,
+                                    modifier = baseMod
+                                )
+                            }
+                            // Layer 2: Live Stroke Outline (Kontur)
+                            if (visibleFill && s.textStrokeWidth > 0.4f) {
+                                Text(
+                                    text = displayTxt,
+                                    style = baseStyle.copy(
+                                        color = strokePreviewColor,
+                                        drawStyle = Stroke(
+                                            width = (s.textStrokeWidth * currentZoom * 1.6f).coerceIn(2f, 28f),
+                                            join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                        )
+                                    ),
+                                    maxLines = if (s.textVertical) 16 else 6,
+                                    modifier = baseMod
+                                )
+                            }
+                            // Layer 3: Live Main Text Fill (Solid or Gradient) + Optional Drop Shadow
+                            val activeShadow = if (visibleFill && s.textShadowEnabled) {
+                                val rad = Math.toRadians(s.textShadowAngle.toDouble())
+                                val distPx = (s.textShadowDist * currentZoom * 1.1f).coerceIn(1f, 36f)
+                                androidx.compose.ui.graphics.Shadow(
+                                    color = shadowPreviewColor,
+                                    offset = Offset(
+                                        (kotlin.math.cos(rad) * distPx).toFloat(),
+                                        (kotlin.math.sin(rad) * distPx).toFloat()
+                                    ),
+                                    blurRadius = (s.textShadowBlur * currentZoom * 1.1f).coerceIn(1f, 36f)
+                                )
+                            } else null
+                            val fillStyle = if (!visibleFill) {
+                                baseStyle.copy(color = Color.Transparent)
+                            } else if (s.textGradientEnabled) {
+                                baseStyle.copy(
+                                    brush = Brush.linearGradient(listOf(previewColor, gradEndPreviewColor)),
+                                    shadow = activeShadow
+                                )
+                            } else {
+                                baseStyle.copy(color = previewColor, shadow = activeShadow)
+                            }
+                            Text(
+                                text = displayTxt,
+                                style = fillStyle,
+                                maxLines = if (s.textVertical) 16 else 6,
+                                modifier = baseMod
+                            )
+                        }
                     }
                     // 4 Draggable Corner Handles (outward = grow, inward = shrink down to 6px!)
                     val corners = listOf(
@@ -1995,11 +2061,27 @@ fun StonebridgeStudioScreen(
                     enabled = when (s.activePanel) {
                         BottomPanel.LIQUIFY_EDIT -> state.liquifyCanUndo
                         BottomPanel.PUPPET_WARP_EDIT -> s.puppetUndoStack.isNotEmpty()
+                        BottomPanel.CURVES_LIVE -> s.curveUndoStack.isNotEmpty()
                         else -> state.docInfo?.canUndo == true
                     },
                     onClick = {
                         when (s.activePanel) {
                             BottomPanel.LIQUIFY_EDIT -> vm.liquifyUndo()
+                            BottomPanel.CURVES_LIVE -> {
+                                if (s.curveUndoStack.isNotEmpty()) {
+                                    val prev = s.curveUndoStack.last()
+                                    s.curveRedoStack = s.curveRedoStack + s.snapshotCurve()
+                                    s.curveUndoStack = s.curveUndoStack.dropLast(1)
+                                    s.restoreCurve(prev)
+                                    fun fmtPts(pts: List<Float>): String {
+                                        val xs = listOf(0, 64, 128, 192, 255)
+                                        return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
+                                    }
+                                    val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                                    val json = """{"points":${fmtPts(mPts)},"red":${fmtPts(s.curveRedPts)},"green":${fmtPts(s.curveGreenPts)},"blue":${fmtPts(s.curveBluePts)}}"""
+                                    vm.updateProxyAdjustment("curves", json)
+                                }
+                            }
                             BottomPanel.PUPPET_WARP_EDIT -> {
                                 if (s.puppetUndoStack.isNotEmpty()) {
                                     val prev = s.puppetUndoStack.last()
@@ -2026,11 +2108,27 @@ fun StonebridgeStudioScreen(
                     enabled = when (s.activePanel) {
                         BottomPanel.LIQUIFY_EDIT -> state.liquifyCanRedo
                         BottomPanel.PUPPET_WARP_EDIT -> s.puppetRedoStack.isNotEmpty()
+                        BottomPanel.CURVES_LIVE -> s.curveRedoStack.isNotEmpty()
                         else -> state.docInfo?.canRedo == true
                     },
                     onClick = {
                         when (s.activePanel) {
                             BottomPanel.LIQUIFY_EDIT -> vm.liquifyRedo()
+                            BottomPanel.CURVES_LIVE -> {
+                                if (s.curveRedoStack.isNotEmpty()) {
+                                    val next = s.curveRedoStack.last()
+                                    s.curveUndoStack = s.curveUndoStack + s.snapshotCurve()
+                                    s.curveRedoStack = s.curveRedoStack.dropLast(1)
+                                    s.restoreCurve(next)
+                                    fun fmtPts(pts: List<Float>): String {
+                                        val xs = listOf(0, 64, 128, 192, 255)
+                                        return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
+                                    }
+                                    val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                                    val json = """{"points":${fmtPts(mPts)},"red":${fmtPts(s.curveRedPts)},"green":${fmtPts(s.curveGreenPts)},"blue":${fmtPts(s.curveBluePts)}}"""
+                                    vm.updateProxyAdjustment("curves", json)
+                                }
+                            }
                             BottomPanel.PUPPET_WARP_EDIT -> {
                                 if (s.puppetRedoStack.isNotEmpty()) {
                                     val next = s.puppetRedoStack.last()

@@ -166,8 +166,14 @@ internal object ToolRegistryV2 {
             vm.setTool(ActiveTool.NONE)
             s.curveBlackVal = 0f; s.curveShadowVal = 0.25f; s.curveMidVal = 0.50f
             s.curveHighVal = 0.75f; s.curveWhiteVal = 1.0f
+            s.curveRedPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+            s.curveGreenPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+            s.curveBluePts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+            s.curveUndoStack = emptyList()
+            s.curveRedoStack = emptyList()
             s.curveChannelIdx = 0
             s.curveOverlayExpanded = true
+            vm.beginProxyPreview()
             s.activePanel = BottomPanel.CURVES_LIVE
         },
         StudioToolSpec(
@@ -706,14 +712,7 @@ internal object ToolRegistryV2 {
             vm.ensureStudioFontsLoaded(context)
             vm.beginProxyPreview()
             val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
-            s.textEditLayerId = null
-            s.textSizePx = (docW * 0.055f).coerceIn(24f, 180f)
-            s.textNormX = 0.50f; s.textNormY = 0.50f
-            s.textTracking = 0f; s.textLineHeight = 1.2f
-            s.textVertical = false; s.textBold = false; s.textItalic = false
-            s.textUnderline = false; s.textStrike = false
-            s.textCaps = "normal"; s.textHScale = 100f; s.textVScale = 100f
-            s.textWarpStyle = "none"; s.textWarpBend = 50f; s.textWarpHDist = 0f; s.textWarpVDist = 0f
+            s.resetTextProDefaults(docW)
             vm.inspectActiveTextLayer { existing ->
                 if (existing != null) {
                     s.textEditLayerId = existing.layerId

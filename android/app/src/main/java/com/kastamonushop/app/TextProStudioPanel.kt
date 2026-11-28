@@ -62,17 +62,19 @@ internal fun TextProStudioPanel(
     onClose: () -> Unit,
     onApply: () -> Unit
 ) {
-    var tab by remember { mutableIntStateOf(0) } // 0=Yazı & Stil, 1=Biçim, 2=Efektler, 3=Bükme & Maske
+    var tab by remember { mutableIntStateOf(0) } // 0=Yazı, 1=Biçim, 2=Efekt, 3=Bükme
+    var activePreset by remember { mutableStateOf("Sade") }
+    var formatParam by remember { mutableIntStateOf(0) } // Single-slider selector in Biçim tab!
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
         BottomEditorHeader(
-            title = if (s.textEditLayerId != null) "Metni Düzenle (Pro)" else "Metin Stüdyosu Pro",
-            subtitle = "Sürükle · Merkezde mıknatıslanır · 4 sekme",
+            title = if (s.textEditLayerId != null) "Metni Düzenle" else "Metin Stüdyosu",
+            subtitle = "Sürükle · Merkezde mıknatıslanır",
             applyLabel = "Uygula",
             onClose = onClose,
             onApply = onApply
@@ -83,7 +85,7 @@ internal fun TextProStudioPanel(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            listOf("Yazı & Stil", "Biçim", "Efektler", "Bükme").forEachIndexed { idx, lbl ->
+            listOf("Yazı", "Biçim", "Efektler", "Bükme").forEachIndexed { idx, lbl ->
                 ProPill(
                     selected = tab == idx,
                     onClick = { tab = idx },
@@ -107,8 +109,7 @@ internal fun TextProStudioPanel(
                         value = s.textDraft,
                         onValueChange = { s.textDraft = it },
                         placeholder = { Text("Yazını buraya yaz...", fontSize = 12.sp, color = StudioV2Colors.TextMuted) },
-                        singleLine = false,
-                        maxLines = 2,
+                        singleLine = true,
                         textStyle = LocalTextStyle.current.copy(color = Color.White, fontSize = 13.sp),
                         modifier = Modifier.weight(1f)
                     )
@@ -121,7 +122,7 @@ internal fun TextProStudioPanel(
                     }
                 }
 
-                // One-Tap Pro Text Presets
+                // One-Tap Pro Text Presets — all rendered LIVE on canvas at 60 FPS!
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -129,41 +130,45 @@ internal fun TextProStudioPanel(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Şablon:", color = StudioV2Colors.TextMuted, fontSize = 10.5.sp)
-                    ProPill(selected = false, onClick = {
-                        s.textColorHex = "#FFFFFF"; s.textBold = false; s.textStrokeWidth = 0f
-                        s.textShadowEnabled = false; s.textGlowSize = 0f; s.textGradientEnabled = false
-                        s.textBgEnabled = false; s.textRotationDeg = 0f; s.textOpacity = 1f
-                    }, label = { Text("Sade", fontSize = 10.5.sp) })
-                    ProPill(selected = false, onClick = {
-                        s.textColorHex = "#FDE047"; s.textBold = true; s.textCaps = "all"
-                        s.textStrokeWidth = 8f; s.textStrokeColor = "#111318"
-                        s.textShadowEnabled = true; s.textShadowDist = 10f; s.textShadowBlur = 12f
-                        s.textGlowSize = 0f; s.textGradientEnabled = false; s.textBgEnabled = false
-                    }, label = { Text("YouTube", fontSize = 10.5.sp) })
-                    ProPill(selected = false, onClick = {
-                        s.textColorHex = "#FFFFFF"; s.textBold = true
-                        s.textStrokeWidth = 0f; s.textShadowEnabled = false
-                        s.textGlowSize = 26f; s.textGlowColor = "#38BDF8"
-                        s.textGradientEnabled = false; s.textBgEnabled = false
-                    }, label = { Text("Neon", fontSize = 10.5.sp) })
-                    ProPill(selected = false, onClick = {
-                        s.textColorHex = "#FFFFFF"; s.textBold = true
+                    ProPill(selected = activePreset == "Sade", onClick = {
+                        activePreset = "Sade"
+                        s.textColorHex = "#FFFFFF"; s.textBold = false; s.textCaps = "normal"; s.textTracking = 0f
                         s.textStrokeWidth = 0f; s.textShadowEnabled = false; s.textGlowSize = 0f
-                        s.textGradientEnabled = false
-                        s.textBgEnabled = true; s.textBgColor = "#111318"; s.textBgOpacity = 0.82f; s.textBgRadius = 18f; s.textBgPadding = 20f
+                        s.textGradientEnabled = false; s.textBgEnabled = false; s.textRotationDeg = 0f; s.textOpacity = 1f
+                    }, label = { Text("Sade", fontSize = 10.5.sp) })
+                    ProPill(selected = activePreset == "YouTube", onClick = {
+                        activePreset = "YouTube"
+                        s.textColorHex = "#FDE047"; s.textBold = true; s.textCaps = "all"; s.textTracking = 0f
+                        s.textStrokeWidth = 10f; s.textStrokeColor = "#111318"
+                        s.textShadowEnabled = true; s.textShadowDist = 10f; s.textShadowBlur = 12f; s.textShadowColor = "#000000"
+                        s.textGlowSize = 0f; s.textGradientEnabled = false; s.textBgEnabled = false; s.textOpacity = 1f
+                    }, label = { Text("YouTube", fontSize = 10.5.sp) })
+                    ProPill(selected = activePreset == "Neon", onClick = {
+                        activePreset = "Neon"
+                        s.textColorHex = "#FFFFFF"; s.textBold = true; s.textCaps = "normal"; s.textTracking = 40f
+                        s.textStrokeWidth = 0f; s.textShadowEnabled = false
+                        s.textGlowSize = 28f; s.textGlowColor = "#38BDF8"
+                        s.textGradientEnabled = false; s.textBgEnabled = false; s.textOpacity = 1f
+                    }, label = { Text("Neon", fontSize = 10.5.sp) })
+                    ProPill(selected = activePreset == "Etiket", onClick = {
+                        activePreset = "Etiket"
+                        s.textColorHex = "#FFFFFF"; s.textBold = true; s.textCaps = "normal"; s.textTracking = 0f
+                        s.textStrokeWidth = 0f; s.textShadowEnabled = false; s.textGlowSize = 0f; s.textGradientEnabled = false
+                        s.textBgEnabled = true; s.textBgColor = "#111318"; s.textBgOpacity = 0.85f; s.textBgRadius = 16f; s.textBgPadding = 18f; s.textOpacity = 1f
                     }, label = { Text("Etiket", fontSize = 10.5.sp) })
-                    ProPill(selected = false, onClick = {
-                        s.textColorHex = "#FDE047"; s.textBold = true
+                    ProPill(selected = activePreset == "Altın", onClick = {
+                        activePreset = "Altın"
+                        s.textColorHex = "#FDE047"; s.textBold = true; s.textCaps = "all"; s.textTracking = 20f
                         s.textGradientEnabled = true; s.textGradientEndColor = "#F97316"; s.textGradientAngle = 90f
-                        s.textStrokeWidth = 3f; s.textStrokeColor = "#111318"
-                        s.textShadowEnabled = true; s.textShadowDist = 8f; s.textShadowBlur = 10f
-                        s.textGlowSize = 0f; s.textBgEnabled = false
+                        s.textStrokeWidth = 4f; s.textStrokeColor = "#111318"
+                        s.textShadowEnabled = true; s.textShadowDist = 8f; s.textShadowBlur = 10f; s.textShadowColor = "#000000"
+                        s.textGlowSize = 0f; s.textBgEnabled = false; s.textOpacity = 1f
                     }, label = { Text("Altın", fontSize = 10.5.sp) })
-                    ProPill(selected = false, onClick = {
-                        s.textColorHex = "#FFFFFF"; s.textBold = false; s.textCaps = "all"; s.textTracking = 180f
-                        s.textStrokeWidth = 0f; s.textShadowEnabled = true; s.textShadowDist = 4f; s.textShadowBlur = 14f
-                        s.textGlowSize = 0f; s.textGradientEnabled = false; s.textBgEnabled = false
+                    ProPill(selected = activePreset == "Sinema", onClick = {
+                        activePreset = "Sinema"
+                        s.textColorHex = "#FFFFFF"; s.textBold = false; s.textCaps = "all"; s.textTracking = 200f
+                        s.textStrokeWidth = 0f; s.textShadowEnabled = true; s.textShadowDist = 4f; s.textShadowBlur = 16f; s.textShadowColor = "#000000"
+                        s.textGlowSize = 0f; s.textGradientEnabled = false; s.textBgEnabled = false; s.textOpacity = 0.95f
                     }, label = { Text("Sinema", fontSize = 10.5.sp) })
                 }
 
@@ -187,14 +192,14 @@ internal fun TextProStudioPanel(
                     }
                 }
 
-                // Color Swatches
                 ColorSwatchRowV2(selectedHex = s.textColorHex, onSelect = { s.textColorHex = it })
             }
 
             // ================================================================
-            // TAB 1: BİÇİM (Boyut, Döndürme, Opaklık, Kutu Genişliği, Karışım, Harf/Satır)
+            // TAB 1: BİÇİM — ULTRA-COMPACT SINGLE-SLIDER DESIGN (Photo stays 78%+ visible!)
             // ================================================================
             1 -> {
+                // Row 1: Style toggles
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -213,34 +218,50 @@ internal fun TextProStudioPanel(
                     ProPill(selected = s.textAlign == "right", onClick = { s.textAlign = "right" }, label = { Icon(Icons.Default.FormatAlignRight, null, modifier = Modifier.size(15.dp)) })
                 }
 
-                val defSize = (docW * 0.055f).coerceIn(24f, 180f)
-                CompactSliderRow("Boyut", "${s.textSizePx.roundToInt()}px", s.textSizePx, 8f..420f, defSize) { s.textSizePx = it }
-                CompactSliderRow("Döndür", "${s.textRotationDeg.roundToInt()}°", s.textRotationDeg, -180f..180f, 0f) { s.textRotationDeg = it }
-                CompactSliderRow("Opaklık", "%${(s.textOpacity * 100).roundToInt()}", s.textOpacity, 0.05f..1f, 1f) { s.textOpacity = it }
-                CompactSliderRow("Harf Ara", "${s.textTracking.roundToInt()}", s.textTracking, -60f..360f, 0f) { s.textTracking = it }
-                CompactSliderRow("Satır Ara", String.format("%.2f", s.textLineHeight), s.textLineHeight, 0.8f..2.4f, 1.2f) { s.textLineHeight = it }
-                CompactSliderRow("Kutu Gen.", if (s.textBoxWidthNorm < 0.05f) "Serbest" else "%${(s.textBoxWidthNorm * 100).roundToInt()}", s.textBoxWidthNorm, 0f..0.95f, 0f) { s.textBoxWidthNorm = it }
-                CompactSliderRow("Taban", "${s.textBaselineShift.roundToInt()}px", s.textBaselineShift, -60f..60f, 0f) { s.textBaselineShift = it }
-
+                // Row 2: Parameter selector pills (only 1 slider shows at a time!)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text("Karışım:", color = StudioV2Colors.TextMuted, fontSize = 10.5.sp)
-                    TEXT_PRO_BLENDS.forEach { (id, lbl) ->
-                        ProPill(selected = s.textBlendMode == id, onClick = { s.textBlendMode = id }, label = { Text(lbl, fontSize = 10.5.sp) })
+                    listOf("Boyut", "Döndür", "Opaklık", "Harf Ara", "Satır Ara", "Kutu Gen.", "Taban", "Karışım").forEachIndexed { idx, lbl ->
+                        ProPill(
+                            selected = formatParam == idx,
+                            onClick = { formatParam = idx },
+                            label = { Text(lbl, fontSize = 11.sp) }
+                        )
+                    }
+                }
+
+                // Row 3: Active single control
+                val defSize = (docW * 0.055f).coerceIn(24f, 180f)
+                when (formatParam) {
+                    0 -> CompactSliderRow("Boyut", "${s.textSizePx.roundToInt()}px", s.textSizePx, 8f..420f, defSize) { s.textSizePx = it }
+                    1 -> CompactSliderRow("Döndür", "${s.textRotationDeg.roundToInt()}°", s.textRotationDeg, -180f..180f, 0f) { s.textRotationDeg = it }
+                    2 -> CompactSliderRow("Opaklık", "%${(s.textOpacity * 100).roundToInt()}", s.textOpacity, 0.05f..1f, 1f) { s.textOpacity = it }
+                    3 -> CompactSliderRow("Harf Ara", "${s.textTracking.roundToInt()}", s.textTracking, -60f..360f, 0f) { s.textTracking = it }
+                    4 -> CompactSliderRow("Satır Ara", String.format("%.2f", s.textLineHeight), s.textLineHeight, 0.8f..2.4f, 1.2f) { s.textLineHeight = it }
+                    5 -> CompactSliderRow("Kutu Gen.", if (s.textBoxWidthNorm < 0.05f) "Serbest" else "%${(s.textBoxWidthNorm * 100).roundToInt()}", s.textBoxWidthNorm, 0f..0.95f, 0f) { s.textBoxWidthNorm = it }
+                    6 -> CompactSliderRow("Taban", "${s.textBaselineShift.roundToInt()}px", s.textBaselineShift, -60f..60f, 0f) { s.textBaselineShift = it }
+                    else -> Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        TEXT_PRO_BLENDS.forEach { (id, lbl) ->
+                            ProPill(selected = s.textBlendMode == id, onClick = { s.textBlendMode = id }, label = { Text(lbl, fontSize = 11.sp) })
+                        }
                     }
                 }
             }
 
             // ================================================================
-            // TAB 2: EFEKTLER (Kontur, Gölge, Neon Işıma, Degrade Dolgu, Arka Plan Kutusu)
+            // TAB 2: EFEKTLER — COMPACT & 100% LIVE ON CANVAS
             // ================================================================
             2 -> {
-                var fxSub by remember { mutableIntStateOf(0) } // 0=Kontur, 1=Gölge, 2=Işıma, 3=Degrade, 4=Kutu
+                var fxSub by remember { mutableIntStateOf(0) }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -259,38 +280,58 @@ internal fun TextProStudioPanel(
                 }
 
                 when (fxSub) {
-                    0 -> { // Kontur (Stroke)
+                    0 -> {
                         CompactSliderRow("Kalınlık", "${s.textStrokeWidth.roundToInt()}px", s.textStrokeWidth, 0f..36f, 0f) { s.textStrokeWidth = it }
                         ColorSwatchRowV2(selectedHex = s.textStrokeColor, onSelect = { s.textStrokeColor = it; if (s.textStrokeWidth < 1f) s.textStrokeWidth = 6f })
                     }
-                    1 -> { // Gölge (Drop Shadow)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            ProPill(selected = s.textShadowEnabled, onClick = { s.textShadowEnabled = !s.textShadowEnabled }, label = { Text(if (s.textShadowEnabled) "Gölge: AÇIK" else "Gölge: KAPALI", fontSize = 11.sp) })
+                    1 -> {
+                        var shadowParam by remember { mutableIntStateOf(0) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            ProPill(selected = s.textShadowEnabled, onClick = { s.textShadowEnabled = !s.textShadowEnabled }, label = { Text(if (s.textShadowEnabled) "Açık" else "Kapalı", fontSize = 11.sp) })
+                            if (s.textShadowEnabled) {
+                                ProPill(selected = shadowParam == 0, onClick = { shadowParam = 0 }, label = { Text("Mesafe", fontSize = 10.5.sp) })
+                                ProPill(selected = shadowParam == 1, onClick = { shadowParam = 1 }, label = { Text("Bulanık", fontSize = 10.5.sp) })
+                                ProPill(selected = shadowParam == 2, onClick = { shadowParam = 2 }, label = { Text("Açı", fontSize = 10.5.sp) })
+                            }
                         }
                         if (s.textShadowEnabled) {
-                            CompactSliderRow("Mesafe", "${s.textShadowDist.roundToInt()}px", s.textShadowDist, 0f..50f, 10f) { s.textShadowDist = it }
-                            CompactSliderRow("Bulanık", "${s.textShadowBlur.roundToInt()}px", s.textShadowBlur, 0f..40f, 12f) { s.textShadowBlur = it }
-                            CompactSliderRow("Açı", "${s.textShadowAngle.roundToInt()}°", s.textShadowAngle, -180f..180f, 120f) { s.textShadowAngle = it }
+                            when (shadowParam) {
+                                0 -> CompactSliderRow("Mesafe", "${s.textShadowDist.roundToInt()}px", s.textShadowDist, 0f..50f, 10f) { s.textShadowDist = it }
+                                1 -> CompactSliderRow("Bulanık", "${s.textShadowBlur.roundToInt()}px", s.textShadowBlur, 0f..40f, 12f) { s.textShadowBlur = it }
+                                else -> CompactSliderRow("Açı", "${s.textShadowAngle.roundToInt()}°", s.textShadowAngle, -180f..180f, 120f) { s.textShadowAngle = it }
+                            }
                             ColorSwatchRowV2(selectedHex = s.textShadowColor, onSelect = { s.textShadowColor = it })
                         }
                     }
-                    2 -> { // Neon Işıma (Outer Glow)
+                    2 -> {
                         CompactSliderRow("Işıma", "${s.textGlowSize.roundToInt()}px", s.textGlowSize, 0f..60f, 0f) { s.textGlowSize = it }
-                        ColorSwatchRowV2(selectedHex = s.textGlowColor, onSelect = { s.textGlowColor = it; if (s.textGlowSize < 1f) s.textGlowSize = 20f })
+                        ColorSwatchRowV2(selectedHex = s.textGlowColor, onSelect = { s.textGlowColor = it; if (s.textGlowSize < 1f) s.textGlowSize = 24f })
                     }
-                    3 -> { // Degrade Dolgu (Gradient Text)
-                        ProPill(selected = s.textGradientEnabled, onClick = { s.textGradientEnabled = !s.textGradientEnabled }, label = { Text(if (s.textGradientEnabled) "Degrade Dolgu: AÇIK" else "Degrade Dolgu: KAPALI", fontSize = 11.sp) })
+                    3 -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            ProPill(selected = s.textGradientEnabled, onClick = { s.textGradientEnabled = !s.textGradientEnabled }, label = { Text(if (s.textGradientEnabled) "Degrade: AÇIK" else "Degrade: KAPALI", fontSize = 11.sp) })
+                        }
                         if (s.textGradientEnabled) {
                             CompactSliderRow("Açı", "${s.textGradientAngle.roundToInt()}°", s.textGradientAngle, -180f..180f, 90f) { s.textGradientAngle = it }
                             ColorSwatchRowV2(selectedHex = s.textGradientEndColor, onSelect = { s.textGradientEndColor = it })
                         }
                     }
-                    4 -> { // Arka Plan Kutusu (Background Pill)
-                        ProPill(selected = s.textBgEnabled, onClick = { s.textBgEnabled = !s.textBgEnabled }, label = { Text(if (s.textBgEnabled) "Arka Plan Kutusu: AÇIK" else "Arka Plan Kutusu: KAPALI", fontSize = 11.sp) })
+                    4 -> {
+                        var bgParam by remember { mutableIntStateOf(0) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            ProPill(selected = s.textBgEnabled, onClick = { s.textBgEnabled = !s.textBgEnabled }, label = { Text(if (s.textBgEnabled) "Açık" else "Kapalı", fontSize = 11.sp) })
+                            if (s.textBgEnabled) {
+                                ProPill(selected = bgParam == 0, onClick = { bgParam = 0 }, label = { Text("Opaklık", fontSize = 10.5.sp) })
+                                ProPill(selected = bgParam == 1, onClick = { bgParam = 1 }, label = { Text("Köşe", fontSize = 10.5.sp) })
+                                ProPill(selected = bgParam == 2, onClick = { bgParam = 2 }, label = { Text("Boşluk", fontSize = 10.5.sp) })
+                            }
+                        }
                         if (s.textBgEnabled) {
-                            CompactSliderRow("Opaklık", "%${(s.textBgOpacity * 100).roundToInt()}", s.textBgOpacity, 0.1f..1f, 0.8f) { s.textBgOpacity = it }
-                            CompactSliderRow("Köşe", "${s.textBgRadius.roundToInt()}px", s.textBgRadius, 0f..60f, 16f) { s.textBgRadius = it }
-                            CompactSliderRow("Boşluk", "${s.textBgPadding.roundToInt()}px", s.textBgPadding, 6f..72f, 18f) { s.textBgPadding = it }
+                            when (bgParam) {
+                                0 -> CompactSliderRow("Opaklık", "%${(s.textBgOpacity * 100).roundToInt()}", s.textBgOpacity, 0.1f..1f, 0.85f) { s.textBgOpacity = it }
+                                1 -> CompactSliderRow("Köşe", "${s.textBgRadius.roundToInt()}px", s.textBgRadius, 0f..60f, 16f) { s.textBgRadius = it }
+                                else -> CompactSliderRow("Boşluk", "${s.textBgPadding.roundToInt()}px", s.textBgPadding, 6f..72f, 18f) { s.textBgPadding = it }
+                            }
                             ColorSwatchRowV2(selectedHex = s.textBgColor, onSelect = { s.textBgColor = it })
                         }
                     }
@@ -313,11 +354,9 @@ internal fun TextProStudioPanel(
                 }
                 if (s.textWarpStyle != "none") {
                     CompactSliderRow("Büküm", "${s.textWarpBend.roundToInt()}%", s.textWarpBend, -100f..100f, 50f) { s.textWarpBend = it }
-                    CompactSliderRow("Yatay", "${s.textWarpHDist.roundToInt()}%", s.textWarpHDist, -100f..100f, 0f) { s.textWarpHDist = it }
-                    CompactSliderRow("Dikey", "${s.textWarpVDist.roundToInt()}%", s.textWarpVDist, -100f..100f, 0f) { s.textWarpVDist = it }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ProPill(selected = false, onClick = onCreateSelection, label = { Text("Seçim Maskesi Oluştur", fontSize = 11.sp) })
+                    ProPill(selected = false, onClick = onCreateSelection, label = { Text("Seçim Maskesi", fontSize = 11.sp) })
                     ProPill(selected = false, onClick = onRasterize, label = { Text("Rasterize Et", fontSize = 11.sp) })
                 }
             }

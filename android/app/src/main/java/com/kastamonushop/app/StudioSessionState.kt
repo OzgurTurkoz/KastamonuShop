@@ -317,6 +317,54 @@ internal class StudioSessionState {
     var textBoxWidthNorm by mutableFloatStateOf(0f)
     var textSnapX by mutableStateOf(false)
     var textSnapY by mutableStateOf(false)
+
+    // v2.2.1 Curve Undo/Redo snapshots (RGB + R + G + B)
+    data class CurveSnapshot(
+        val rgb: List<Float>,
+        val red: List<Float>,
+        val green: List<Float>,
+        val blue: List<Float>
+    )
+    var curveUndoStack by mutableStateOf<List<CurveSnapshot>>(emptyList())
+    var curveRedoStack by mutableStateOf<List<CurveSnapshot>>(emptyList())
+
+    fun snapshotCurve(): CurveSnapshot = CurveSnapshot(
+        rgb = listOf(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal),
+        red = curveRedPts.toList(),
+        green = curveGreenPts.toList(),
+        blue = curveBluePts.toList()
+    )
+
+    fun restoreCurve(snap: CurveSnapshot) {
+        curveBlackVal = snap.rgb[0]; curveShadowVal = snap.rgb[1]; curveMidVal = snap.rgb[2]
+        curveHighVal = snap.rgb[3]; curveWhiteVal = snap.rgb[4]
+        curveRedPts = snap.red.toList()
+        curveGreenPts = snap.green.toList()
+        curveBluePts = snap.blue.toList()
+    }
+
+    fun resetTextProDefaults(docW: Float) {
+        textEditLayerId = null
+        textDraft = "StonebridgeCraft"
+        textFontFamily = "Montserrat"
+        textColorHex = "#FFFFFF"
+        textAlign = "center"
+        textSizePx = (docW * 0.055f).coerceIn(24f, 180f)
+        textNormX = 0.50f; textNormY = 0.50f
+        textTracking = 0f; textLineHeight = 1.2f
+        textVertical = false; textBold = false; textItalic = false
+        textUnderline = false; textStrike = false
+        textCaps = "normal"; textHScale = 100f; textVScale = 100f
+        textWarpStyle = "none"; textWarpBend = 50f; textWarpHDist = 0f; textWarpVDist = 0f
+        textRotationDeg = 0f; textOpacity = 1f; textBlendMode = "Normal"
+        textStrokeWidth = 0f; textStrokeColor = "#111318"
+        textShadowEnabled = false; textShadowDist = 10f; textShadowBlur = 12f; textShadowAngle = 120f; textShadowColor = "#000000"
+        textGlowSize = 0f; textGlowColor = "#38BDF8"
+        textGradientEnabled = false; textGradientEndColor = "#F59E0B"; textGradientAngle = 90f
+        textBgEnabled = false; textBgColor = "#111318"; textBgOpacity = 0.80f; textBgRadius = 16f; textBgPadding = 18f
+        textBaselineShift = 0f; textBoxWidthNorm = 0f
+        textSnapX = false; textSnapY = false
+    }
     var cameraTick by mutableIntStateOf(0)
     var measuredBottomBarPx by mutableFloatStateOf(0f)
     var showToolPopover by mutableStateOf(false)

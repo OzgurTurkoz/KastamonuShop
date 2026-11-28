@@ -257,7 +257,7 @@ internal fun StudioBottomPanelHost(
                             s.activePanel = BottomPanel.DOCK
                         },
                         onClose = {
-                            s.textSnapX = false; s.textSnapY = false
+                            s.resetTextProDefaults(docW)
                             vm.endProxyPreview()
                             s.activePanel = BottomPanel.DOCK
                             s.activeWorkspaceV2 = s.lastWorkspaceV2
@@ -653,21 +653,29 @@ internal fun StudioBottomPanelHost(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             ProPill(selected = false, onClick = {
+                                s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                s.curveRedoStack = emptyList()
                                 s.curveBlackVal = 0f; s.curveShadowVal = 0.18f; s.curveMidVal = 0.50f; s.curveHighVal = 0.82f; s.curveWhiteVal = 1f
                                 s.curveChannelIdx = 0
-                                onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                                vm.updateProxyAdjustment("curves", buildRgbCurvesJson())
                             }, label = { Text("S-Kontrast", fontSize = 11.sp) })
                             ProPill(selected = false, onClick = {
+                                s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                s.curveRedoStack = emptyList()
                                 s.curveBlackVal = 0.08f; s.curveShadowVal = 0.28f; s.curveMidVal = 0.52f; s.curveHighVal = 0.78f; s.curveWhiteVal = 0.94f
                                 s.curveChannelIdx = 0
-                                onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                                vm.updateProxyAdjustment("curves", buildRgbCurvesJson())
                             }, label = { Text("Mat Film", fontSize = 11.sp) })
                             ProPill(selected = false, onClick = {
+                                s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                s.curveRedoStack = emptyList()
                                 s.curveBlackVal = 0f; s.curveShadowVal = 0.34f; s.curveMidVal = 0.62f; s.curveHighVal = 0.85f; s.curveWhiteVal = 1f
                                 s.curveChannelIdx = 0
-                                onPushCurveGpu(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
+                                vm.updateProxyAdjustment("curves", buildRgbCurvesJson())
                             }, label = { Text("Aydınlık", fontSize = 11.sp) })
                             ProPill(selected = false, onClick = {
+                                s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                s.curveRedoStack = emptyList()
                                 s.curveBlackVal = 0f; s.curveShadowVal = 0.25f; s.curveMidVal = 0.50f; s.curveHighVal = 0.75f; s.curveWhiteVal = 1f
                                 s.curveRedPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
                                 s.curveGreenPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
