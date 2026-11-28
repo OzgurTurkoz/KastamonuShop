@@ -10936,13 +10936,13 @@ LUT_3D_SIZE 2
             eng.open_rgba_bytes(format!("{kind}.png"), 48, 48, rgba).unwrap();
             let before = {
                 let g = eng.core.lock();
-                photocraft_compose::flatten(g.active_document().unwrap().as_ref()).px
+                photocraft_compose::flatten(g.active_document().unwrap().as_ref()).px.clone()
             };
             let info = eng.apply_adjustment_once(kind.into(), json_str.into()).unwrap();
             assert!(info.can_undo, "{kind} must be undoable");
             let after = {
                 let g = eng.core.lock();
-                photocraft_compose::flatten(g.active_document().unwrap().as_ref()).px
+                photocraft_compose::flatten(g.active_document().unwrap().as_ref()).px.clone()
             };
             let diff_px = before.iter().zip(after.iter()).filter(|(a, b)| {
                 (a[0] - b[0]).abs() > 0.01 || (a[1] - b[1]).abs() > 0.01 || (a[2] - b[2]).abs() > 0.01
