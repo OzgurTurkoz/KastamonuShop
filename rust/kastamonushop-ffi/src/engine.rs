@@ -11823,7 +11823,7 @@ LUT_3D_SIZE 2
         }];
         let info_caf = eng.apply_content_aware_fill_pro("custom".into(), "default".into(), "none".into(), false, false, false, "current".into(), strokes.clone()).unwrap();
         assert!(info_caf.can_undo);
-        eng.clear_selection().unwrap();
+        eng.execute_command("select.deselect".into(), "{}".into()).unwrap();
         let info_cas = eng.apply_content_aware_scale_pro(85.0, 100.0, 100.0, true, strokes).unwrap();
         assert!(info_cas.can_undo);
     }
