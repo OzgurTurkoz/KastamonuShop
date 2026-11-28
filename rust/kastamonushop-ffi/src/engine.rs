@@ -1971,6 +1971,230 @@ impl KastamonuEngine {
         Ok(())
     }
 
+    /// v2.2.2: Unified 100% WYSIWYG Rust Live Proxy Preview for Text Studio Pro.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_proxy_text_pro_preview(
+        &self,
+        edit_layer_id: Option<u64>,
+        text: String,
+        x: f32,
+        y: f32,
+        size_px: f32,
+        color_hex: String,
+        align: String,
+        font_family: String,
+        bold: bool,
+        italic: bool,
+        underline: bool,
+        strikethrough: bool,
+        caps: String,
+        h_scale: f32,
+        v_scale: f32,
+        tracking: f32,
+        line_height: f32,
+        vertical: bool,
+        warp_style: String,
+        warp_bend: f32,
+        warp_h_dist: f32,
+        warp_v_dist: f32,
+        extras: TextProExtras,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        ensure_proxy_preview_locked(&mut guard)?;
+        let active_id = guard.session.active().and_then(|ds| ds.active_layer());
+        let Some(proxy) = guard.proxy_preview.as_mut() else {
+            return Ok(());
+        };
+        let sc = proxy.scale;
+        let mut ps = Session::new();
+        ps.add_document((*proxy.base_doc).clone(), None);
+        ps.set_active(0);
+        if active_id.is_some() {
+            ps.set_active_layer(active_id);
+        }
+
+        if let Some(eid) = edit_layer_id {
+            if let Some(ds) = ps.active_mut() {
+                let doc = Arc::make_mut(ds.doc_mut());
+                if let Some(l) = doc.layers.iter_mut().find(|l| l.id.0 == eid) {
+                    l.visible = false;
+                }
+            }
+        }
+
+        if !text.trim().is_empty() {
+            let dpi = ps.active().map(|ds| ds.doc().resolution_dpi.max(1.0)).unwrap_or(72.0);
+            let scaled_px = (size_px.max(4.0) * sc).max(2.0);
+            let size_pt = (scaled_px * 72.0 / dpi).clamp(0.5, 1296.0);
+            let weight: u32 = if bold { 700 } else { 400 };
+            let leading_val: Value = if (line_height - 1.2).abs() < 0.03 {
+                json!("auto")
+            } else {
+                json!((size_pt * line_height.clamp(0.7, 2.8)).clamp(1.0, 2000.0))
+            };
+            let align_str = match align.as_str() {
+                "left" | "right" | "center" => align.as_str(),
+                _ => "center",
+            };
+            let caps_str = match caps.as_str() {
+                "all" | "small" => caps.as_str(),
+                _ => "normal",
+            };
+            let orient_str = if vertical { "vertical" } else { "horizontal" };
+            let px_x = x * sc;
+            let px_y = (y - extras.baseline_shift) * sc;
+            let mut params = json!({
+                "text": text,
+                "x": px_x,
+                "y": px_y,
+                "size": size_pt,
+                "weight": weight,
+                "fauxBold": bold,
+                "italic": italic,
+                "fauxItalic": italic,
+                "underline": underline,
+                "strikethrough": strikethrough,
+                "caps": caps_str,
+                "horizontalScale": h_scale.clamp(50.0, 200.0),
+                "verticalScale": v_scale.clamp(50.0, 200.0),
+                "color": color_hex,
+                "align": align_str,
+                "tracking": tracking.clamp(-100.0, 600.0),
+                "leading": leading_val,
+                "orientation": orient_str,
+            });
+            let chosen_font = font_family.trim();
+            if !chosen_font.is_empty() {
+                params["font"] = json!(chosen_font);
+            }
+            if let Ok(res) = ps.execute("type.addText", params) {
+                if let Some(lid) = res.get("layer").and_then(Value::as_u64) {
+                    let ws = warp_style.trim();
+                    if !ws.is_empty() && ws != "none" {
+                        let _ = ps.execute(
+                            "type.warpText",
+                            json!({
+                                "layer": lid,
+                                "style": ws,
+                                "bend": warp_bend.clamp(-100.0, 100.0),
+                                "horizontalDistortion": warp_h_dist.clamp(-100.0, 100.0),
+                                "verticalDistortion": warp_v_dist.clamp(-100.0, 100.0),
+                                "orientation": orient_str,
+                            }),
+                        );
+                    }
+                    let op = extras.opacity.clamp(0.05, 1.0);
+                    let blend = match extras.blend_mode.as_str() {
+                        "Normal" | "Multiply" | "Screen" | "Overlay" | "SoftLight" | "HardLight" | "Darken" | "Lighten" => extras.blend_mode.as_str(),
+                        _ => "Normal",
+                    };
+                    let _ = ps.execute("layer.setProps", json!({ "layer": lid, "opacity": op as f64, "blend": blend }));
+
+                    let mut effects: Vec<Value> = Vec::new();
+                    if extras.gradient_enabled {
+                        effects.push(json!({
+                            "type": "gradientOverlay",
+                            "params": {
+                                "from": color_hex,
+                                "to": extras.gradient_end_color,
+                                "opacity": 100.0,
+                                "angle": extras.gradient_angle.clamp(-180.0, 180.0) as f64,
+                                "style": "linear",
+                                "blend": "Normal"
+                            }
+                        }));
+                    }
+                    if extras.stroke_width > 0.4 {
+                        effects.push(json!({
+                            "type": "stroke",
+                            "params": {
+                                "color": extras.stroke_color,
+                                "size": (extras.stroke_width * sc).clamp(1.0, 60.0) as f64,
+                                "opacity": 100.0,
+                                "position": "outside",
+                                "blend": "Normal"
+                            }
+                        }));
+                    }
+                    if extras.glow_size > 0.4 {
+                        effects.push(json!({
+                            "type": "outerGlow",
+                            "params": {
+                                "color": extras.glow_color,
+                                "size": (extras.glow_size * sc).clamp(1.0, 80.0) as f64,
+                                "opacity": 85.0,
+                                "blend": "Screen"
+                            }
+                        }));
+                    }
+                    if extras.shadow_enabled {
+                        effects.push(json!({
+                            "type": "dropShadow",
+                            "params": {
+                                "color": extras.shadow_color,
+                                "size": (extras.shadow_blur * sc).clamp(0.0, 60.0) as f64,
+                                "distance": (extras.shadow_distance * sc).clamp(0.0, 80.0) as f64,
+                                "angle": extras.shadow_angle.clamp(-180.0, 180.0) as f64,
+                                "opacity": 82.0,
+                                "blend": "Multiply"
+                            }
+                        }));
+                    }
+                    if !effects.is_empty() {
+                        let _ = ps.execute("layer.layerStyle.replace", json!({ "layer": lid, "effects": effects }));
+                    }
+
+                    if extras.rotation_deg.abs() > 0.25 {
+                        let _ = ps.execute(
+                            "edit.transform",
+                            json!({
+                                "dx": 0.0, "dy": 0.0,
+                                "scaleX": 1.0, "scaleY": 1.0,
+                                "rotate": extras.rotation_deg.clamp(-180.0, 180.0) as f64,
+                                "interpolation": "bicubic"
+                            }),
+                        );
+                    }
+
+                    if extras.bg_enabled {
+                        let pw = ps.active().map(|ds| ds.doc().size.width.max(1) as f32).unwrap_or(512.0);
+                        let ph = ps.active().map(|ds| ds.doc().size.height.max(1) as f32).unwrap_or(512.0);
+                        let lines: Vec<&str> = text.split('\n').collect();
+                        let max_chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1).max(1) as f32;
+                        let est_w = (max_chars * scaled_px * 0.62 * (h_scale / 100.0)).max(scaled_px * 1.4);
+                        let est_h = (lines.len() as f32 * scaled_px * line_height.clamp(0.8, 2.4) * (v_scale / 100.0)).max(scaled_px * 1.1);
+                        let pad = (extras.bg_padding * sc).clamp(3.0, 80.0);
+                        let bx = (px_x - est_w * 0.5 - pad).clamp(0.0, pw - 8.0);
+                        let by = (px_y - est_h * 0.5 - pad * 0.65).clamp(0.0, ph - 8.0);
+                        let bw = (est_w + pad * 2.0).clamp(12.0, pw - bx);
+                        let bh = (est_h + pad * 1.3).clamp(12.0, ph - by);
+                        let _ = ps.execute(
+                            "shape.rect",
+                            json!({
+                                "x": bx as f64, "y": by as f64,
+                                "width": bw as f64, "height": bh as f64,
+                                "cornerRadius": (extras.bg_radius * sc).clamp(0.0, 60.0) as f64,
+                                "fill": extras.bg_color,
+                                "strokeWidth": 0.0
+                            }),
+                        );
+                        if let Some(ds) = ps.active() {
+                            if let Some(bg_id) = ds.active_layer() {
+                                let _ = ps.execute("layer.setProps", json!({ "layer": bg_id.0, "opacity": extras.bg_opacity.clamp(0.05, 1.0) as f64 }));
+                                let _ = ps.execute("layer.arrange.sendBackward", json!({}));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        proxy.selection_only = false;
+        proxy.session = ps;
+        guard.mark_full_dirty();
+        Ok(())
+    }
+
     /// Creates an anti-aliased glyph-shaped selection mask (`type.createSelection`) without leaving a text layer behind.
     #[allow(clippy::too_many_arguments)]
     pub fn create_text_selection_mask(
@@ -10230,6 +10454,30 @@ LUT_3D_SIZE 2
         assert!(info1.can_undo);
         let info2 = eng.apply_art_history_brush(pts, 10.0, 0.8, 1.0, "tightMedium".into(), 40.0, 0.0).unwrap();
         assert!(info2.can_undo);
+    }
+
+    #[test]
+    fn test_v222_proxy_text_pro_preview_live() {
+        let eng = test_engine();
+        let rgba = vec![50u8, 60, 70, 255].repeat(160 * 120);
+        eng.open_rgba_bytes("textlive.png".into(), 160, 120, rgba).unwrap();
+        eng.begin_proxy_preview().unwrap();
+        let extras = TextProExtras {
+            rotation_deg: 25.0, opacity: 0.9, blend_mode: "Screen".into(),
+            stroke_width: 6.0, stroke_color: "#000000".into(),
+            shadow_enabled: true, shadow_distance: 8.0, shadow_blur: 10.0, shadow_angle: 120.0, shadow_color: "#000000".into(),
+            glow_size: 16.0, glow_color: "#38BDF8".into(),
+            gradient_enabled: true, gradient_end_color: "#F59E0B".into(), gradient_angle: 90.0,
+            bg_enabled: true, bg_color: "#111318".into(), bg_opacity: 0.8, bg_radius: 12.0, bg_padding: 12.0,
+            baseline_shift: 0.0, box_width_norm: 0.0,
+        };
+        eng.update_proxy_text_pro_preview(
+            None, "LIVE".into(), 80.0, 60.0, 32.0, "#FFFFFF".into(), "center".into(),
+            "Montserrat".into(), true, false, false, false, "all".into(),
+            100.0, 100.0, 20.0, 1.2, false, "arc".into(), 30.0, 0.0, 0.0, extras
+        ).unwrap();
+        let guard = eng.core.lock();
+        assert!(guard.proxy_preview.is_some());
     }
 
     #[test]

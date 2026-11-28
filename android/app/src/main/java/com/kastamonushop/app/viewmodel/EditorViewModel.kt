@@ -302,6 +302,31 @@ class EditorViewModel : ViewModel() {
         data class FocusArea(val rangePct: Float, val noisePct: Float, val mode: String, val sampleAllLayers: Boolean) : ProxyJob()
         data class ImageResize(val width: Int, val height: Int, val resample: String) : ProxyJob()
         data class ModifySelection(val op: String, val radius: Float) : ProxyJob()
+        data class TextProPreview(
+            val editLayerId: ULong?,
+            val text: String,
+            val x: Float,
+            val y: Float,
+            val sizePx: Float,
+            val colorHex: String,
+            val align: String,
+            val fontFamily: String,
+            val bold: Boolean,
+            val italic: Boolean,
+            val underline: Boolean,
+            val strikethrough: Boolean,
+            val caps: String,
+            val hScale: Float,
+            val vScale: Float,
+            val tracking: Float,
+            val lineHeight: Float,
+            val vertical: Boolean,
+            val warpStyle: String,
+            val warpBend: Float,
+            val warpHDist: Float,
+            val warpVDist: Float,
+            val extras: uniffi.kastamonushop_ffi.TextProExtras
+        ) : ProxyJob()
         data class ContentAwareMove(
             val dx: Float,
             val dy: Float,
@@ -620,6 +645,41 @@ class EditorViewModel : ViewModel() {
                 showStatus("Metin hatası: ${err.message}", 2600L)
             }
         }
+    }
+
+    fun updateProxyTextProPreview(
+        editLayerId: ULong?,
+        text: String,
+        x: Float,
+        y: Float,
+        sizePx: Float,
+        colorHex: String,
+        align: String,
+        fontFamily: String,
+        bold: Boolean,
+        italic: Boolean,
+        underline: Boolean,
+        strikethrough: Boolean,
+        caps: String,
+        hScale: Float,
+        vScale: Float,
+        tracking: Float,
+        lineHeight: Float,
+        vertical: Boolean,
+        warpStyle: String,
+        warpBend: Float,
+        warpHDist: Float,
+        warpVDist: Float,
+        extras: uniffi.kastamonushop_ffi.TextProExtras
+    ) {
+        enqueueProxyJob(
+            ProxyJob.TextProPreview(
+                editLayerId, text, x, y, sizePx, colorHex, align, fontFamily,
+                bold, italic, underline, strikethrough, caps, hScale, vScale,
+                tracking, lineHeight, vertical, warpStyle, warpBend, warpHDist, warpVDist,
+                extras
+            )
+        )
     }
 
     fun updateProxyTextPreview(
@@ -1482,6 +1542,12 @@ class EditorViewModel : ViewModel() {
                     )
                     is ProxyJob.ModifySelection -> engine.updateProxyModifySelection(
                         job.op, job.radius
+                    )
+                    is ProxyJob.TextProPreview -> engine.updateProxyTextProPreview(
+                        job.editLayerId, job.text, job.x, job.y, job.sizePx, job.colorHex, job.align, job.fontFamily,
+                        job.bold, job.italic, job.underline, job.strikethrough, job.caps, job.hScale, job.vScale,
+                        job.tracking, job.lineHeight, job.vertical, job.warpStyle, job.warpBend, job.warpHDist, job.warpVDist,
+                        job.extras
                     )
                     is ProxyJob.ContentAwareMove -> engine.updateProxyContentAwareMove(
                         job.dx, job.dy, job.mode,
