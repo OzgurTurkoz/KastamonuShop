@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
@@ -201,5 +202,104 @@ internal fun CameraRawProPanel(
             defaultValue = active.defaultValue,
             onChange = active.onChange
         )
+    }
+}
+
+@Composable
+internal fun LensCorrectionPanel(
+    s: StudioSessionState,
+    onPreview: () -> Unit,
+    onReset: () -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    var activeParam by remember { mutableIntStateOf(0) }
+    val params = listOf(
+        Triple("Bükülme", s.lensDistortion, { v: Float -> s.lensDistortion = v }),
+        Triple("Vinyet", s.lensVignette, { v: Float -> s.lensVignette = v }),
+        Triple("Kırmızı/Cyan", s.lensRedCyan, { v: Float -> s.lensRedCyan = v }),
+        Triple("Mavi/Sarı", s.lensBlueYellow, { v: Float -> s.lensBlueYellow = v }),
+        Triple("Dikey Eğim", s.lensVertical, { v: Float -> s.lensVertical = v }),
+        Triple("Yatay Eğim", s.lensHorizontal, { v: Float -> s.lensHorizontal = v })
+    )
+    val cur = params[activeParam.coerceIn(0, params.lastIndex)]
+    Column(
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        BottomEditorHeader(
+            title = "Lens Düzeltme",
+            subtitle = "",
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = onApply
+        )
+        CompactSliderRow(
+            label = cur.first,
+            valueText = "${cur.second.roundToInt()}",
+            value = cur.second,
+            range = -100f..100f,
+            defaultValue = 0f
+        ) {
+            cur.third(it)
+            onPreview()
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            params.forEachIndexed { idx, (lbl, v, _) ->
+                val badge = if (kotlin.math.abs(v) >= 0.5f) "$lbl ${v.roundToInt()}" else lbl
+                ProPill(
+                    selected = activeParam == idx,
+                    onClick = { activeParam = idx },
+                    label = { Text(badge, fontSize = 11.sp, maxLines = 1) }
+                )
+            }
+            ProPill(
+                selected = false,
+                onClick = onReset,
+                label = { Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A8A)) }
+            )
+        }
+    }
+}
+
+@Composable
+internal fun CubeLutPanel(
+    fileName: String,
+    opacityPct: Float,
+    onPickFile: () -> Unit,
+    onOpacity: (Float) -> Unit,
+    onClose: () -> Unit,
+    onApply: () -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        BottomEditorHeader(
+            title = "3D LUT (.cube / .3dl)",
+            subtitle = if (fileName.isBlank()) "Sinematik LUT dosyası seçerek anında uygula" else "Yüklü LUT: $fileName",
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = onApply
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = onPickFile, shape = RoundedCornerShape(12.dp)) {
+                Text(if (fileName.isBlank()) ".cube / .3dl Seç" else "Başka LUT Seç", fontSize = 12.sp)
+            }
+            if (fileName.isNotBlank()) {
+                Text(fileName, fontSize = 11.sp, color = Color(0xFF4F9CFF), fontWeight = FontWeight.SemiBold, maxLines = 1)
+            }
+        }
+        if (fileName.isNotBlank()) {
+            CompactSliderRow("Yoğunluk", "%${opacityPct.roundToInt()}", opacityPct, 0f..100f, defaultValue = 100f, onChange = onOpacity)
+        }
     }
 }
