@@ -9285,8 +9285,8 @@ impl KastamonuEngine {
                 "points": pts,
                 "source": [src_x as f64, src_y as f64],
                 "size": size.clamp(4.0, 400.0) as f64,
-                "hardness": hardness.clamp(0.0, 1.0) as f64,
-                "opacity": opacity.clamp(0.05, 1.0) as f64,
+                "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64,
+                "opacity": (opacity.clamp(0.05, 1.0) * 100.0).round() as f64,
                 "aligned": aligned,
                 "sampleLayer": sample_str,
                 "mode": mode_str
@@ -9348,7 +9348,7 @@ impl KastamonuEngine {
                 "points": pts,
                 "source": [src_x as f64, src_y as f64],
                 "size": size.clamp(4.0, 400.0) as f64,
-                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64,
                 "aligned": aligned,
                 "sampleLayer": sample_str,
                 "mode": mode_str
@@ -9401,7 +9401,7 @@ impl KastamonuEngine {
             json!({
                 "points": pts,
                 "size": size.clamp(4.0, 400.0) as f64,
-                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64,
                 "type": stype,
                 "sampleAllLayers": sample_all_layers
             }),
@@ -9505,11 +9505,11 @@ impl KastamonuEngine {
         };
         let s_pct = strength.clamp(1.0, 100.0) as f64;
         let (cmd, params) = match tool.as_str() {
-            "dodge" => ("paint.dodge", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "range": range_str, "exposure": s_pct, "protectTones": protect_tones })),
-            "burn" => ("paint.burn", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "range": range_str, "exposure": s_pct, "protectTones": protect_tones })),
-            "smudge" => ("paint.smudge", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "strength": s_pct, "fingerPainting": finger_painting, "sampleAllLayers": sample_all_layers })),
-            "sharpen_brush" => ("paint.sharpen", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "strength": s_pct, "protectDetail": protect_detail, "sampleAllLayers": sample_all_layers })),
-            _ => ("paint.blur", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": hardness.clamp(0.0, 1.0) as f64, "strength": s_pct, "sampleAllLayers": sample_all_layers })),
+            "dodge" => ("paint.dodge", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64, "range": range_str, "exposure": s_pct, "protectTones": protect_tones })),
+            "burn" => ("paint.burn", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64, "range": range_str, "exposure": s_pct, "protectTones": protect_tones })),
+            "smudge" => ("paint.smudge", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64, "strength": s_pct, "fingerPainting": finger_painting, "sampleAllLayers": sample_all_layers })),
+            "sharpen_brush" => ("paint.sharpen", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64, "strength": s_pct, "protectDetail": protect_detail, "sampleAllLayers": sample_all_layers })),
+            _ => ("paint.blur", json!({ "points": pts, "size": size.clamp(4.0, 400.0) as f64, "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64, "strength": s_pct, "sampleAllLayers": sample_all_layers })),
         };
         let res = guard.session.execute(cmd, params);
         if was_locked {
@@ -9779,7 +9779,7 @@ impl KastamonuEngine {
             json!({
                 "points": pts,
                 "size": size.clamp(4.0, 400.0) as f64,
-                "hardness": hardness.clamp(0.0, 1.0) as f64,
+                "hardness": (hardness.clamp(0.0, 1.0) * 100.0).round() as f64,
                 "source": [src_x as f64, src_y as f64],
                 "aligned": true,
                 "sampleLayer": if sample_all_layers { "all" } else { "current" }
