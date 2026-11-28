@@ -1715,7 +1715,8 @@ impl KastamonuEngine {
             let b = d.layer(id).map(|l| match &l.content {
                 LayerContent::Raster(surf) => surf.content_bounds(),
                 LayerContent::Text(t) => {
-                    let st = t.char_runs().first().map(|r| &r.style);
+                    let runs = t.char_runs();
+                    let st = runs.first().map(|r| &r.style);
                     let size_pt = st.map(|s| s.size_pt).unwrap_or(48.0).max(0.5);
                     let spx = (size_pt * dpi / 72.0).clamp(8.0, 600.0);
                     let hs = st.map(|s| if s.horizontal_scale <= 5.0 { s.horizontal_scale } else { s.horizontal_scale / 100.0 }).unwrap_or(1.0).clamp(0.5, 2.0);
