@@ -164,16 +164,12 @@ internal object ToolRegistryV2 {
             pipeline = EnginePipeline.COALESCED_PROXY
         ) {
             vm.setTool(ActiveTool.NONE)
-            s.curveBlackVal = 0f; s.curveShadowVal = 0.25f; s.curveMidVal = 0.50f
-            s.curveHighVal = 0.75f; s.curveWhiteVal = 1.0f
-            s.curveRedPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
-            s.curveGreenPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
-            s.curveBluePts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+            s.resetAllCurves()
             s.curveUndoStack = emptyList()
             s.curveRedoStack = emptyList()
-            s.curveChannelIdx = 0
             s.curveOverlayExpanded = true
             vm.beginProxyPreview()
+            vm.refreshHistogram(force = true)
             s.activePanel = BottomPanel.CURVES_LIVE
         },
         StudioToolSpec(
@@ -186,8 +182,9 @@ internal object ToolRegistryV2 {
             pipeline = EnginePipeline.COALESCED_PROXY
         ) {
             vm.setTool(ActiveTool.NONE)
-            s.levelsBlackVal = 0f; s.levelsGammaVal = 1f; s.levelsWhiteVal = 255f
+            s.resetLevelsPro()
             vm.beginProxyPreview()
+            vm.refreshHistogram(force = true)
             s.activePanel = BottomPanel.LEVELS_LIVE
         },
         StudioToolSpec(
@@ -200,7 +197,7 @@ internal object ToolRegistryV2 {
             pipeline = EnginePipeline.COALESCED_PROXY
         ) {
             vm.setTool(ActiveTool.NONE)
-            s.hslHue = List(8) { 0f }; s.hslSat = List(8) { 0f }; s.hslLum = List(8) { 0f }
+            s.resetHslPro()
             vm.beginProxyPreview()
             s.activePanel = BottomPanel.HSL_MIXER_LIVE
         },
@@ -214,9 +211,82 @@ internal object ToolRegistryV2 {
             pipeline = EnginePipeline.COALESCED_PROXY
         ) {
             vm.setTool(ActiveTool.NONE)
-            s.cbCyanRedVal = 0f; s.cbMagentaGreenVal = 0f; s.cbYellowBlueVal = 0f
+            s.resetColorBalancePro()
             vm.beginProxyPreview()
             s.activePanel = BottomPanel.COLOR_BAL_LIVE
+        },
+        StudioToolSpec(
+            id = "bw_pro",
+            title = "Siyah-Beyaz Pro",
+            workspace = StudioWorkspace.LIGHT,
+            group = "Pro Tonlama",
+            icon = Icons.Default.FilterBAndW,
+            keywords = listOf("siyah beyaz", "bw", "monokrom", "sepya", "kanal"),
+            pipeline = EnginePipeline.COALESCED_PROXY
+        ) {
+            vm.setTool(ActiveTool.NONE)
+            s.resetBwPro()
+            vm.beginProxyPreview()
+            vm.updateProxyAdjustment("blackWhite", s.buildBwProJson())
+            s.activePanel = BottomPanel.BW_PRO_EDIT
+        },
+        StudioToolSpec(
+            id = "photo_filter",
+            title = "Fotoğraf Filtresi",
+            workspace = StudioWorkspace.LIGHT,
+            group = "Pro Tonlama",
+            icon = Icons.Default.FilterVintage,
+            keywords = listOf("fotoğraf filtresi", "ısıtma", "soğutma", "sepya", "optik"),
+            pipeline = EnginePipeline.COALESCED_PROXY
+        ) {
+            vm.setTool(ActiveTool.NONE)
+            s.resetPhotoFilterPro()
+            vm.beginProxyPreview()
+            vm.updateProxyAdjustment("photoFilter", s.buildPhotoFilterJson())
+            s.activePanel = BottomPanel.PHOTO_FILTER_EDIT
+        },
+        StudioToolSpec(
+            id = "selective_color",
+            title = "Seçici Renk",
+            workspace = StudioWorkspace.LIGHT,
+            group = "Pro Tonlama",
+            icon = Icons.Default.Palette,
+            keywords = listOf("seçici renk", "selective", "cmyk", "cyan", "macenta"),
+            pipeline = EnginePipeline.COALESCED_PROXY
+        ) {
+            vm.setTool(ActiveTool.NONE)
+            s.resetSelectiveColorPro()
+            vm.beginProxyPreview()
+            s.activePanel = BottomPanel.SELECTIVE_COLOR_EDIT
+        },
+        StudioToolSpec(
+            id = "channel_mixer",
+            title = "Kanal Karıştırıcı",
+            workspace = StudioWorkspace.LIGHT,
+            group = "Pro Tonlama",
+            icon = Icons.Default.Tune,
+            keywords = listOf("kanal karıştırıcı", "channel mixer", "rgb", "monokrom"),
+            pipeline = EnginePipeline.COALESCED_PROXY
+        ) {
+            vm.setTool(ActiveTool.NONE)
+            s.resetChannelMixerPro()
+            vm.beginProxyPreview()
+            s.activePanel = BottomPanel.CHANNEL_MIXER_EDIT
+        },
+        StudioToolSpec(
+            id = "gradient_map",
+            title = "Degrade Eşleme",
+            workspace = StudioWorkspace.LIGHT,
+            group = "Görünüm & LUT",
+            icon = Icons.Default.Gradient,
+            keywords = listOf("degrade eşleme", "gradient map", "duotone", "sinematik"),
+            pipeline = EnginePipeline.COALESCED_PROXY
+        ) {
+            vm.setTool(ActiveTool.NONE)
+            s.resetGradientMapPro()
+            vm.beginProxyPreview()
+            vm.updateProxyAdjustment("gradientMap", s.buildGradientMapJson())
+            s.activePanel = BottomPanel.GRADIENT_MAP_EDIT
         },
         StudioToolSpec(
             id = "poster_thresh",

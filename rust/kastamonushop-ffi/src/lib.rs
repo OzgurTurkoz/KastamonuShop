@@ -11,7 +11,7 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 
 pub use engine::{
-    DocumentInfo, EngineError, KastamonuEngine, LayerSummary, LayerThumbnail, PuppetPinPoint, SelectionBounds, StrokeSample, TextLayerStyle,
+    AutoLevelsResult, DocumentInfo, EngineError, HistogramData, KastamonuEngine, LayerSummary, LayerThumbnail, PuppetPinPoint, SampledColorInfo, SelectionBounds, StrokeSample, TextLayerStyle,
 };
 pub use renderer::{GpuPreviewState, ViewportCamera, VulkanRenderer};
 

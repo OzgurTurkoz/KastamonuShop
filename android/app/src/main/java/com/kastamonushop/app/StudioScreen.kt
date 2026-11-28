@@ -256,7 +256,10 @@ fun StonebridgeStudioScreen(
         NativeSurfaceBridge.nativeSetAdjustPreview(0f, 0f, 0f, 0f, 0f, 0f)
         NativeSurfaceBridge.nativeSetTonePreview(0f, 1f, 1f, 0f, 0f, 0f)
         s.curveOverlayExpanded = false
+        s.curveEyedropperMode = 0
+        s.hslTatActive = false
         NativeSurfaceBridge.nativeSetCurvePreview(0.0f, 0.25f, 0.50f, 0.75f, 1.0f, false)
+        vm.clearHistogram()
         vm.endProxyPreview()
     }
 
@@ -268,6 +271,7 @@ fun StonebridgeStudioScreen(
     fun dismissLivePanelIfActive() {
         when (s.activePanel) {
             BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE,
+            BottomPanel.BW_PRO_EDIT, BottomPanel.PHOTO_FILTER_EDIT, BottomPanel.SELECTIVE_COLOR_EDIT, BottomPanel.CHANNEL_MIXER_EDIT, BottomPanel.GRADIENT_MAP_EDIT,
             BottomPanel.CAMERA_LIGHT_LIVE, BottomPanel.HSL_MIXER_LIVE, BottomPanel.POSTER_THRESH_LIVE,
             BottomPanel.CINEMA_LOOK_EDIT, BottomPanel.MOTION_BLUR_EDIT, BottomPanel.RADIAL_BLUR_EDIT,
             BottomPanel.FILTER_GALLERY_EDIT, BottomPanel.LIGHT_DISTORT_EDIT, BottomPanel.PUPPET_WARP_EDIT, BottomPanel.GRADIENT_EDIT, BottomPanel.SHAPE_EDIT -> {
@@ -305,7 +309,8 @@ fun StonebridgeStudioScreen(
             s.showLayers = false
         } else if (s.activePanel != BottomPanel.DOCK) {
             when (s.activePanel) {
-                BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE -> {
+                BottomPanel.LIGHT_LIVE, BottomPanel.COLOR_LIVE, BottomPanel.LEVELS_LIVE, BottomPanel.COLOR_BAL_LIVE, BottomPanel.CURVES_LIVE,
+                BottomPanel.BW_PRO_EDIT, BottomPanel.PHOTO_FILTER_EDIT, BottomPanel.SELECTIVE_COLOR_EDIT, BottomPanel.CHANNEL_MIXER_EDIT, BottomPanel.GRADIENT_MAP_EDIT -> {
                     s.curveOverlayExpanded = false; clearAdjustGpuPreviewOnly(); vm.endProxyPreview()
                     s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                 }
@@ -1060,24 +1065,42 @@ fun StonebridgeStudioScreen(
                 val boxW = (boxR - boxL).coerceAtLeast(120f)
                 val boxH = (boxB - boxT).coerceAtLeast(120f)
 
-                val knotXs = floatArrayOf(0f, 0.25f, 0.50f, 0.75f, 1.0f)
-                fun knotScreen(idx: Int, yNorm: Float): Offset =
-                    Offset(boxL + knotXs[idx] * boxW, boxB - yNorm * boxH)
-
-                fun activeChannelYs(): FloatArray = when (s.curveChannelIdx) {
-                    1 -> s.curveRedPts.toFloatArray()
-                    2 -> s.curveGreenPts.toFloatArray()
-                    3 -> s.curveBluePts.toFloatArray()
-                    else -> floatArrayOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                }
-                fun buildAllChannelsJson(): String {
-                    fun fmtPts(pts: List<Float>): String {
-                        val xs = listOf(0, 64, 128, 192, 255)
-                        return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
+                fun evalMonotoneCurve(x: Float, pts: List<Pair<Float, Float>>): Float {
+                    if (pts.isEmpty()) return x.coerceIn(0f, 1f)
+                    if (pts.size == 1) return pts[0].second.coerceIn(0f, 1f)
+                    val sorted = pts.sortedBy { it.first }
+                    if (x <= sorted.first().first) return sorted.first().second.coerceIn(0f, 1f)
+                    if (x >= sorted.last().first) return sorted.last().second.coerceIn(0f, 1f)
+                    val n = sorted.size
+                    val sec = FloatArray(n - 1)
+                    for (i in 0 until n - 1) {
+                        val dx = (sorted[i + 1].first - sorted[i].first).coerceAtLeast(1e-4f)
+                        sec[i] = (sorted[i + 1].second - sorted[i].second) / dx
                     }
-                    val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                    return """{"points":${fmtPts(mPts)},"red":${fmtPts(s.curveRedPts)},"green":${fmtPts(s.curveGreenPts)},"blue":${fmtPts(s.curveBluePts)}}"""
+                    val tang = FloatArray(n)
+                    tang[0] = sec[0]
+                    tang[n - 1] = sec[n - 2]
+                    for (i in 1 until n - 1) {
+                        tang[i] = if (sec[i - 1] * sec[i] <= 0f) 0f else (sec[i - 1] + sec[i]) * 0.5f
+                    }
+                    var seg = 0
+                    while (seg < n - 2 && x > sorted[seg + 1].first) seg++
+                    val x0 = sorted[seg].first
+                    val x1 = sorted[seg + 1].first
+                    val dx = (x1 - x0).coerceAtLeast(1e-4f)
+                    val t = ((x - x0) / dx).coerceIn(0f, 1f)
+                    val t2 = t * t
+                    val t3 = t2 * t
+                    val h00 = 2f * t3 - 3f * t2 + 1f
+                    val h10 = t3 - 2f * t2 + t
+                    val h01 = -2f * t3 + 3f * t2
+                    val h11 = t3 - t2
+                    return (h00 * sorted[seg].second + h10 * dx * tang[seg] + h01 * sorted[seg + 1].second + h11 * dx * tang[seg + 1]).coerceIn(0f, 1f)
                 }
+
+                fun nodeScreen(pt: Pair<Float, Float>): Offset =
+                    Offset(boxL + pt.first * boxW, boxB - pt.second * boxH)
+
                 val chColor = when (s.curveChannelIdx) {
                     1 -> Color(0xFFFF5252)
                     2 -> Color(0xFF4ADE80)
@@ -1087,61 +1110,135 @@ fun StonebridgeStudioScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(boxL, boxT, boxW, boxH, s.curveChannelIdx) {
+                        .then(if (s.singleFingerPanMode) Modifier else Modifier.pointerInput(boxL, boxT, boxW, boxH, s.curveChannelIdx, s.curveEyedropperMode) {
                             detectDragGestures(
                                 onDragStart = { pos ->
-                                    val ys = activeChannelYs()
+                                    if (s.curveEyedropperMode in 1..3 && pos.x in boxL..boxR && pos.y in boxT..boxB) {
+                                        val nx = ((pos.x - boxL) / boxW).coerceIn(0f, 1f)
+                                        val ny = ((pos.y - boxT) / boxH).coerceIn(0f, 1f)
+                                        val mode = s.curveEyedropperMode
+                                        vm.sampleColorAtNorm(nx, ny) { info ->
+                                            s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                            s.curveRedoStack = emptyList()
+                                            val lum = (info.luma.toInt() / 255f).coerceIn(0.02f, 0.98f)
+                                            when (mode) {
+                                                1 -> { // Black point
+                                                    val pts = s.curveRgbNodes.toMutableList()
+                                                    pts[0] = (lum.coerceAtMost(0.45f)) to 0f
+                                                    s.curveRgbNodes = pts.sortedBy { it.first }
+                                                }
+                                                2 -> { // Gray point (neutralize R/G/B toward luma)
+                                                    val rIn = (info.r.toInt() / 255f).coerceIn(0.05f, 0.95f)
+                                                    val gIn = (info.g.toInt() / 255f).coerceIn(0.05f, 0.95f)
+                                                    val bIn = (info.b.toInt() / 255f).coerceIn(0.05f, 0.95f)
+                                                    s.curveRedNodes = listOf(0f to 0f, rIn to lum, 1f to 1f)
+                                                    s.curveGreenNodes = listOf(0f to 0f, gIn to lum, 1f to 1f)
+                                                    s.curveBlueNodes = listOf(0f to 0f, bIn to lum, 1f to 1f)
+                                                }
+                                                3 -> { // White point
+                                                    val pts = s.curveRgbNodes.toMutableList()
+                                                    pts[pts.lastIndex] = (lum.coerceAtLeast(0.55f)) to 1f
+                                                    s.curveRgbNodes = pts.sortedBy { it.first }
+                                                }
+                                            }
+                                            s.curveEyedropperMode = 0
+                                            vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                            vm.refreshHistogram(force = true)
+                                        }
+                                        s.draggingCurveNode = -1
+                                        return@detectDragGestures
+                                    }
+
+                                    val nodes = s.activeCurveNodes()
                                     var bestIdx = -1
-                                    var bestDist = 115f
-                                    for (i in 0..4) {
-                                        val pt = knotScreen(i, ys[i])
-                                        val d = kotlin.math.hypot((pos.x - pt.x).toDouble(), (pos.y - pt.y).toDouble()).toFloat()
+                                    var bestDist = 96f
+                                    nodes.forEachIndexed { i, pt ->
+                                        val sp = nodeScreen(pt)
+                                        val d = kotlin.math.hypot((pos.x - sp.x).toDouble(), (pos.y - sp.y).toDouble()).toFloat()
                                         if (d < bestDist) {
                                             bestDist = d
                                             bestIdx = i
                                         }
                                     }
-                                    if (bestIdx == -1 && pos.x in (boxL - 36f)..(boxR + 36f) && pos.y in (boxT - 36f)..(boxB + 36f)) {
-                                        val nx = ((pos.x - boxL) / boxW).coerceIn(0f, 1f)
-                                        bestIdx = (nx * 4f).roundToInt().coerceIn(0, 4)
-                                    }
-                                    if (bestIdx in 0..4) {
+                                    if (bestIdx == -1 && pos.x in (boxL - 28f)..(boxR + 28f) && pos.y in (boxT - 28f)..(boxB + 28f)) {
+                                        // Insert a new arbitrary control point (up to 16)
+                                        val nx = ((pos.x - boxL) / boxW).coerceIn(0.03f, 0.97f)
+                                        val ny = ((boxB - pos.y) / boxH).coerceIn(0f, 1f)
+                                        if (nodes.size < 16) {
+                                            s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                            s.curveRedoStack = emptyList()
+                                            val updated = (nodes + (nx to ny)).sortedBy { it.first }
+                                            s.setActiveCurveNodes(updated)
+                                            bestIdx = updated.indexOfFirst { kotlin.math.abs(it.first - nx) < 0.002f && kotlin.math.abs(it.second - ny) < 0.002f }
+                                            vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                        }
+                                    } else if (bestIdx >= 0) {
                                         s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
                                         s.curveRedoStack = emptyList()
                                     }
                                     s.draggingCurveNode = bestIdx
+                                    s.curveSelectedNodeIdx = bestIdx
                                 },
-                                onDragEnd = { s.draggingCurveNode = -1 },
+                                onDragEnd = {
+                                    s.draggingCurveNode = -1
+                                    vm.refreshHistogram(force = true)
+                                },
                                 onDragCancel = { s.draggingCurveNode = -1 },
                                 onDrag = { change, _ ->
                                     val idx = s.draggingCurveNode
-                                    if (idx in 0..4) {
+                                    val nodes = s.activeCurveNodes()
+                                    if (idx in nodes.indices) {
                                         change.consume()
                                         val ny = ((boxB - change.position.y) / boxH).coerceIn(0f, 1f)
-                                        when (s.curveChannelIdx) {
-                                            1 -> s.curveRedPts = s.curveRedPts.toMutableList().apply { this[idx] = ny }
-                                            2 -> s.curveGreenPts = s.curveGreenPts.toMutableList().apply { this[idx] = ny }
-                                            3 -> s.curveBluePts = s.curveBluePts.toMutableList().apply { this[idx] = ny }
-                                            else -> when (idx) {
-                                                0 -> s.curveBlackVal = ny
-                                                1 -> s.curveShadowVal = ny
-                                                2 -> s.curveMidVal = ny
-                                                3 -> s.curveHighVal = ny
-                                                4 -> s.curveWhiteVal = ny
-                                            }
+                                        val nx = if (idx == 0) {
+                                            ((change.position.x - boxL) / boxW).coerceIn(0f, (nodes[1].first - 0.03f).coerceAtLeast(0f))
+                                        } else if (idx == nodes.lastIndex) {
+                                            ((change.position.x - boxL) / boxW).coerceIn((nodes[idx - 1].first + 0.03f).coerceAtMost(1f), 1f)
+                                        } else {
+                                            ((change.position.x - boxL) / boxW).coerceIn(nodes[idx - 1].first + 0.025f, nodes[idx + 1].first - 0.025f)
                                         }
-                                        vm.updateProxyAdjustment("curves", buildAllChannelsJson())
+                                        val updated = nodes.toMutableList().apply { this[idx] = nx to ny }
+                                        s.setActiveCurveNodes(updated)
+                                        vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                        vm.refreshHistogram()
                                     }
                                 }
                             )
                         })
                 ) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
+                        // Live RGB / Luma Histogram directly behind the Curves grid (Madde 2)
+                        val hist = state.histogram
+                        if (hist != null && hist.luma.size >= 2) {
+                            fun drawHistArea(bins: List<Float>, fill: Color) {
+                                val hp = Path()
+                                val step = boxW / (bins.size - 1).toFloat()
+                                hp.moveTo(boxL, boxB)
+                                bins.forEachIndexed { i, v ->
+                                    hp.lineTo(boxL + i * step, boxB - v.coerceIn(0f, 1f) * boxH * 0.42f)
+                                }
+                                hp.lineTo(boxR, boxB)
+                                hp.close()
+                                drawPath(hp, color = fill)
+                            }
+                            when (s.curveChannelIdx) {
+                                1 -> drawHistArea(hist.red, Color(0x38FF5252))
+                                2 -> drawHistArea(hist.green, Color(0x384ADE80))
+                                3 -> drawHistArea(hist.blue, Color(0x3860A5FA))
+                                else -> {
+                                    drawHistArea(hist.red, Color(0x1CFF5252))
+                                    drawHistArea(hist.green, Color(0x1C4ADE80))
+                                    drawHistArea(hist.blue, Color(0x1C60A5FA))
+                                    drawHistArea(hist.luma, Color(0x28FFFFFF))
+                                }
+                            }
+                        }
+
                         drawRect(
                             color = Color(0xCCFFFFFF),
                             topLeft = Offset(boxL, boxT),
                             size = Size(boxW, boxH),
-                            style = Stroke(width = 2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)))
+                            style = Stroke(width = 2.2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)))
                         )
                         for (g in 1..3) {
                             val t = g / 4f
@@ -1150,12 +1247,12 @@ fun StonebridgeStudioScreen(
                         }
                         drawLine(Color(0x44FFFFFF), Offset(boxL, boxB), Offset(boxR, boxT), 1.5f)
 
-                        val ys = activeChannelYs()
+                        val nodes = s.activeCurveNodes()
                         val path = Path()
-                        val steps = 64
+                        val steps = 72
                         for (i in 0..steps) {
                             val x = i.toFloat() / steps.toFloat()
-                            val y = evalHermiteCurve(x, ys[0], ys[1], ys[2], ys[3], ys[4])
+                            val y = evalMonotoneCurve(x, nodes)
                             val sx = boxL + x * boxW
                             val sy = boxB - y * boxH
                             if (i == 0) path.moveTo(sx, sy) else path.lineTo(sx, sy)
@@ -1163,17 +1260,17 @@ fun StonebridgeStudioScreen(
                         drawPath(path, color = Color(0xBB000000), style = Stroke(width = 6.5f))
                         drawPath(path, color = chColor, style = Stroke(width = 3.2f))
 
-                        for (i in 0..4) {
-                            val pt = knotScreen(i, ys[i])
-                            val active = s.draggingCurveNode == i
+                        nodes.forEachIndexed { i, node ->
+                            val pt = nodeScreen(node)
+                            val active = s.draggingCurveNode == i || s.curveSelectedNodeIdx == i
                             drawCircle(
                                 color = if (active) Color(0xCCF59E0B) else Color(0x77FFFFFF),
-                                radius = if (active) 32f else 25f,
+                                radius = if (active) 30f else 22f,
                                 center = pt
                             )
                             drawCircle(
-                                color = if (active) Color(0xFF4F9CFF) else Color.White,
-                                radius = if (active) 30f else 24f,
+                                color = if (active) Color(0xFFF59E0B) else Color.White,
+                                radius = if (active) 28f else 20f,
                                 center = pt,
                                 style = Stroke(width = 2.5f)
                             )
@@ -1181,6 +1278,42 @@ fun StonebridgeStudioScreen(
                         }
                     }
                 }
+            }
+        }
+
+        // v2.3.0 Parça 2: HSL Targeted Adjustment Tool (TAT) — touch photo to auto-pick HSL color band & drag left/right
+        if (s.activePanel == BottomPanel.HSL_MIXER_LIVE && s.hslTatActive && !s.singleFingerPanMode) {
+            val view = s.canvasViewRef
+            val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
+            val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
+            if (view != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(docW, docH, s.hslTatParamIdx) {
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    val (dx, dy) = view.screenToDoc(pos.x, pos.y)
+                                    val nx = (dx / docW).coerceIn(0f, 1f)
+                                    val ny = (dy / docH).coerceIn(0f, 1f)
+                                    vm.sampleColorAtNorm(nx, ny) { info ->
+                                        s.hslBandIdx = info.hslBand.toInt().coerceIn(0, 7)
+                                    }
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val delta = (dragAmount.x * 0.45f)
+                                    val idx = s.hslBandIdx.coerceIn(0, 7)
+                                    when (s.hslTatParamIdx) {
+                                        0 -> s.hslHue = s.hslHue.toMutableList().apply { this[idx] = (this[idx] + delta).coerceIn(-100f, 100f) }
+                                        2 -> s.hslLum = s.hslLum.toMutableList().apply { this[idx] = (this[idx] + delta).coerceIn(-100f, 100f) }
+                                        else -> s.hslSat = s.hslSat.toMutableList().apply { this[idx] = (this[idx] + delta).coerceIn(-100f, 100f) }
+                                    }
+                                    vm.updateProxyHslMixer(s.hslHue, s.hslSat, s.hslLum)
+                                }
+                            )
+                        }
+                )
             }
         }
 
@@ -1916,13 +2049,8 @@ fun StonebridgeStudioScreen(
                                     s.curveRedoStack = s.curveRedoStack + s.snapshotCurve()
                                     s.curveUndoStack = s.curveUndoStack.dropLast(1)
                                     s.restoreCurve(prev)
-                                    fun fmtPts(pts: List<Float>): String {
-                                        val xs = listOf(0, 64, 128, 192, 255)
-                                        return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
-                                    }
-                                    val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                                    val json = """{"points":${fmtPts(mPts)},"red":${fmtPts(s.curveRedPts)},"green":${fmtPts(s.curveGreenPts)},"blue":${fmtPts(s.curveBluePts)}}"""
-                                    vm.updateProxyAdjustment("curves", json)
+                                    if (s.isCurvesIdentity()) vm.resetProxyPreview() else vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                    vm.refreshHistogram(force = true)
                                 }
                             }
                             BottomPanel.PUPPET_WARP_EDIT -> {
@@ -1963,13 +2091,8 @@ fun StonebridgeStudioScreen(
                                     s.curveUndoStack = s.curveUndoStack + s.snapshotCurve()
                                     s.curveRedoStack = s.curveRedoStack.dropLast(1)
                                     s.restoreCurve(next)
-                                    fun fmtPts(pts: List<Float>): String {
-                                        val xs = listOf(0, 64, 128, 192, 255)
-                                        return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
-                                    }
-                                    val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                                    val json = """{"points":${fmtPts(mPts)},"red":${fmtPts(s.curveRedPts)},"green":${fmtPts(s.curveGreenPts)},"blue":${fmtPts(s.curveBluePts)}}"""
-                                    vm.updateProxyAdjustment("curves", json)
+                                    if (s.isCurvesIdentity()) vm.resetProxyPreview() else vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                    vm.refreshHistogram(force = true)
                                 }
                             }
                             BottomPanel.PUPPET_WARP_EDIT -> {

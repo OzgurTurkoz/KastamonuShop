@@ -318,29 +318,227 @@ internal class StudioSessionState {
     var textSnapX by mutableStateOf(false)
     var textSnapY by mutableStateOf(false)
 
-    // v2.2.1 Curve Undo/Redo snapshots (RGB + R + G + B)
+    // v2.3.0 Parça 2: Arbitrary-point Curves Pro (2..16 points per channel) + Eyedropper
+    var curveRgbNodes by mutableStateOf(listOf(0f to 0f, 0.25f to 0.25f, 0.50f to 0.50f, 0.75f to 0.75f, 1f to 1f))
+    var curveRedNodes by mutableStateOf(listOf(0f to 0f, 0.25f to 0.25f, 0.50f to 0.50f, 0.75f to 0.75f, 1f to 1f))
+    var curveGreenNodes by mutableStateOf(listOf(0f to 0f, 0.25f to 0.25f, 0.50f to 0.50f, 0.75f to 0.75f, 1f to 1f))
+    var curveBlueNodes by mutableStateOf(listOf(0f to 0f, 0.25f to 0.25f, 0.50f to 0.50f, 0.75f to 0.75f, 1f to 1f))
+    var curveSelectedNodeIdx by mutableIntStateOf(-1)
+    var curveEyedropperMode by mutableIntStateOf(0) // 0=off, 1=black, 2=gray, 3=white
+
     data class CurveSnapshot(
-        val rgb: List<Float>,
-        val red: List<Float>,
-        val green: List<Float>,
-        val blue: List<Float>
+        val rgb: List<Pair<Float, Float>>,
+        val red: List<Pair<Float, Float>>,
+        val green: List<Pair<Float, Float>>,
+        val blue: List<Pair<Float, Float>>
     )
     var curveUndoStack by mutableStateOf<List<CurveSnapshot>>(emptyList())
     var curveRedoStack by mutableStateOf<List<CurveSnapshot>>(emptyList())
 
+    fun defaultCurveNodes(): List<Pair<Float, Float>> =
+        listOf(0f to 0f, 0.25f to 0.25f, 0.50f to 0.50f, 0.75f to 0.75f, 1f to 1f)
+
+    fun activeCurveNodes(): List<Pair<Float, Float>> = when (curveChannelIdx) {
+        1 -> curveRedNodes
+        2 -> curveGreenNodes
+        3 -> curveBlueNodes
+        else -> curveRgbNodes
+    }
+
+    fun setActiveCurveNodes(nodes: List<Pair<Float, Float>>) {
+        val sorted = nodes.sortedBy { it.first }
+        when (curveChannelIdx) {
+            1 -> curveRedNodes = sorted
+            2 -> curveGreenNodes = sorted
+            3 -> curveBlueNodes = sorted
+            else -> curveRgbNodes = sorted
+        }
+    }
+
     fun snapshotCurve(): CurveSnapshot = CurveSnapshot(
-        rgb = listOf(curveBlackVal, curveShadowVal, curveMidVal, curveHighVal, curveWhiteVal),
-        red = curveRedPts.toList(),
-        green = curveGreenPts.toList(),
-        blue = curveBluePts.toList()
+        rgb = curveRgbNodes.toList(),
+        red = curveRedNodes.toList(),
+        green = curveGreenNodes.toList(),
+        blue = curveBlueNodes.toList()
     )
 
     fun restoreCurve(snap: CurveSnapshot) {
-        curveBlackVal = snap.rgb[0]; curveShadowVal = snap.rgb[1]; curveMidVal = snap.rgb[2]
-        curveHighVal = snap.rgb[3]; curveWhiteVal = snap.rgb[4]
-        curveRedPts = snap.red.toList()
-        curveGreenPts = snap.green.toList()
-        curveBluePts = snap.blue.toList()
+        curveRgbNodes = snap.rgb.toList()
+        curveRedNodes = snap.red.toList()
+        curveGreenNodes = snap.green.toList()
+        curveBlueNodes = snap.blue.toList()
+        curveSelectedNodeIdx = -1
+    }
+
+    fun resetActiveCurveChannel() {
+        setActiveCurveNodes(defaultCurveNodes())
+        curveSelectedNodeIdx = -1
+    }
+
+    fun resetAllCurves() {
+        curveRgbNodes = defaultCurveNodes()
+        curveRedNodes = defaultCurveNodes()
+        curveGreenNodes = defaultCurveNodes()
+        curveBlueNodes = defaultCurveNodes()
+        curveChannelIdx = 0
+        curveSelectedNodeIdx = -1
+        curveEyedropperMode = 0
+        curveBlackVal = 0f; curveShadowVal = 0.25f; curveMidVal = 0.50f; curveHighVal = 0.75f; curveWhiteVal = 1f
+        curveRedPts = listOf(0f, 0.25f, 0.50f, 0.75f, 1f)
+        curveGreenPts = listOf(0f, 0.25f, 0.50f, 0.75f, 1f)
+        curveBluePts = listOf(0f, 0.25f, 0.50f, 0.75f, 1f)
+    }
+
+    fun isCurvesIdentity(): Boolean {
+        fun isLine(pts: List<Pair<Float, Float>>): Boolean =
+            pts.all { kotlin.math.abs(it.first - it.second) < 0.005f }
+        return isLine(curveRgbNodes) && isLine(curveRedNodes) && isLine(curveGreenNodes) && isLine(curveBlueNodes)
+    }
+
+    fun buildCurvesProJson(): String {
+        fun fmt(pts: List<Pair<Float, Float>>): String =
+            pts.sortedBy { it.first }.joinToString(",", "[", "]") { (x, y) ->
+                "[${(x * 255f).toInt().coerceIn(0, 255)},${(y * 255f).toInt().coerceIn(0, 255)}]"
+            }
+        return "{\"points\":${fmt(curveRgbNodes)},\"red\":${fmt(curveRedNodes)},\"green\":${fmt(curveGreenNodes)},\"blue\":${fmt(curveBlueNodes)}}"
+    }
+
+    // v2.3.0 Parça 2: Levels Pro (RGB/R/G/B + Output Black/White)
+    data class LevelsChannelState(
+        val inBlack: Float = 0f,
+        val gamma: Float = 1f,
+        val inWhite: Float = 255f,
+        val outBlack: Float = 0f,
+        val outWhite: Float = 255f
+    )
+    var levelsChannelIdx by mutableIntStateOf(0) // 0=RGB, 1=R, 2=G, 3=B
+    var levelsShowOutput by mutableStateOf(false)
+    var levelsRgb by mutableStateOf(LevelsChannelState())
+    var levelsRed by mutableStateOf(LevelsChannelState())
+    var levelsGreen by mutableStateOf(LevelsChannelState())
+    var levelsBlue by mutableStateOf(LevelsChannelState())
+
+    fun activeLevelsChannel(): LevelsChannelState = when (levelsChannelIdx) {
+        1 -> levelsRed; 2 -> levelsGreen; 3 -> levelsBlue; else -> levelsRgb
+    }
+    fun setActiveLevelsChannel(v: LevelsChannelState) {
+        when (levelsChannelIdx) {
+            1 -> levelsRed = v; 2 -> levelsGreen = v; 3 -> levelsBlue = v; else -> levelsRgb = v
+        }
+    }
+    fun resetLevelsPro() {
+        levelsChannelIdx = 0; levelsShowOutput = false
+        levelsRgb = LevelsChannelState(); levelsRed = LevelsChannelState()
+        levelsGreen = LevelsChannelState(); levelsBlue = LevelsChannelState()
+        levelsBlackVal = 0f; levelsGammaVal = 1f; levelsWhiteVal = 255f
+    }
+    fun buildLevelsProJson(): String {
+        fun fmtCh(c: LevelsChannelState): String {
+            val g = String.format(java.util.Locale.US, "%.2f", c.gamma.coerceIn(0.1f, 9.99f))
+            return "\"inBlack\":${c.inBlack.toInt().coerceIn(0, 250)},\"gamma\":$g,\"inWhite\":${c.inWhite.toInt().coerceIn(5, 255)},\"outBlack\":${c.outBlack.toInt().coerceIn(0, 255)},\"outWhite\":${c.outWhite.toInt().coerceIn(0, 255)}"
+        }
+        return "{${fmtCh(levelsRgb)},\"red\":{${fmtCh(levelsRed)}},\"green\":{${fmtCh(levelsGreen)}},\"blue\":{${fmtCh(levelsBlue)}}}"
+    }
+
+    // v2.3.0 Parça 2: Color Balance preserveLuminosity + reset
+    var cbPreserveLuminosity by mutableStateOf(true)
+    fun resetColorBalancePro() {
+        cbToneIdx = 1; cbPreserveLuminosity = true
+        cbShadowCR = 0f; cbShadowMG = 0f; cbShadowYB = 0f
+        cbCyanRedVal = 0f; cbMagentaGreenVal = 0f; cbYellowBlueVal = 0f
+        cbHighCR = 0f; cbHighMG = 0f; cbHighYB = 0f
+    }
+
+    // v2.3.0 Parça 2: HSL Targeted Adjustment Tool (TAT)
+    var hslTatActive by mutableStateOf(false)
+    var hslTatParamIdx by mutableIntStateOf(1) // 0=Ton, 1=Doygunluk, 2=Parlaklık
+    fun resetHslPro() {
+        hslBandIdx = 0; hslTatActive = false; hslTatParamIdx = 1
+        hslHue = List(8) { 0f }; hslSat = List(8) { 0f }; hslLum = List(8) { 0f }
+    }
+
+    // v2.3.0 Parça 2: Camera RAW Pro focused slider index
+    var camFocusParamIdx by mutableIntStateOf(0)
+
+    // v2.3.0 Parça 2: Black & White Pro (6 channels + Tint)
+    var bwWeights by mutableStateOf(listOf(40f, 60f, 40f, 60f, 20f, 80f)) // R,Y,G,C,B,M
+    var bwSelectedChannel by mutableIntStateOf(0)
+    var bwTintEnabled by mutableStateOf(false)
+    var bwTintColorHex by mutableStateOf("#E1D3B3")
+    fun resetBwPro() {
+        bwWeights = listOf(40f, 60f, 40f, 60f, 20f, 80f)
+        bwSelectedChannel = 0; bwTintEnabled = false; bwTintColorHex = "#E1D3B3"
+    }
+    fun buildBwProJson(): String =
+        "{\"reds\":${bwWeights[0].toInt()},\"yellows\":${bwWeights[1].toInt()},\"greens\":${bwWeights[2].toInt()},\"cyans\":${bwWeights[3].toInt()},\"blues\":${bwWeights[4].toInt()},\"magentas\":${bwWeights[5].toInt()},\"tint\":$bwTintEnabled,\"tintColor\":\"$bwTintColorHex\"}"
+
+    // v2.3.0 Parça 2: Photo Filter Pro
+    var pfColorHex by mutableStateOf("#EC8A00")
+    var pfDensity by mutableFloatStateOf(25f)
+    var pfPreserveLum by mutableStateOf(true)
+    fun resetPhotoFilterPro() { pfColorHex = "#EC8A00"; pfDensity = 25f; pfPreserveLum = true }
+    fun buildPhotoFilterJson(): String =
+        "{\"color\":\"$pfColorHex\",\"density\":${pfDensity.toInt().coerceIn(0, 100)},\"preserveLuminosity\":$pfPreserveLum}"
+
+    // v2.3.0 Parça 2: Selective Color Pro (9 ranges x 4 CMYK)
+    var selColRangeIdx by mutableIntStateOf(0)
+    var selColParamIdx by mutableIntStateOf(0) // 0=C,1=M,2=Y,3=K
+    var selColRelative by mutableStateOf(true)
+    var selColMatrix by mutableStateOf(List(9) { listOf(0f, 0f, 0f, 0f) })
+    fun resetSelectiveColorPro() {
+        selColRangeIdx = 0; selColParamIdx = 0; selColRelative = true
+        selColMatrix = List(9) { listOf(0f, 0f, 0f, 0f) }
+    }
+    fun buildSelectiveColorJson(): String {
+        val keys = listOf("reds", "yellows", "greens", "cyans", "blues", "magentas", "whites", "neutrals", "blacks")
+        val method = if (selColRelative) "relative" else "absolute"
+        val entries = keys.indices.joinToString(",") { i ->
+            val r = selColMatrix[i]
+            "\"${keys[i]}\":[${r[0].toInt()},${r[1].toInt()},${r[2].toInt()},${r[3].toInt()}]"
+        }
+        return "{\"method\":\"$method\",$entries}"
+    }
+
+    // v2.3.0 Parça 2: Channel Mixer Pro
+    var chMixOutIdx by mutableIntStateOf(0) // 0=Red, 1=Green, 2=Blue
+    var chMixParamIdx by mutableIntStateOf(0) // 0=R, 1=G, 2=B, 3=Const
+    var chMixMono by mutableStateOf(false)
+    var chMixRows by mutableStateOf(listOf(
+        listOf(100f, 0f, 0f, 0f),
+        listOf(0f, 100f, 0f, 0f),
+        listOf(0f, 0f, 100f, 0f)
+    ))
+    fun resetChannelMixerPro() {
+        chMixOutIdx = 0; chMixParamIdx = 0; chMixMono = false
+        chMixRows = listOf(listOf(100f, 0f, 0f, 0f), listOf(0f, 100f, 0f, 0f), listOf(0f, 0f, 100f, 0f))
+    }
+    fun buildChannelMixerJson(): String {
+        fun fmt(r: List<Float>) = "[${r[0].toInt()},${r[1].toInt()},${r[2].toInt()},${r[3].toInt()}]"
+        return if (chMixMono) {
+            "{\"monochrome\":true,\"gray\":${fmt(chMixRows[0])},\"red\":${fmt(chMixRows[0])},\"green\":${fmt(chMixRows[1])},\"blue\":${fmt(chMixRows[2])}}"
+        } else {
+            "{\"monochrome\":false,\"red\":${fmt(chMixRows[0])},\"green\":${fmt(chMixRows[1])},\"blue\":${fmt(chMixRows[2])}}"
+        }
+    }
+
+    // v2.3.0 Parça 2: Gradient Map Pro
+    var gmShadowHex by mutableStateOf("#141B3A")
+    var gmMidHex by mutableStateOf("#B84A39")
+    var gmHighHex by mutableStateOf("#F7D488")
+    var gmUseMid by mutableStateOf(true)
+    var gmReverse by mutableStateOf(false)
+    var gmPresetIdx by mutableIntStateOf(0)
+    fun resetGradientMapPro() {
+        gmShadowHex = "#141B3A"; gmMidHex = "#B84A39"; gmHighHex = "#F7D488"
+        gmUseMid = true; gmReverse = false; gmPresetIdx = 0
+    }
+    fun buildGradientMapJson(): String {
+        val stops = if (gmUseMid) {
+            "[[0.0,\"$gmShadowHex\"],[0.5,\"$gmMidHex\"],[1.0,\"$gmHighHex\"]]"
+        } else {
+            "[[0.0,\"$gmShadowHex\"],[1.0,\"$gmHighHex\"]]"
+        }
+        return "{\"stops\":$stops,\"reverse\":$gmReverse,\"dither\":false}"
     }
 
     fun resetTextProDefaults(docW: Float) {

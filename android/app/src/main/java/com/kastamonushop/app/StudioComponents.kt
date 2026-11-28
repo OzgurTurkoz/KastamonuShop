@@ -136,7 +136,12 @@ internal enum class BottomPanel {
     SELECT_COLOR_RANGE_EDIT,
     SELECT_SKY_EDIT,
     SELECT_FOCUS_AREA_EDIT,
-    SELECT_MODIFY_EDIT
+    SELECT_MODIFY_EDIT,
+    BW_PRO_EDIT,
+    PHOTO_FILTER_EDIT,
+    SELECTIVE_COLOR_EDIT,
+    CHANNEL_MIXER_EDIT,
+    GRADIENT_MAP_EDIT
 }
 
 internal data class BlendModeOption(

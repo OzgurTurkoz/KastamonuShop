@@ -532,51 +532,72 @@ internal fun StudioBottomPanelHost(
                     }
                 )
 
-                BottomPanel.LEVELS_LIVE -> LevelsLivePanel(
-                    inBlack = s.levelsBlackVal,
-                    gamma = s.levelsGammaVal,
-                    inWhite = s.levelsWhiteVal,
-                    onChange = { b, g, w ->
-                        s.levelsBlackVal = b
-                        s.levelsGammaVal = g
-                        s.levelsWhiteVal = w
-                        val gStr = String.format(java.util.Locale.US, "%.2f", g)
-                        vm.updateProxyAdjustment("levels", """{"inBlack":${b.roundToInt()},"gamma":$gStr,"inWhite":${w.roundToInt()}}""")
+                BottomPanel.LEVELS_LIVE -> LevelsProPanel(
+                    s = s,
+                    histogram = state.histogram,
+                    onPreview = {
+                        vm.updateProxyAdjustment("levels", s.buildLevelsProJson())
+                        vm.refreshHistogram()
                     },
-                    onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
-                    onApply = {
-                        val ib = s.levelsBlackVal.roundToInt().coerceIn(0, 240)
-                        val iw = s.levelsWhiteVal.roundToInt().coerceIn(ib + 10, 255)
-                        if (ib == 0 && iw == 255 && kotlin.math.abs(s.levelsGammaVal - 1f) < 0.02f) onClearAdjustGpuPreviewOnly()
-                        else {
-                            val gStr = String.format(java.util.Locale.US, "%.2f", s.levelsGammaVal)
-                            vm.applyAdjustmentOnce("levels", """{"inBlack":$ib,"gamma":$gStr,"inWhite":$iw}""", "Düzeyler")
+                    onAuto = {
+                        vm.computeAutoLevels { auto ->
+                            when (s.levelsChannelIdx) {
+                                1 -> s.levelsRed = s.levelsRed.copy(inBlack = auto.redBlack, inWhite = auto.redWhite)
+                                2 -> s.levelsGreen = s.levelsGreen.copy(inBlack = auto.greenBlack, inWhite = auto.greenWhite)
+                                3 -> s.levelsBlue = s.levelsBlue.copy(inBlack = auto.blueBlack, inWhite = auto.blueWhite)
+                                else -> s.levelsRgb = s.levelsRgb.copy(inBlack = auto.rgbBlack, inWhite = auto.rgbWhite)
+                            }
+                            vm.updateProxyAdjustment("levels", s.buildLevelsProJson())
+                            vm.refreshHistogram(force = true)
                         }
+                    },
+                    onReset = {
+                        s.resetLevelsPro()
+                        vm.resetProxyPreview()
+                        vm.refreshHistogram(force = true)
+                    },
+                    onClose = {
+                        vm.clearHistogram()
+                        onClearAdjustGpuPreviewOnly()
+                        s.activePanel = BottomPanel.DOCK
+                        s.activeWorkspaceV2 = s.lastWorkspaceV2
+                    },
+                    onApply = {
+                        vm.clearHistogram()
+                        vm.applyAdjustmentOnce("levels", s.buildLevelsProJson(), "Seviyeler")
                         s.activePanel = BottomPanel.DOCK
                     }
                 )
 
                 BottomPanel.COLOR_BAL_LIVE -> {
                     fun buildCbJson(): String =
-                        """{"shadows":[${s.cbShadowCR.roundToInt()},${s.cbShadowMG.roundToInt()},${s.cbShadowYB.roundToInt()}],"midtones":[${s.cbCyanRedVal.roundToInt()},${s.cbMagentaGreenVal.roundToInt()},${s.cbYellowBlueVal.roundToInt()}],"highlights":[${s.cbHighCR.roundToInt()},${s.cbHighMG.roundToInt()},${s.cbHighYB.roundToInt()}],"preserveLuminosity":true}"""
+                        "{\"shadows\":[${s.cbShadowCR.roundToInt()},${s.cbShadowMG.roundToInt()},${s.cbShadowYB.roundToInt()}],\"midtones\":[${s.cbCyanRedVal.roundToInt()},${s.cbMagentaGreenVal.roundToInt()},${s.cbYellowBlueVal.roundToInt()}],\"highlights\":[${s.cbHighCR.roundToInt()},${s.cbHighMG.roundToInt()},${s.cbHighYB.roundToInt()}],\"preserveLuminosity\":${s.cbPreserveLuminosity}}"
                     val curCR = when (s.cbToneIdx) { 0 -> s.cbShadowCR; 2 -> s.cbHighCR; else -> s.cbCyanRedVal }
                     val curMG = when (s.cbToneIdx) { 0 -> s.cbShadowMG; 2 -> s.cbHighMG; else -> s.cbMagentaGreenVal }
                     val curYB = when (s.cbToneIdx) { 0 -> s.cbShadowYB; 2 -> s.cbHighYB; else -> s.cbYellowBlueVal }
                     Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         BottomEditorHeader(
-                            title = "Renk Dengesi (3 Ton)",
-                            subtitle = "Gölgeler, Orta Tonlar ve Aydınlıklar ayrı ayrı",
+                            title = "Renk Dengesi Pro",
+                            subtitle = "Gölgeler, Orta Tonlar ve Aydınlıklar",
                             applyLabel = "Uygula",
-                            onClose = { onClearAdjustGpuPreviewOnly(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                            onClose = {
+                                onClearAdjustGpuPreviewOnly()
+                                vm.endProxyPreview()
+                                s.activePanel = BottomPanel.DOCK
+                                s.activeWorkspaceV2 = s.lastWorkspaceV2
+                            },
                             onApply = {
-                                vm.applyAdjustmentOnce("colorBalance", buildCbJson(), "Renk dengesi uygulandı")
+                                vm.applyAdjustmentOnce("colorBalance", buildCbJson(), "Renk dengesi")
                                 s.activePanel = BottomPanel.DOCK
                             }
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             listOf("Gölgeler", "Orta Tonlar", "Aydınlıklar").forEachIndexed { idx, lbl ->
                                 ProPill(
                                     selected = s.cbToneIdx == idx,
@@ -584,6 +605,22 @@ internal fun StudioBottomPanelHost(
                                     label = { Text(lbl, fontSize = 11.sp) }
                                 )
                             }
+                            ProPill(
+                                selected = s.cbPreserveLuminosity,
+                                onClick = {
+                                    s.cbPreserveLuminosity = !s.cbPreserveLuminosity
+                                    vm.updateProxyAdjustment("colorBalance", buildCbJson())
+                                },
+                                label = { Text(if (s.cbPreserveLuminosity) "Parlaklık Koru ✓" else "Parlaklık Koru", fontSize = 10.5.sp) }
+                            )
+                            ProPill(
+                                selected = false,
+                                onClick = {
+                                    s.resetColorBalancePro()
+                                    vm.resetProxyPreview()
+                                },
+                                label = { Text("Sıfırla", fontSize = 10.5.sp, color = Color(0xFFFF8A8A)) }
+                            )
                         }
                         CompactSliderRow("Cyan / Kırmızı", "${curCR.roundToInt()}", curCR, -100f..100f, defaultValue = 0f) {
                             when (s.cbToneIdx) { 0 -> s.cbShadowCR = it; 2 -> s.cbHighCR = it; else -> s.cbCyanRedVal = it }
@@ -599,25 +636,27 @@ internal fun StudioBottomPanelHost(
                         }
                     }
                 }
+
                 BottomPanel.CURVES_LIVE -> {
+                    val activeNodes = s.activeCurveNodes()
+                    val canDeleteNode = s.curveSelectedNodeIdx in 1 until (activeNodes.size - 1) && activeNodes.size > 2
                     Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        fun buildRgbCurvesJson(): String {
-                            fun fmtPts(pts: List<Float>): String {
-                                val xs = listOf(0, 64, 128, 192, 255)
-                                return xs.indices.joinToString(",", "[", "]") { i -> "[${xs[i]},${(pts[i] * 255f).roundToInt().coerceIn(0, 255)}]" }
-                            }
-                            val mPts = listOf(s.curveBlackVal, s.curveShadowVal, s.curveMidVal, s.curveHighVal, s.curveWhiteVal)
-                            return "{\"points\":${fmtPts(mPts)},\"red\":${fmtPts(s.curveRedPts)},\"green\":${fmtPts(s.curveGreenPts)},\"blue\":${fmtPts(s.curveBluePts)}}"
-                        }
                         BottomEditorHeader(
-                            title = "Eğriler (Curves)",
-                            subtitle = "Fotoğraf üzerindeki noktaları doğrudan parmağınla sürükle",
+                            title = "Eğriler Pro (Curves)",
+                            subtitle = when (s.curveEyedropperMode) {
+                                1 -> "Siyah nokta için fotoğrafta en koyu alana dokun"
+                                2 -> "Gri denge için fotoğrafta nötr alana dokun"
+                                3 -> "Beyaz nokta için fotoğrafta en parlak alana dokun"
+                                else -> "Noktaları sürükle veya boşluğa dokunarak yeni nokta ekle"
+                            },
                             applyLabel = "Uygula",
                             onClose = {
                                 s.curveOverlayExpanded = false
+                                s.curveEyedropperMode = 0
+                                vm.clearHistogram()
                                 onClearAdjustGpuPreviewOnly()
                                 vm.endProxyPreview()
                                 s.activePanel = BottomPanel.DOCK
@@ -625,8 +664,10 @@ internal fun StudioBottomPanelHost(
                             },
                             onApply = {
                                 s.curveOverlayExpanded = false
+                                s.curveEyedropperMode = 0
+                                vm.clearHistogram()
                                 onClearAdjustGpuPreviewOnly()
-                                vm.applyAdjustmentOnce("curves", buildRgbCurvesJson(), "Eğriler")
+                                vm.applyAdjustmentOnce("curves", s.buildCurvesProJson(), "Eğriler")
                                 s.activePanel = BottomPanel.DOCK
                             }
                         )
@@ -638,8 +679,9 @@ internal fun StudioBottomPanelHost(
                                 ProPill(
                                     selected = s.curveChannelIdx == idx,
                                     onClick = {
+                                        // Bug #1 fix: NEVER call beginProxyPreview() here — switching channels preserves all channels!
                                         s.curveChannelIdx = idx
-                                        if (idx > 0) vm.beginProxyPreview()
+                                        s.curveSelectedNodeIdx = -1
                                     },
                                     label = { Text(lbl, fontSize = 11.5.sp) },
                                     modifier = Modifier.weight(1f)
@@ -652,37 +694,66 @@ internal fun StudioBottomPanelHost(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            if (canDeleteNode) {
+                                ProPill(selected = false, onClick = {
+                                    s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                    s.curveRedoStack = emptyList()
+                                    val updated = activeNodes.toMutableList().apply { removeAt(s.curveSelectedNodeIdx) }
+                                    s.setActiveCurveNodes(updated)
+                                    s.curveSelectedNodeIdx = -1
+                                    if (s.isCurvesIdentity()) vm.resetProxyPreview() else vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                    vm.refreshHistogram()
+                                }, label = { Text("Nokta Sil", fontSize = 11.sp, color = Color(0xFFFF8A8A)) })
+                            }
+                            listOf(1 to "Siyah Damla", 2 to "Gri Damla", 3 to "Beyaz Damla").forEach { (mode, lbl) ->
+                                ProPill(
+                                    selected = s.curveEyedropperMode == mode,
+                                    onClick = { s.curveEyedropperMode = if (s.curveEyedropperMode == mode) 0 else mode },
+                                    label = { Text(lbl, fontSize = 10.5.sp) }
+                                )
+                            }
                             ProPill(selected = false, onClick = {
                                 s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
                                 s.curveRedoStack = emptyList()
-                                s.curveBlackVal = 0f; s.curveShadowVal = 0.18f; s.curveMidVal = 0.50f; s.curveHighVal = 0.82f; s.curveWhiteVal = 1f
+                                s.curveRgbNodes = listOf(0f to 0f, 0.25f to 0.18f, 0.50f to 0.50f, 0.75f to 0.82f, 1f to 1f)
                                 s.curveChannelIdx = 0
-                                vm.updateProxyAdjustment("curves", buildRgbCurvesJson())
+                                vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                vm.refreshHistogram()
                             }, label = { Text("S-Kontrast", fontSize = 11.sp) })
                             ProPill(selected = false, onClick = {
                                 s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
                                 s.curveRedoStack = emptyList()
-                                s.curveBlackVal = 0.08f; s.curveShadowVal = 0.28f; s.curveMidVal = 0.52f; s.curveHighVal = 0.78f; s.curveWhiteVal = 0.94f
+                                s.curveRgbNodes = listOf(0f to 0.08f, 0.25f to 0.28f, 0.50f to 0.52f, 0.75f to 0.78f, 1f to 0.94f)
                                 s.curveChannelIdx = 0
-                                vm.updateProxyAdjustment("curves", buildRgbCurvesJson())
+                                vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                vm.refreshHistogram()
                             }, label = { Text("Mat Film", fontSize = 11.sp) })
                             ProPill(selected = false, onClick = {
                                 s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
                                 s.curveRedoStack = emptyList()
-                                s.curveBlackVal = 0f; s.curveShadowVal = 0.34f; s.curveMidVal = 0.62f; s.curveHighVal = 0.85f; s.curveWhiteVal = 1f
+                                s.curveRgbNodes = listOf(0f to 0f, 0.25f to 0.34f, 0.50f to 0.62f, 0.75f to 0.85f, 1f to 1f)
                                 s.curveChannelIdx = 0
-                                vm.updateProxyAdjustment("curves", buildRgbCurvesJson())
+                                vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                vm.refreshHistogram()
                             }, label = { Text("Aydınlık", fontSize = 11.sp) })
                             ProPill(selected = false, onClick = {
+                                // Bug #9 fix: Reset active channel to straight diagonal WITHOUT hiding curveOverlayExpanded!
                                 s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
                                 s.curveRedoStack = emptyList()
-                                s.curveBlackVal = 0f; s.curveShadowVal = 0.25f; s.curveMidVal = 0.50f; s.curveHighVal = 0.75f; s.curveWhiteVal = 1f
-                                s.curveRedPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
-                                s.curveGreenPts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
-                                s.curveBluePts = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
-                                onClearAdjustGpuPreviewOnly()
+                                s.resetActiveCurveChannel()
+                                s.curveOverlayExpanded = true
+                                if (s.isCurvesIdentity()) vm.resetProxyPreview() else vm.updateProxyAdjustment("curves", s.buildCurvesProJson())
+                                vm.refreshHistogram(force = true)
+                            }, label = { Text("Kanal Sıfırla", fontSize = 11.sp, color = Color(0xFFFFB74D)) })
+                            ProPill(selected = false, onClick = {
+                                // Bug #9 fix: Reset ALL channels to straight diagonal WITHOUT hiding curveOverlayExpanded!
+                                s.curveUndoStack = (s.curveUndoStack + s.snapshotCurve()).takeLast(25)
+                                s.curveRedoStack = emptyList()
+                                s.resetAllCurves()
+                                s.curveOverlayExpanded = true
                                 vm.resetProxyPreview()
-                            }, label = { Text("Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A8A)) })
+                                vm.refreshHistogram(force = true)
+                            }, label = { Text("Tümü Sıfırla", fontSize = 11.sp, color = Color(0xFFFF8A8A)) })
                         }
                     }
                 }
@@ -951,12 +1022,25 @@ internal fun StudioBottomPanelHost(
                 BottomPanel.HSL_MIXER_LIVE -> HslMixerPanel(
                     bandIdx = s.hslBandIdx, onBand = { s.hslBandIdx = it },
                     hues = s.hslHue, sats = s.hslSat, lums = s.hslLum,
+                    tatActive = s.hslTatActive, onTatToggle = { s.hslTatActive = !s.hslTatActive },
+                    tatParamIdx = s.hslTatParamIdx, onTatParam = { s.hslTatParamIdx = it },
+                    onResetBand = {
+                        val i = s.hslBandIdx.coerceIn(0, 7)
+                        s.hslHue = s.hslHue.toMutableList().apply { this[i] = 0f }
+                        s.hslSat = s.hslSat.toMutableList().apply { this[i] = 0f }
+                        s.hslLum = s.hslLum.toMutableList().apply { this[i] = 0f }
+                        vm.updateProxyHslMixer(s.hslHue, s.hslSat, s.hslLum)
+                    },
+                    onResetAll = {
+                        s.resetHslPro()
+                        vm.resetProxyPreview()
+                    },
                     onUpdate = { h, sat, l ->
                         s.hslHue = h; s.hslSat = sat; s.hslLum = l
                         vm.updateProxyHslMixer(h, sat, l)
                     },
-                    onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
-                    onApply = { vm.applyHslMixer(s.hslHue, s.hslSat, s.hslLum); s.activePanel = BottomPanel.DOCK }
+                    onClose = { s.hslTatActive = false; vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onApply = { s.hslTatActive = false; vm.applyHslMixer(s.hslHue, s.hslSat, s.hslLum); s.activePanel = BottomPanel.DOCK }
                 )
                 BottomPanel.POSTER_THRESH_LIVE -> PosterThreshPanel(
                     isPoster = s.posterMode,
@@ -1714,6 +1798,56 @@ internal fun StudioBottomPanelHost(
                         s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
                     },
                     onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 }
+                )
+                BottomPanel.BW_PRO_EDIT -> BlackWhiteProPanel(
+                    s = s,
+                    onPreview = { vm.updateProxyAdjustment("blackWhite", s.buildBwProJson()) },
+                    onReset = {
+                        s.resetBwPro()
+                        vm.updateProxyAdjustment("blackWhite", s.buildBwProJson())
+                    },
+                    onClose = { onClearAdjustGpuPreviewOnly(); vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onApply = { vm.applyAdjustmentOnce("blackWhite", s.buildBwProJson(), "Siyah-Beyaz Pro"); s.activePanel = BottomPanel.DOCK }
+                )
+                BottomPanel.PHOTO_FILTER_EDIT -> PhotoFilterProPanel(
+                    s = s,
+                    onPreview = { vm.updateProxyAdjustment("photoFilter", s.buildPhotoFilterJson()) },
+                    onReset = {
+                        s.resetPhotoFilterPro()
+                        vm.updateProxyAdjustment("photoFilter", s.buildPhotoFilterJson())
+                    },
+                    onClose = { onClearAdjustGpuPreviewOnly(); vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onApply = { vm.applyAdjustmentOnce("photoFilter", s.buildPhotoFilterJson(), "Fotoğraf Filtresi"); s.activePanel = BottomPanel.DOCK }
+                )
+                BottomPanel.SELECTIVE_COLOR_EDIT -> SelectiveColorProPanel(
+                    s = s,
+                    onPreview = { vm.updateProxyAdjustment("selectiveColor", s.buildSelectiveColorJson()) },
+                    onReset = {
+                        s.resetSelectiveColorPro()
+                        vm.resetProxyPreview()
+                    },
+                    onClose = { onClearAdjustGpuPreviewOnly(); vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onApply = { vm.applyAdjustmentOnce("selectiveColor", s.buildSelectiveColorJson(), "Seçici Renk"); s.activePanel = BottomPanel.DOCK }
+                )
+                BottomPanel.CHANNEL_MIXER_EDIT -> ChannelMixerProPanel(
+                    s = s,
+                    onPreview = { vm.updateProxyAdjustment("channelMixer", s.buildChannelMixerJson()) },
+                    onReset = {
+                        s.resetChannelMixerPro()
+                        vm.resetProxyPreview()
+                    },
+                    onClose = { onClearAdjustGpuPreviewOnly(); vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onApply = { vm.applyAdjustmentOnce("channelMixer", s.buildChannelMixerJson(), "Kanal Karıştırıcı"); s.activePanel = BottomPanel.DOCK }
+                )
+                BottomPanel.GRADIENT_MAP_EDIT -> GradientMapProPanel(
+                    s = s,
+                    onPreview = { vm.updateProxyAdjustment("gradientMap", s.buildGradientMapJson()) },
+                    onReset = {
+                        s.resetGradientMapPro()
+                        vm.updateProxyAdjustment("gradientMap", s.buildGradientMapJson())
+                    },
+                    onClose = { onClearAdjustGpuPreviewOnly(); vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2 },
+                    onApply = { vm.applyAdjustmentOnce("gradientMap", s.buildGradientMapJson(), "Degrade Eşleme"); s.activePanel = BottomPanel.DOCK }
                 )
                 else -> Unit
             }

@@ -30,7 +30,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import uniffi.kastamonushop_ffi.AutoLevelsResult
 import uniffi.kastamonushop_ffi.DocumentInfo
+import uniffi.kastamonushop_ffi.HistogramData
+import uniffi.kastamonushop_ffi.SampledColorInfo
 import uniffi.kastamonushop_ffi.KastamonuEngine
 import uniffi.kastamonushop_ffi.LayerSummary
 import uniffi.kastamonushop_ffi.SelectionBounds
@@ -147,7 +150,8 @@ data class EditorUiState(
     val artHistoryStyle: String = "tightMedium",
     val artHistoryArea: Float = 65f,
     val artHistoryTolerance: Float = 0f,
-    val healingSampleAll: Boolean = false
+    val healingSampleAll: Boolean = false,
+    val histogram: HistogramData? = null
 )
 
 class EditorViewModel : ViewModel() {
@@ -2005,10 +2009,55 @@ class EditorViewModel : ViewModel() {
 
     fun endProxyPreview() {
         invalidateProxyQueue()
+        histogramRefreshPending.set(false)
         paintExecutor.execute {
             runCatching {
                 engine.endProxyPreview()
                 NativeSurfaceBridge.nativeRenderFrame()
+            }
+        }
+    }
+
+    // ==================== v2.3.0 PARÇA 2: LIVE HISTOGRAM, TAT SAMPLER & AUTO LEVELS ====================
+    private val histogramRefreshPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var lastHistogramMs: Long = 0L
+
+    fun refreshHistogram(force: Boolean = false) {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!force && now - lastHistogramMs < 110L) return
+        if (!histogramRefreshPending.compareAndSet(false, true)) return
+        lastHistogramMs = now
+        paintExecutor.execute {
+            try {
+                val h = runCatching { engine.getActiveHistogram() }.getOrNull()
+                if (h != null) {
+                    _uiState.update { it.copy(histogram = h) }
+                }
+            } finally {
+                histogramRefreshPending.set(false)
+            }
+        }
+    }
+
+    fun clearHistogram() {
+        histogramRefreshPending.set(false)
+        _uiState.update { it.copy(histogram = null) }
+    }
+
+    fun sampleColorAtNorm(nx: Float, ny: Float, onResult: (SampledColorInfo) -> Unit) {
+        paintExecutor.execute {
+            val info = runCatching { engine.sampleColorAtNorm(nx, ny) }.getOrNull()
+            if (info != null) {
+                viewModelScope.launch(Dispatchers.Main) { onResult(info) }
+            }
+        }
+    }
+
+    fun computeAutoLevels(onResult: (AutoLevelsResult) -> Unit) {
+        paintExecutor.execute {
+            val res = runCatching { engine.computeAutoLevels() }.getOrNull()
+            if (res != null) {
+                viewModelScope.launch(Dispatchers.Main) { onResult(res) }
             }
         }
     }

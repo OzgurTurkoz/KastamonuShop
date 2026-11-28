@@ -418,6 +418,10 @@ internal fun QuickActionsPanel(
 internal fun HslMixerPanel(
     bandIdx: Int, onBand: (Int) -> Unit,
     hues: List<Float>, sats: List<Float>, lums: List<Float>,
+    tatActive: Boolean, onTatToggle: () -> Unit,
+    tatParamIdx: Int, onTatParam: (Int) -> Unit,
+    onResetBand: () -> Unit,
+    onResetAll: () -> Unit,
     onUpdate: (List<Float>, List<Float>, List<Float>) -> Unit,
     onClose: () -> Unit,
     onApply: () -> Unit
@@ -433,16 +437,44 @@ internal fun HslMixerPanel(
         "Macenta" to Color(0xFFEB2F96)
     )
     val idx = bandIdx.coerceIn(0, 7)
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        BottomEditorHeader("HSL Renk Mikseri (${bands[idx].first})", "Sadece seçtiğin renk kanalını 60 FPS canlı ayarla", "Uygula", onClose, onApply)
-        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            bands.forEachIndexed { i, (name, col) ->
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        BottomEditorHeader(
+            title = "HSL Mikseri (${bands[idx].first})",
+            subtitle = if (tatActive) "Fotoğrafta bir renge dokunup sağa/sola sürükle" else "Renk kanalını seç veya Hedefli (TAT) ile dokun",
+            applyLabel = "Uygula",
+            onClose = onClose,
+            onApply = onApply
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ProPill(
+                selected = tatActive,
+                onClick = onTatToggle,
+                label = { Text(if (tatActive) "Hedefli ✓" else "Hedefli", fontSize = 11.sp, color = if (tatActive) Color.White else Color(0xFFF59E0B)) }
+            )
+            bands.forEachIndexed { i, (_, col) ->
                 val sel = i == idx
                 Box(
-                    modifier = Modifier.size(30.dp).clip(CircleShape).background(col)
+                    modifier = Modifier.size(26.dp).clip(CircleShape).background(col)
                         .border(if (sel) 2.5.dp else 1.dp, if (sel) Color.White else Color(0xFF3E4150), CircleShape)
                         .clickable { onBand(i) }
                 )
+            }
+            ProPill(selected = false, onClick = onResetBand, label = { Text("Kanal", fontSize = 10.5.sp, color = Color(0xFFFFB74D)) })
+            ProPill(selected = false, onClick = onResetAll, label = { Text("Sıfırla", fontSize = 10.5.sp, color = Color(0xFFFF8A8A)) })
+        }
+        if (tatActive) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Ton", "Doygunluk", "Parlaklık").forEachIndexed { pIdx, lbl ->
+                    ProPill(
+                        selected = tatParamIdx == pIdx,
+                        onClick = { onTatParam(pIdx) },
+                        label = { Text("TAT: $lbl", fontSize = 10.5.sp) }
+                    )
+                }
             }
         }
         CompactSliderRow("Ton", "${hues[idx].roundToInt()}", hues[idx], -100f..100f, 0f) { v ->
