@@ -514,6 +514,52 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun addOrEditTextLayerPro(
+        editLayerId: ULong?,
+        text: String,
+        x: Float,
+        y: Float,
+        sizePx: Float,
+        colorHex: String,
+        align: String,
+        fontFamily: String,
+        bold: Boolean,
+        italic: Boolean,
+        underline: Boolean,
+        strikethrough: Boolean,
+        caps: String,
+        hScale: Float,
+        vScale: Float,
+        tracking: Float,
+        lineHeight: Float,
+        vertical: Boolean,
+        warpStyle: String,
+        warpBend: Float,
+        warpHDist: Float,
+        warpVDist: Float,
+        extras: uniffi.kastamonushop_ffi.TextProExtras
+    ) {
+        invalidateProxyQueue()
+        _uiState.update { it.copy(isBusy = true) }
+        paintExecutor.execute {
+            runCatching {
+                engine.addOrEditTextLayer(
+                    editLayerId, text, x, y - extras.baselineShift, sizePx, colorHex, align, fontFamily,
+                    bold, italic, underline, strikethrough, caps, hScale, vScale,
+                    tracking, lineHeight, vertical, warpStyle, warpBend, warpHDist, warpVDist
+                )
+                val info = engine.applyTextProExtras(colorHex, extras)
+                val layers = engine.getLayers()
+                _uiState.update { it.copy(docInfo = info, layers = layers, isBusy = false) }
+                NativeSurfaceBridge.nativeRenderFrame()
+                showStatus("Metin uygulandı")
+            }.onFailure { err ->
+                _uiState.update { it.copy(isBusy = false) }
+                showStatus("Metin hatası: ${err.message}")
+            }
+        }
+    }
+
     fun addOrEditTextLayer(
         editLayerId: ULong?,
         text: String,

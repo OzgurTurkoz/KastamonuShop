@@ -224,62 +224,85 @@ internal fun StudioBottomPanelHost(
                 BottomPanel.TEXT_EDIT -> {
                     val docW = (state.docInfo?.width?.toInt() ?: 2048).toFloat()
                     val docH = (state.docInfo?.height?.toInt() ?: 2048).toFloat()
-                    TextStudioPanel(
-                        isEditingExisting = s.textEditLayerId != null,
-                        onSwitchToNew = { s.textEditLayerId = null },
+                    TextProStudioPanel(
+                        s = s,
+                        docW = docW,
+                        studioFonts = studioFonts,
                         onImportFont = { onImportFont() },
-                        text = s.textDraft, onText = { s.textDraft = it },
-                        fonts = studioFonts, selectedFont = s.textFontFamily, onSelectFont = { s.textFontFamily = it },
-                        colorHex = s.textColorHex, onColorHex = { s.textColorHex = it },
-                        align = s.textAlign, onAlign = { s.textAlign = it },
-                        bold = s.textBold, onBold = { s.textBold = it },
-                        italic = s.textItalic, onItalic = { s.textItalic = it },
-                        underline = s.textUnderline, onUnderline = { s.textUnderline = it },
-                        strikethrough = s.textStrike, onStrikethrough = { s.textStrike = it },
-                        caps = s.textCaps, onCaps = { s.textCaps = it },
-                        hScale = s.textHScale, onHScale = { s.textHScale = it },
-                        vScale = s.textVScale, onVScale = { s.textVScale = it },
-                        vertical = s.textVertical, onVertical = { s.textVertical = it },
-                        sizePx = s.textSizePx, defaultSizePx = (docW * 0.055f).coerceIn(24f, 180f), onSizePx = { s.textSizePx = it },
-                        tracking = s.textTracking, onTracking = { s.textTracking = it },
-                        lineHeight = s.textLineHeight, onLineHeight = { s.textLineHeight = it },
-                        warpStyle = s.textWarpStyle, onWarpStyle = { s.textWarpStyle = it },
-                        warpBend = s.textWarpBend, onWarpBend = { s.textWarpBend = it },
-                        warpHDist = s.textWarpHDist, onWarpHDist = { s.textWarpHDist = it },
-                        warpVDist = s.textWarpVDist, onWarpVDist = { s.textWarpVDist = it },
-                        onCreateMask = {
-                            vm.createTextSelectionMask(
-                                text = s.textDraft, x = docW * s.textNormX, y = docH * s.textNormY,
-                                sizePx = s.textSizePx, align = s.textAlign, fontFamily = s.textFontFamily,
-                                bold = s.textBold, italic = s.textItalic, caps = s.textCaps,
-                                hScale = s.textHScale, vScale = s.textVScale,
-                                tracking = s.textTracking, lineHeight = s.textLineHeight, vertical = s.textVertical,
-                                warpStyle = s.textWarpStyle, warpBend = s.textWarpBend,
-                                warpHDist = s.textWarpHDist, warpVDist = s.textWarpVDist
-                            )
-                            s.activePanel = BottomPanel.DOCK; s.activeWorkspaceV2 = s.lastWorkspaceV2
+                        onCreateSelection = {
+                            vm.createTextSelectionMask(removeLayer = false)
+                            s.activePanel = BottomPanel.DOCK
                         },
                         onRasterize = {
                             vm.rasterizeActiveTextLayer()
                             s.activePanel = BottomPanel.DOCK
                         },
-                        onClose = { vm.endProxyPreview(); s.activePanel = BottomPanel.DOCK },
+                        onClose = {
+                            s.textSnapX = false; s.textSnapY = false
+                            vm.endProxyPreview()
+                            s.activePanel = BottomPanel.DOCK
+                            s.activeWorkspaceV2 = s.lastWorkspaceV2
+                        },
                         onApply = {
-                            vm.addOrEditTextLayer(
+                            s.textSnapX = false; s.textSnapY = false
+                            val finalTxt = if (!s.textVertical && s.textBoxWidthNorm >= 0.05f) {
+                                val maxChars = ((docW * s.textBoxWidthNorm) / (s.textSizePx * 0.58f).coerceAtLeast(10f)).roundToInt().coerceIn(4, 80)
+                                wrapTextForBox(s.textDraft, maxChars)
+                            } else s.textDraft
+                            val extras = uniffi.kastamonushop_ffi.TextProExtras(
+                                rotationDeg = s.textRotationDeg,
+                                opacity = s.textOpacity,
+                                blendMode = s.textBlendMode,
+                                strokeWidth = s.textStrokeWidth,
+                                strokeColor = s.textStrokeColor,
+                                shadowEnabled = s.textShadowEnabled,
+                                shadowDistance = s.textShadowDist,
+                                shadowBlur = s.textShadowBlur,
+                                shadowAngle = s.textShadowAngle,
+                                shadowColor = s.textShadowColor,
+                                glowSize = s.textGlowSize,
+                                glowColor = s.textGlowColor,
+                                gradientEnabled = s.textGradientEnabled,
+                                gradientEndColor = s.textGradientEndColor,
+                                gradientAngle = s.textGradientAngle,
+                                bgEnabled = s.textBgEnabled,
+                                bgColor = s.textBgColor,
+                                bgOpacity = s.textBgOpacity,
+                                bgRadius = s.textBgRadius,
+                                bgPadding = s.textBgPadding,
+                                baselineShift = s.textBaselineShift,
+                                boxWidthNorm = s.textBoxWidthNorm
+                            )
+                            vm.addOrEditTextLayerPro(
                                 editLayerId = s.textEditLayerId,
-                                text = s.textDraft, x = docW * s.textNormX, y = docH * s.textNormY,
-                                sizePx = s.textSizePx, colorHex = s.textColorHex, align = s.textAlign,
-                                fontFamily = s.textFontFamily, bold = s.textBold, italic = s.textItalic,
-                                underline = s.textUnderline, strikethrough = s.textStrike, caps = s.textCaps,
-                                hScale = s.textHScale, vScale = s.textVScale,
-                                tracking = s.textTracking, lineHeight = s.textLineHeight, vertical = s.textVertical,
-                                warpStyle = s.textWarpStyle, warpBend = s.textWarpBend,
-                                warpHDist = s.textWarpHDist, warpVDist = s.textWarpVDist
+                                text = finalTxt,
+                                x = docW * s.textNormX,
+                                y = docH * s.textNormY,
+                                sizePx = s.textSizePx,
+                                colorHex = s.textColorHex,
+                                align = s.textAlign,
+                                fontFamily = s.textFontFamily,
+                                bold = s.textBold,
+                                italic = s.textItalic,
+                                underline = s.textUnderline,
+                                strikethrough = s.textStrike,
+                                caps = s.textCaps,
+                                hScale = s.textHScale,
+                                vScale = s.textVScale,
+                                tracking = s.textTracking,
+                                lineHeight = s.textLineHeight,
+                                vertical = s.textVertical,
+                                warpStyle = s.textWarpStyle,
+                                warpBend = s.textWarpBend,
+                                warpHDist = s.textWarpHDist,
+                                warpVDist = s.textWarpVDist,
+                                extras = extras
                             )
                             s.activePanel = BottomPanel.DOCK
                         }
                     )
                 }
+
                 BottomPanel.ADJUST_MENU -> {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),

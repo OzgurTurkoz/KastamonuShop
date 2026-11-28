@@ -1446,10 +1446,31 @@ fun StonebridgeStudioScreen(
                     runCatching { Color(AndroidColor.parseColor(s.textColorHex)) }.getOrDefault(Color.White)
                 }
                 val previewFont = studioFonts.firstOrNull { it.family.equals(s.textFontFamily, true) }?.composeFont ?: FontFamily.SansSerif
-                val displayTxt = remember(s.textDraft, s.textVertical, s.textCaps) {
+                val displayTxt = remember(s.textDraft, s.textVertical, s.textCaps, s.textBoxWidthNorm, s.textSizePx, docW) {
                     val raw0 = s.textDraft.ifBlank { "Metin..." }
-                    val raw = if (s.textCaps == "all") raw0.uppercase() else raw0
+                    val raw1 = if (s.textCaps == "all") raw0.uppercase() else raw0
+                    val raw = if (!s.textVertical && s.textBoxWidthNorm >= 0.05f) {
+                        val maxChars = ((docW * s.textBoxWidthNorm) / (s.textSizePx * 0.58f).coerceAtLeast(10f)).roundToInt().coerceIn(4, 80)
+                        wrapTextForBox(raw1, maxChars)
+                    } else raw1
                     if (s.textVertical) raw.replace("\n", " ").toCharArray().joinToString("\n") else raw
+                }
+                val bgPreviewColor = remember(s.textBgColor, s.textBgOpacity) {
+                    runCatching { Color(AndroidColor.parseColor(s.textBgColor)).copy(alpha = s.textBgOpacity.coerceIn(0.05f, 1f)) }
+                        .getOrDefault(Color(0xCC111318))
+                }
+                val hapticText = androidx.compose.ui.platform.LocalHapticFeedback.current
+                // Smart Snap Center Guides (Amber hairlines when snapped to horizontal/vertical center)
+                if (s.textSnapX || s.textSnapY) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val (cx, cy) = viewRef.docToScreen(docW * 0.5f, docH * 0.5f)
+                        if (s.textSnapX) {
+                            drawLine(Color(0xCCF59E0B), Offset(cx, 0f), Offset(cx, size.height), strokeWidth = 2f)
+                        }
+                        if (s.textSnapY) {
+                            drawLine(Color(0xCCF59E0B), Offset(0f, cy), Offset(size.width, cy), strokeWidth = 2f)
+                        }
+                    }
                 }
                 val deco = remember(s.textUnderline, s.textStrike) {
                     when {
@@ -1473,22 +1494,50 @@ fun StonebridgeStudioScreen(
                         }
                         .padding(10.dp)
                 ) {
-                    // Draggable text box interior (1-finger move)
+                    // Draggable text box interior (1-finger move + Smart Center Snap + Live Rotation/Opacity/BG)
                     Box(
                         modifier = Modifier
                             .widthIn(min = 32.dp, max = 320.dp)
-                            .border(1.5.dp, Color(0xCC4F9CFF), RoundedCornerShape(8.dp))
-                            .background(Color(0x44111217), RoundedCornerShape(8.dp))
+                            .graphicsLayer {
+                                rotationZ = s.textRotationDeg
+                                alpha = s.textOpacity.coerceIn(0.05f, 1f)
+                                translationY = -s.textBaselineShift * currentZoom
+                            }
+                            .border(
+                                1.5.dp,
+                                if (s.textSnapX || s.textSnapY) StudioV2Colors.Amber else Color(0xAAF59E0B),
+                                RoundedCornerShape(if (s.textBgEnabled) s.textBgRadius.coerceIn(0f, 36f).dp else 8.dp)
+                            )
+                            .background(
+                                if (s.textBgEnabled) bgPreviewColor else Color(0x38111217),
+                                RoundedCornerShape(if (s.textBgEnabled) s.textBgRadius.coerceIn(0f, 36f).dp else 8.dp)
+                            )
                             .pointerInput(docW, docH, currentZoom) {
-                                detectDragGestures { change, dragAmount ->
+                                detectDragGestures(
+                                    onDragEnd = { s.textSnapX = false; s.textSnapY = false },
+                                    onDragCancel = { s.textSnapX = false; s.textSnapY = false }
+                                ) { change, dragAmount ->
                                     change.consume()
                                     val dxDoc = dragAmount.x / currentZoom
                                     val dyDoc = dragAmount.y / currentZoom
-                                    s.textNormX = (s.textNormX + dxDoc / docW).coerceIn(0.02f, 0.98f)
-                                    s.textNormY = (s.textNormY + dyDoc / docH).coerceIn(0.02f, 0.98f)
+                                    var nx = (s.textNormX + dxDoc / docW).coerceIn(0.02f, 0.98f)
+                                    var ny = (s.textNormY + dyDoc / docH).coerceIn(0.02f, 0.98f)
+                                    val snapXNow = kotlin.math.abs(nx - 0.5f) < 0.015f
+                                    val snapYNow = kotlin.math.abs(ny - 0.5f) < 0.015f
+                                    if (snapXNow && !s.textSnapX) hapticText.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    if (snapYNow && !s.textSnapY) hapticText.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    if (snapXNow) nx = 0.5f
+                                    if (snapYNow) ny = 0.5f
+                                    s.textSnapX = snapXNow
+                                    s.textSnapY = snapYNow
+                                    s.textNormX = nx
+                                    s.textNormY = ny
                                 }
                             }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .padding(
+                                horizontal = if (s.textBgEnabled) (s.textBgPadding * 0.55f).coerceIn(8f, 28f).dp else 12.dp,
+                                vertical = if (s.textBgEnabled) (s.textBgPadding * 0.35f).coerceIn(4f, 20f).dp else 6.dp
+                            )
                     ) {
                         Text(
                             text = displayTxt,

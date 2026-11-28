@@ -167,6 +167,32 @@ pub struct TextLayerStyle {
     pub norm_y: f32,
 }
 
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct TextProExtras {
+    pub rotation_deg: f32,
+    pub opacity: f32,
+    pub blend_mode: String,
+    pub stroke_width: f32,
+    pub stroke_color: String,
+    pub shadow_enabled: bool,
+    pub shadow_distance: f32,
+    pub shadow_blur: f32,
+    pub shadow_angle: f32,
+    pub shadow_color: String,
+    pub glow_size: f32,
+    pub glow_color: String,
+    pub gradient_enabled: bool,
+    pub gradient_end_color: String,
+    pub gradient_angle: f32,
+    pub bg_enabled: bool,
+    pub bg_color: String,
+    pub bg_opacity: f32,
+    pub bg_radius: f32,
+    pub bg_padding: f32,
+    pub baseline_shift: f32,
+    pub box_width_norm: f32,
+}
+
 
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct StrokeSample {
@@ -1670,6 +1696,157 @@ impl KastamonuEngine {
     /// Renders the exact PhotoCraft text + warp directly on the 512px proxy document so the user sees
     /// real-time bending, distortion, font, and alignment while dragging sliders.
     #[allow(clippy::too_many_arguments)]
+    /// v2.2.0 Parça 1: Applies Text Pro non-destructive extras (Stroke, Drop Shadow, Outer Glow,
+    /// Gradient Overlay, Opacity, Blend Mode, Rotation & optional Background Pill Box) to the active text layer.
+    pub fn apply_text_pro_extras(
+        &self,
+        primary_color: String,
+        extras: TextProExtras,
+    ) -> Result<DocumentInfo, EngineError> {
+        let mut guard = self.core.lock();
+        guard.dismiss_compare();
+        guard.proxy_preview = None;
+
+        let (aid, doc_w, doc_h, text_bounds) = {
+            let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
+            let id = ds.active_layer().ok_or(EngineError::NoActiveLayer)?;
+            let d = ds.doc();
+            let b = d.layer(id).map(|l| l.bounds());
+            (id, d.size.width.max(1) as f32, d.size.height.max(1) as f32, b)
+        };
+
+        // 1. Opacity & Blend Mode
+        let op = extras.opacity.clamp(0.05, 1.0);
+        let blend = match extras.blend_mode.as_str() {
+            "Normal" | "Multiply" | "Screen" | "Overlay" | "SoftLight" | "HardLight" | "Darken" | "Lighten" => extras.blend_mode.as_str(),
+            _ => "Normal",
+        };
+        let _ = guard.session.execute(
+            "layer.setProps",
+            json!({
+                "layer": aid.0,
+                "opacity": op as f64,
+                "blend": blend
+            }),
+        );
+
+        // 2. Non-destructive Layer FX (Stroke, Drop Shadow, Outer Glow, Gradient Fill)
+        let mut effects: Vec<Value> = Vec::new();
+        if extras.gradient_enabled {
+            effects.push(json!({
+                "type": "gradientOverlay",
+                "params": {
+                    "from": primary_color,
+                    "to": extras.gradient_end_color,
+                    "opacity": 100.0,
+                    "angle": extras.gradient_angle.clamp(-180.0, 180.0) as f64,
+                    "style": "linear",
+                    "blend": "Normal"
+                }
+            }));
+        }
+        if extras.stroke_width > 0.4 {
+            effects.push(json!({
+                "type": "stroke",
+                "params": {
+                    "color": extras.stroke_color,
+                    "size": extras.stroke_width.clamp(1.0, 60.0) as f64,
+                    "opacity": 100.0,
+                    "position": "outside",
+                    "blend": "Normal"
+                }
+            }));
+        }
+        if extras.glow_size > 0.4 {
+            effects.push(json!({
+                "type": "outerGlow",
+                "params": {
+                    "color": extras.glow_color,
+                    "size": extras.glow_size.clamp(1.0, 80.0) as f64,
+                    "opacity": 85.0,
+                    "blend": "Screen"
+                }
+            }));
+        }
+        if extras.shadow_enabled {
+            effects.push(json!({
+                "type": "dropShadow",
+                "params": {
+                    "color": extras.shadow_color,
+                    "size": extras.shadow_blur.clamp(0.0, 60.0) as f64,
+                    "distance": extras.shadow_distance.clamp(0.0, 80.0) as f64,
+                    "angle": extras.shadow_angle.clamp(-180.0, 180.0) as f64,
+                    "opacity": 82.0,
+                    "blend": "Multiply"
+                }
+            }));
+        }
+        if effects.is_empty() {
+            let _ = guard.session.execute("layer.layerStyle.clear", json!({ "layer": aid.0 }));
+        } else {
+            let _ = guard.session.execute(
+                "layer.layerStyle.replace",
+                json!({ "layer": aid.0, "effects": effects }),
+            );
+        }
+
+        // 3. Free Rotation
+        if extras.rotation_deg.abs() > 0.25 {
+            let _ = guard.session.execute(
+                "edit.transform",
+                json!({
+                    "dx": 0.0,
+                    "dy": 0.0,
+                    "scaleX": 1.0,
+                    "scaleY": 1.0,
+                    "rotate": extras.rotation_deg.clamp(-180.0, 180.0) as f64,
+                    "interpolation": "bicubic"
+                }),
+            );
+        }
+
+        // 4. Optional Background Pill Box placed directly behind text layer
+        if extras.bg_enabled {
+            if let Some(b) = text_bounds {
+                let pad = extras.bg_padding.clamp(4.0, 120.0);
+                let x0 = (b.x0 as f32 - pad).clamp(0.0, doc_w);
+                let y0 = (b.y0 as f32 - pad * 0.7).clamp(0.0, doc_h);
+                let x1 = (b.x1 as f32 + pad).clamp(x0 + 8.0, doc_w);
+                let y1 = (b.y1 as f32 + pad * 0.7).clamp(y0 + 8.0, doc_h);
+                let _ = guard.session.execute(
+                    "shape.rect",
+                    json!({
+                        "x": x0 as f64,
+                        "y": y0 as f64,
+                        "width": (x1 - x0) as f64,
+                        "height": (y1 - y0) as f64,
+                        "cornerRadius": extras.bg_radius.clamp(0.0, 80.0) as f64,
+                        "fill": extras.bg_color,
+                        "strokeWidth": 0.0
+                    }),
+                );
+                if let Some(ds) = guard.session.active() {
+                    if let Some(bg_id) = ds.active_layer() {
+                        let _ = guard.session.execute(
+                            "layer.setProps",
+                            json!({
+                                "layer": bg_id.0,
+                                "opacity": extras.bg_opacity.clamp(0.05, 1.0) as f64
+                            }),
+                        );
+                        let _ = guard.session.execute("layer.arrange.sendBackward", json!({}));
+                    }
+                }
+                if let Some(ds) = guard.session.active_mut() {
+                    let _ = ds.set_active_layer(Some(aid));
+                }
+            }
+        }
+
+        guard.mark_full_dirty();
+        self.info_from_locked(&guard)
+    }
+
     pub fn update_proxy_text_preview(
         &self,
         edit_layer_id: Option<u64>,
@@ -10050,6 +10227,44 @@ LUT_3D_SIZE 2
         assert!(info1.can_undo);
         let info2 = eng.apply_art_history_brush(pts, 10.0, 0.8, 1.0, "tightMedium".into(), 40.0, 0.0).unwrap();
         assert!(info2.can_undo);
+    }
+
+    #[test]
+    fn test_v220_text_pro_fx_rotation_opacity() {
+        let eng = test_engine();
+        let rgba = vec![40u8, 45, 55, 255].repeat(160 * 120);
+        eng.open_rgba_bytes("textpro.png".into(), 160, 120, rgba).unwrap();
+        eng.add_or_edit_text_layer(
+            None, "PRO".into(), 80.0, 60.0, 36.0, "#FFFFFF".into(), "center".into(),
+            "Montserrat".into(), true, false, false, false, "normal".into(),
+            100.0, 100.0, 0.0, 1.2, false, "none".into(), 0.0, 0.0, 0.0
+        ).unwrap();
+        let extras = TextProExtras {
+            rotation_deg: 12.0,
+            opacity: 0.85,
+            blend_mode: "Normal".into(),
+            stroke_width: 4.0,
+            stroke_color: "#000000".into(),
+            shadow_enabled: true,
+            shadow_distance: 6.0,
+            shadow_blur: 8.0,
+            shadow_angle: 120.0,
+            shadow_color: "#000000".into(),
+            glow_size: 10.0,
+            glow_color: "#F59E0B".into(),
+            gradient_enabled: true,
+            gradient_end_color: "#F59E0B".into(),
+            gradient_angle: 90.0,
+            bg_enabled: true,
+            bg_color: "#111318".into(),
+            bg_opacity: 0.75,
+            bg_radius: 12.0,
+            bg_padding: 14.0,
+            baseline_shift: 0.0,
+            box_width_norm: 0.0,
+        };
+        let info = eng.apply_text_pro_extras("#FFFFFF".into(), extras).unwrap();
+        assert!(info.can_undo, "Text Pro extras must be undoable");
     }
 
     #[test]
