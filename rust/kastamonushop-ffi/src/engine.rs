@@ -230,7 +230,6 @@ struct ProxyPreviewSession {
     session: Session,
     scale: f32,
     real_size: (u32, u32),
-        selection_only: false,
     selection_only: bool,
 }
 
