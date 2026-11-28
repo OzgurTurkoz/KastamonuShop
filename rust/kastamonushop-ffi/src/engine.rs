@@ -3440,8 +3440,8 @@ impl KastamonuEngine {
         }.ok_or(EngineError::NoActiveDocument)?;
 
         let flat = photocraft_compose::flatten(doc.as_ref());
-        let w = flat.w as usize;
-        let h = flat.h as usize;
+        let w = flat.rect.width().max(0) as usize;
+        let h = flat.rect.height().max(0) as usize;
         let step = (((w * h) as f32 / 40_000.0).sqrt().ceil() as usize).max(1);
         let mut y = 0usize;
         while y < h {
@@ -3502,14 +3502,22 @@ impl KastamonuEngine {
         let mut sb = 0.0f32;
         let mut cnt = 0.0f32;
 
-        if let Some((_id, surf)) = find_primary_photo_raster_layer(doc, ds.active_layer()) {
-            let patch = surf.read_region(Rect { x0, y0, x1, y1 });
-            for px in &patch.px {
-                if px[3] > 0.05 {
-                    sr += px[0].clamp(0.0, 1.0);
-                    sg += px[1].clamp(0.0, 1.0);
-                    sb += px[2].clamp(0.0, 1.0);
-                    cnt += 1.0;
+        if let Some((lid, _)) = find_primary_photo_raster_layer(doc, ds.active_layer()) {
+            if let Some(layer) = doc.layer(lid) {
+                if let LayerContent::Raster(surf) = &layer.content {
+                    let ch = (surf.channels() as usize).max(3);
+                    let data = surf.read_region(Rect { x0, y0, x1, y1 });
+                    let px_count = data.len() / ch;
+                    for i in 0..px_count {
+                        let base = i * ch;
+                        let a = if ch >= 4 { data[base + 3] } else { 1.0 };
+                        if a > 0.05 {
+                            sr += data[base].clamp(0.0, 1.0);
+                            sg += data[base + 1].clamp(0.0, 1.0);
+                            sb += data[base + 2].clamp(0.0, 1.0);
+                            cnt += 1.0;
+                        }
+                    }
                 }
             }
         }
@@ -3571,8 +3579,8 @@ impl KastamonuEngine {
         }.ok_or(EngineError::NoActiveDocument)?;
 
         let flat = photocraft_compose::flatten(doc.as_ref());
-        let w = flat.w as usize;
-        let h = flat.h as usize;
+        let w = flat.rect.width().max(0) as usize;
+        let h = flat.rect.height().max(0) as usize;
         let step = (((w * h) as f32 / 30_000.0).sqrt().ceil() as usize).max(1);
         let mut hist_l = [0u32; 256];
         let mut hist_r = [0u32; 256];
@@ -10905,11 +10913,11 @@ LUT_3D_SIZE 2
             ("levels", r#"{"inBlack":20,"gamma":1.2,"inWhite":220,"outBlack":15,"outWhite":240,"red":{"inBlack":10,"gamma":1.3,"inWhite":230,"outBlack":0,"outWhite":255}}"#),
             ("curves", r#"{"points":[[0,0],[40,25],[90,115],[150,180],[210,235],[255,255]],"red":[[0,0],[128,165],[255,255]],"green":[[0,0],[255,255]],"blue":[[0,0],[128,95],[255,255]]}"#),
             ("colorBalance", r#"{"shadows":[25,-15,10],"midtones":[15,5,-20],"highlights":[-10,10,20],"preserveLuminosity":false}"#),
-            ("blackWhite", r#"{"reds":120,"yellows":80,"greens":20,"cyans":40,"blues":-20,"magentas":60,"tint":true,"tintColor":"#D9B88C"}"#),
-            ("photoFilter", r#"{"color":"#EC8A00","density":45,"preserveLuminosity":true}"#),
+            ("blackWhite", r##"{"reds":120,"yellows":80,"greens":20,"cyans":40,"blues":-20,"magentas":60,"tint":true,"tintColor":"#D9B88C"}"##),
+            ("photoFilter", r##"{"color":"#EC8A00","density":45,"preserveLuminosity":true}"##),
             ("selectiveColor", r#"{"method":"relative","reds":[20,-10,30,5],"neutrals":[-10,5,10,0]}"#),
             ("channelMixer", r#"{"red":[110,-10,0,0],"green":[10,90,0,0],"blue":[0,15,85,0],"monochrome":false}"#),
-            ("gradientMap", r#"{"stops":[[0.0,"#141B3A"],[0.5,"#B84A39"],[1.0,"#F7D488"]],"reverse":false,"dither":false}"#),
+            ("gradientMap", r##"{"stops":[[0.0,"#141B3A"],[0.5,"#B84A39"],[1.0,"#F7D488"]],"reverse":false,"dither":false}"##),
         ];
 
         for &(kind, json_str) in cases {
