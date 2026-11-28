@@ -1711,8 +1711,28 @@ impl KastamonuEngine {
             let ds = guard.session.active().ok_or(EngineError::NoActiveDocument)?;
             let id = ds.active_layer().ok_or_else(|| EngineError::InvalidParams { detail: "Aktif katman bulunamadı".into() })?;
             let d = ds.doc();
+            let dpi = d.resolution_dpi.max(1.0);
             let b = d.layer(id).map(|l| match &l.content {
                 LayerContent::Raster(surf) => surf.content_bounds(),
+                LayerContent::Text(t) => {
+                    let st = t.char_runs().first().map(|r| &r.style);
+                    let size_pt = st.map(|s| s.size_pt).unwrap_or(48.0).max(0.5);
+                    let spx = (size_pt * dpi / 72.0).clamp(8.0, 600.0);
+                    let hs = st.map(|s| if s.horizontal_scale <= 5.0 { s.horizontal_scale } else { s.horizontal_scale / 100.0 }).unwrap_or(1.0).clamp(0.5, 2.0);
+                    let vs = st.map(|s| if s.vertical_scale <= 5.0 { s.vertical_scale } else { s.vertical_scale / 100.0 }).unwrap_or(1.0).clamp(0.5, 2.0);
+                    let lines: Vec<&str> = t.text.split('\n').collect();
+                    let max_chars = lines.iter().map(|ln| ln.chars().count()).max().unwrap_or(1).max(1) as f32;
+                    let est_w = (max_chars * spx * 0.62 * hs).max(spx * 1.4);
+                    let est_h = (lines.len() as f32 * spx * 1.25 * vs).max(spx * 1.1);
+                    let cx = t.transform.m[4] as f32;
+                    let cy = t.transform.m[5] as f32;
+                    Rect {
+                        x0: (cx - est_w * 0.5).floor() as i32,
+                        y0: (cy - est_h * 0.5).floor() as i32,
+                        x1: (cx + est_w * 0.5).ceil() as i32,
+                        y1: (cy + est_h * 0.5).ceil() as i32,
+                    }
+                }
                 _ => d.bounds(),
             });
             (id, d.size.width.max(1) as f32, d.size.height.max(1) as f32, b)
@@ -1737,7 +1757,7 @@ impl KastamonuEngine {
         let mut effects: Vec<Value> = Vec::new();
         if extras.gradient_enabled {
             effects.push(json!({
-                "type": "gradientOverlay",
+                "kind": "gradientOverlay",
                 "params": {
                     "from": primary_color,
                     "to": extras.gradient_end_color,
@@ -1750,7 +1770,7 @@ impl KastamonuEngine {
         }
         if extras.stroke_width > 0.4 {
             effects.push(json!({
-                "type": "stroke",
+                "kind": "stroke",
                 "params": {
                     "color": extras.stroke_color,
                     "size": extras.stroke_width.clamp(1.0, 60.0) as f64,
@@ -1762,7 +1782,7 @@ impl KastamonuEngine {
         }
         if extras.glow_size > 0.4 {
             effects.push(json!({
-                "type": "outerGlow",
+                "kind": "outerGlow",
                 "params": {
                     "color": extras.glow_color,
                     "size": extras.glow_size.clamp(1.0, 80.0) as f64,
@@ -1773,7 +1793,7 @@ impl KastamonuEngine {
         }
         if extras.shadow_enabled {
             effects.push(json!({
-                "type": "dropShadow",
+                "kind": "dropShadow",
                 "params": {
                     "color": extras.shadow_color,
                     "size": extras.shadow_blur.clamp(0.0, 60.0) as f64,
@@ -1800,8 +1820,8 @@ impl KastamonuEngine {
                 json!({
                     "dx": 0.0,
                     "dy": 0.0,
-                    "scaleX": 1.0,
-                    "scaleY": 1.0,
+                    "scaleX": 100.0,
+                    "scaleY": 100.0,
                     "rotate": extras.rotation_deg.clamp(-180.0, 180.0) as f64,
                     "interpolation": "bicubic"
                 }),
@@ -1816,18 +1836,19 @@ impl KastamonuEngine {
                 let y0 = (b.y0 as f32 - pad * 0.7).clamp(0.0, doc_h);
                 let x1 = (b.x1 as f32 + pad).clamp(x0 + 8.0, doc_w);
                 let y1 = (b.y1 as f32 + pad * 0.7).clamp(y0 + 8.0, doc_h);
-                let _ = guard.session.execute(
-                    "shape.rect",
-                    json!({
-                        "x": x0 as f64,
-                        "y": y0 as f64,
-                        "width": (x1 - x0) as f64,
-                        "height": (y1 - y0) as f64,
-                        "cornerRadius": extras.bg_radius.clamp(0.0, 80.0) as f64,
-                        "fill": extras.bg_color,
-                        "strokeWidth": 0.0
-                    }),
+                let bg_params = build_shape_params(
+                    "roundedRect",
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    &extras.bg_color,
+                    "",
+                    0.0,
+                    extras.bg_radius.clamp(0.0, 80.0),
+                    4,
                 );
+                let _ = guard.session.execute("shape.create", bg_params);
                 if let Some(ds) = guard.session.active() {
                     if let Some(bg_id) = ds.active_layer() {
                         let _ = guard.session.execute(
@@ -2068,7 +2089,7 @@ impl KastamonuEngine {
             if !chosen_font.is_empty() {
                 params["font"] = json!(chosen_font);
             }
-            if let Ok(res) = ps.execute("type.addText", params) {
+            if let Ok(res) = ps.execute("type.create", params) {
                 if let Some(lid) = res.get("layer").and_then(Value::as_u64) {
                     let ws = warp_style.trim();
                     if !ws.is_empty() && ws != "none" {
@@ -2094,7 +2115,7 @@ impl KastamonuEngine {
                     let mut effects: Vec<Value> = Vec::new();
                     if extras.gradient_enabled {
                         effects.push(json!({
-                            "type": "gradientOverlay",
+                            "kind": "gradientOverlay",
                             "params": {
                                 "from": color_hex,
                                 "to": extras.gradient_end_color,
@@ -2107,7 +2128,7 @@ impl KastamonuEngine {
                     }
                     if extras.stroke_width > 0.4 {
                         effects.push(json!({
-                            "type": "stroke",
+                            "kind": "stroke",
                             "params": {
                                 "color": extras.stroke_color,
                                 "size": (extras.stroke_width * sc).clamp(1.0, 60.0) as f64,
@@ -2119,7 +2140,7 @@ impl KastamonuEngine {
                     }
                     if extras.glow_size > 0.4 {
                         effects.push(json!({
-                            "type": "outerGlow",
+                            "kind": "outerGlow",
                             "params": {
                                 "color": extras.glow_color,
                                 "size": (extras.glow_size * sc).clamp(1.0, 80.0) as f64,
@@ -2130,7 +2151,7 @@ impl KastamonuEngine {
                     }
                     if extras.shadow_enabled {
                         effects.push(json!({
-                            "type": "dropShadow",
+                            "kind": "dropShadow",
                             "params": {
                                 "color": extras.shadow_color,
                                 "size": (extras.shadow_blur * sc).clamp(0.0, 60.0) as f64,
@@ -2150,7 +2171,7 @@ impl KastamonuEngine {
                             "edit.transform",
                             json!({
                                 "dx": 0.0, "dy": 0.0,
-                                "scaleX": 1.0, "scaleY": 1.0,
+                                "scaleX": 100.0, "scaleY": 100.0,
                                 "rotate": extras.rotation_deg.clamp(-180.0, 180.0) as f64,
                                 "interpolation": "bicubic"
                             }),
@@ -2169,16 +2190,19 @@ impl KastamonuEngine {
                         let by = (px_y - est_h * 0.5 - pad * 0.65).clamp(0.0, ph - 8.0);
                         let bw = (est_w + pad * 2.0).clamp(12.0, pw - bx);
                         let bh = (est_h + pad * 1.3).clamp(12.0, ph - by);
-                        let _ = ps.execute(
-                            "shape.rect",
-                            json!({
-                                "x": bx as f64, "y": by as f64,
-                                "width": bw as f64, "height": bh as f64,
-                                "cornerRadius": (extras.bg_radius * sc).clamp(0.0, 60.0) as f64,
-                                "fill": extras.bg_color,
-                                "strokeWidth": 0.0
-                            }),
+                        let bg_params = build_shape_params(
+                            "roundedRect",
+                            bx,
+                            by,
+                            bx + bw,
+                            by + bh,
+                            &extras.bg_color,
+                            "",
+                            0.0,
+                            (extras.bg_radius * sc).clamp(0.0, 60.0),
+                            4,
                         );
+                        let _ = ps.execute("shape.create", bg_params);
                         if let Some(ds) = ps.active() {
                             if let Some(bg_id) = ds.active_layer() {
                                 let _ = ps.execute("layer.setProps", json!({ "layer": bg_id.0, "opacity": extras.bg_opacity.clamp(0.05, 1.0) as f64 }));
@@ -10477,7 +10501,11 @@ LUT_3D_SIZE 2
             100.0, 100.0, 20.0, 1.2, false, "arc".into(), 30.0, 0.0, 0.0, extras
         ).unwrap();
         let guard = eng.core.lock();
-        assert!(guard.proxy_preview.is_some());
+        let pdoc = guard.proxy_preview.as_ref().expect("proxy active").session.active().expect("doc").doc();
+        assert_eq!(pdoc.layers.len(), 3, "Live proxy must contain Background + Pill Box + Text layers");
+        let text_layer = pdoc.layers.iter().find(|l| matches!(l.content, LayerContent::Text(_)))
+            .expect("Live proxy must contain an actual Text layer");
+        assert_eq!(text_layer.effects.items.len(), 4, "Live text layer must carry all 4 FX (gradient, stroke, glow, shadow)");
     }
 
     #[test]
@@ -10516,6 +10544,12 @@ LUT_3D_SIZE 2
         };
         let info = eng.apply_text_pro_extras("#FFFFFF".into(), extras).unwrap();
         assert!(info.can_undo, "Text Pro extras must be undoable");
+        let guard = eng.core.lock();
+        let doc = guard.session.active().expect("doc").doc();
+        assert_eq!(doc.layers.len(), 3, "Committed doc must contain Background + Pill Box + Text layers");
+        let text_layer = doc.layers.iter().find(|l| matches!(l.content, LayerContent::Text(_)))
+            .expect("Committed doc must contain Text layer");
+        assert_eq!(text_layer.effects.items.len(), 4, "Committed text layer must carry all 4 FX");
     }
 
     #[test]
