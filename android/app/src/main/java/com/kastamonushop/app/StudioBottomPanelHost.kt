@@ -584,7 +584,7 @@ internal fun StudioBottomPanelHost(
                             onApply = {
                                 s.curveOverlayExpanded = false
                                 onClearAdjustGpuPreviewOnly()
-                                vm.applyAdjustment("curves", buildRgbCurvesJson())
+                                vm.applyAdjustmentOnce("curves", buildRgbCurvesJson(), "Eğriler")
                                 s.activePanel = BottomPanel.DOCK
                             }
                         )
@@ -1668,4 +1668,5 @@ internal fun StudioBottomPanelHost(
                 else -> Unit
             }
 
+}
 }
