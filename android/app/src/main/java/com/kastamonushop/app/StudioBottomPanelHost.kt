@@ -230,7 +230,26 @@ internal fun StudioBottomPanelHost(
                         studioFonts = studioFonts,
                         onImportFont = { onImportFont() },
                         onCreateSelection = {
-                            vm.createTextSelectionMask(removeLayer = false)
+                            vm.createTextSelectionMask(
+                                text = s.textDraft,
+                                x = docW * s.textNormX,
+                                y = docH * s.textNormY,
+                                sizePx = s.textSizePx,
+                                align = s.textAlign,
+                                fontFamily = s.textFontFamily,
+                                bold = s.textBold,
+                                italic = s.textItalic,
+                                caps = s.textCaps,
+                                hScale = s.textHScale,
+                                vScale = s.textVScale,
+                                tracking = s.textTracking,
+                                lineHeight = s.textLineHeight,
+                                vertical = s.textVertical,
+                                warpStyle = s.textWarpStyle,
+                                warpBend = s.textWarpBend,
+                                warpHDist = s.textWarpHDist,
+                                warpVDist = s.textWarpVDist
+                            )
                             s.activePanel = BottomPanel.DOCK
                         },
                         onRasterize = {

@@ -182,7 +182,7 @@ internal fun TextProStudioPanel(
                         ProPill(
                             selected = s.textFontFamily.equals(f.family, true),
                             onClick = { s.textFontFamily = f.family },
-                            label = { Text(f.label, fontSize = 11.sp, fontFamily = f.composeFont) }
+                            label = { Text(f.displayName, fontSize = 11.sp, fontFamily = f.composeFont) }
                         )
                     }
                 }
